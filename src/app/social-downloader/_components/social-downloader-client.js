@@ -79,7 +79,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 Instagram、TikTok、抖音或 YouTube 链接...",
+    urlPlaceholder: "粘贴 Instagram、TikTok、抖音、小红书或 YouTube 链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -140,7 +140,7 @@ const copyByLanguage = {
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, TikTok, Douyin, or YouTube URL...",
+    urlPlaceholder: "Paste Instagram, TikTok, Douyin, Xiaohongshu, or YouTube URL...",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -582,7 +582,7 @@ export function SocialDownloaderClient() {
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
   const resolveRunRef = useRef(0);
 
-  const normalizedUrl = url.trim();
+  const normalizedUrl = extractUrlCandidate(url);
   const canSubmit = Boolean(normalizedUrl) && isValidHttpUrl(normalizedUrl);
   const inputPlatform = detectPlatform(normalizedUrl);
   const copy = copyByLanguage[language] ?? copyByLanguage.zh;
@@ -1702,7 +1702,7 @@ function getButtonTheme(platform, colorMode = "light") {
 
 function detectPlatform(value) {
   try {
-    const hostname = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+    const hostname = new URL(extractUrlCandidate(value)).hostname.toLowerCase().replace(/^www\./, "");
 
     if (hostname === "instagram.com" || hostname.endsWith(".instagram.com") || hostname.endsWith("ddinstagram.com")) {
       return "instagram";
@@ -1744,12 +1744,20 @@ function detectPlatform(value) {
 
 function isValidHttpUrl(value) {
   try {
-    const parsed = new URL(value);
+    const parsed = new URL(extractUrlCandidate(value));
 
     return ["http:", "https:"].includes(parsed.protocol) && Boolean(parsed.hostname);
   } catch {
     return false;
   }
+}
+
+function extractUrlCandidate(value) {
+  const trimmed = String(value || "").trim();
+  const match = trimmed.match(/https?:\/\/[^\s"'<>]+/i);
+  const candidate = match ? match[0] : trimmed;
+
+  return candidate.replace(/[),.;，。！？、]+$/u, "");
 }
 
 function hexToRgba(hex, alpha) {

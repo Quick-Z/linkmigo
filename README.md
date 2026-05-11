@@ -2,7 +2,7 @@
 
 LinkMigo「链密狗」是一款还算好看的资源下载工具。
 
-目前支持 Instagram、TikTok、抖音、Twitter/X、Bilibili、Facebook 和 YouTube 的公开视频资源解析。
+目前支持 Instagram、TikTok、抖音、小红书、Twitter/X、Bilibili、Facebook 和 YouTube 的公开视频资源解析。
 YouTube 和 Bilibili 会优先选择公开接口可返回的最高分辨率视频轨道，并在服务端合并音频后返回可直接播放的单个视频文件。
 
 安装环境
@@ -27,7 +27,7 @@ npm run start
 ```
 
 
-如果服务端访问 Instagram / TikTok / 抖音 / YouTube 等平台报“上游访问受限”，通常是 Node 服务端没有走代理。可以创建 `.env.local`：
+如果服务端访问 Instagram / TikTok / 抖音 / 小红书 / YouTube 等平台报“上游访问受限”，通常是 Node 服务端没有走代理。可以创建 `.env.local`：
 
 ```bash
 SOCIAL_PROXY_URL=http://127.0.0.1:7890

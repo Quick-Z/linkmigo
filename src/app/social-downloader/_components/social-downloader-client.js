@@ -384,6 +384,8 @@ const glassPanelClass =
 const themeTransition =
   "background-color 640ms cubic-bezier(0.22,1,0.36,1), border-color 640ms cubic-bezier(0.22,1,0.36,1), box-shadow 640ms cubic-bezier(0.22,1,0.36,1), color 640ms cubic-bezier(0.22,1,0.36,1), transform 180ms ease";
 const floatingScrollbarInsetPx = 12;
+const shareUrlPattern = /https?:\/\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/i;
+const trailingUrlPunctuationPattern = /[)"'.。,;:!?，；：！？、】》」』”’]+$/u;
 
 const buttonThemes = {
   instagram: {
@@ -689,6 +691,13 @@ export function SocialDownloaderClient() {
     }
   }
 
+  function onUrlChange(event) {
+    const nextValue = event.target.value;
+    const extractedUrl = extractUrlCandidate(nextValue);
+
+    setUrl(extractedUrl && isValidHttpUrl(extractedUrl) ? extractedUrl : nextValue);
+  }
+
   async function pollResolveJob(jobId, runId) {
     if (!jobId) {
       throw new Error("解析任务创建失败，请稍后重试。");
@@ -939,7 +948,7 @@ export function SocialDownloaderClient() {
                     inputMode="url"
                     name="social-url"
                     onBlur={() => setIsInputFocused(false)}
-                    onChange={(event) => setUrl(event.target.value)}
+                    onChange={onUrlChange}
                     onFocus={() => setIsInputFocused(true)}
                     placeholder={copy.urlPlaceholder}
                     spellCheck={false}
@@ -949,7 +958,7 @@ export function SocialDownloaderClient() {
                       caretColor: inputDrivenTheme.accent,
                       color: inputDrivenTheme.inputText,
                     }}
-                    type="url"
+                    type="text"
                     value={url}
                   />
 
@@ -1754,10 +1763,10 @@ function isValidHttpUrl(value) {
 
 function extractUrlCandidate(value) {
   const trimmed = String(value || "").trim();
-  const match = trimmed.match(/https?:\/\/[^\s"'<>]+/i);
+  const match = trimmed.match(shareUrlPattern);
   const candidate = match ? match[0] : trimmed;
 
-  return candidate.replace(/[),.;，。！？、]+$/u, "");
+  return candidate.replace(trailingUrlPunctuationPattern, "");
 }
 
 function hexToRgba(hex, alpha) {

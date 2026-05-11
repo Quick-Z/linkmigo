@@ -42,6 +42,8 @@ const XIAOHONGSHU_HEADERS = {
   "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
   Referer: "https://www.xiaohongshu.com/",
 };
+const SHARE_URL_PATTERN = /https?:\/\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/i;
+const TRAILING_URL_PUNCTUATION_PATTERN = /[)"'.。,;:!?，；：！？、】》」』”’]+$/u;
 
 const TWITTER_BEARER_TOKEN =
   "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D" +
@@ -846,14 +848,14 @@ async function resolveRedirect(url, settings, headers = PAGE_HEADERS) {
 }
 
 function extractUrlCandidate(rawValue) {
-  const match = rawValue.match(/https?:\/\/[^\s"'<>]+/i);
+  const match = rawValue.match(SHARE_URL_PATTERN);
   const value = match ? match[0] : rawValue;
 
   return trimTrailingUrlPunctuation(value);
 }
 
 function trimTrailingUrlPunctuation(value) {
-  return String(value || "").trim().replace(/[),.;，。！？、]+$/u, "");
+  return String(value || "").trim().replace(TRAILING_URL_PUNCTUATION_PATTERN, "");
 }
 
 function safeFilenamePart(value) {

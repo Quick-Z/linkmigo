@@ -48,13 +48,14 @@ const CONTENT_TYPE_EXTENSIONS = {
   "video/webm": ".webm",
 };
 
-export async function downloadMedia({ asset, destination, maxBytes, timeoutMs }) {
+export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, onProgress }) {
   if (hasCompanionAudio(asset)) {
     return await downloadMergedMedia({
       asset,
       destination,
       maxBytes,
       timeoutMs,
+      onProgress,
     });
   }
 
@@ -68,6 +69,8 @@ export async function downloadMedia({ asset, destination, maxBytes, timeoutMs })
         destination,
         maxBytes,
         timeoutMs,
+        onProgress,
+        progressPartId: "media",
       });
     } catch (error) {
       if (!(error instanceof AppError)) {
@@ -81,7 +84,50 @@ export async function downloadMedia({ asset, destination, maxBytes, timeoutMs })
   throw lastError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载失败。", 502);
 }
 
-async function downloadMergedMedia({ asset, destination, maxBytes, timeoutMs }) {
+export async function estimateMediaDownloadSize({ asset, maxBytes, timeoutMs }) {
+  const parts = hasCompanionAudio(asset)
+    ? [
+        {
+          asset: {
+            ...asset,
+            media_type: "video",
+          },
+        },
+        {
+          asset: {
+            source_url: asset.audio_source_url,
+            fallback_urls: asset.audio_fallback_urls,
+            media_type: "audio",
+            filename_hint: asset.audio_filename_hint || "audio.m4a",
+            request_headers: asset.audio_request_headers || asset.request_headers,
+          },
+        },
+      ]
+    : [{ asset }];
+  let totalBytes = 0;
+  let knownParts = 0;
+
+  for (const part of parts) {
+    const contentLength = await estimateSingleMediaSize({
+      asset: part.asset,
+      maxBytes,
+      timeoutMs,
+    });
+
+    if (contentLength) {
+      totalBytes += contentLength;
+      knownParts += 1;
+    }
+  }
+
+  return {
+    totalBytes: totalBytes || null,
+    knownParts,
+    partCount: parts.length,
+  };
+}
+
+async function downloadMergedMedia({ asset, destination, maxBytes, timeoutMs, onProgress }) {
   const videoUrls = mediaUrlsForAsset(asset);
   const audioUrls = mediaUrlsForAsset({
     source_url: asset.audio_source_url,
@@ -95,11 +141,12 @@ async function downloadMergedMedia({ asset, destination, maxBytes, timeoutMs }) 
         return await downloadAndMergeMedia({
           asset,
           sourceUrl,
-          audioUrl,
-          destination,
-          maxBytes,
-          timeoutMs,
-        });
+        audioUrl,
+        destination,
+        maxBytes,
+        timeoutMs,
+        onProgress,
+      });
       } catch (error) {
         if (!(error instanceof AppError)) {
           throw error;
@@ -113,7 +160,7 @@ async function downloadMergedMedia({ asset, destination, maxBytes, timeoutMs }) 
   throw lastError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体音视频合并失败。", 502);
 }
 
-async function downloadAndMergeMedia({ asset, sourceUrl, audioUrl, destination, maxBytes, timeoutMs }) {
+async function downloadAndMergeMedia({ asset, sourceUrl, audioUrl, destination, maxBytes, timeoutMs, onProgress }) {
   const videoAsset = {
     ...asset,
     source_url: sourceUrl,
@@ -140,12 +187,16 @@ async function downloadAndMergeMedia({ asset, sourceUrl, audioUrl, destination, 
       destination: videoPath,
       maxBytes,
       timeoutMs,
+      onProgress,
+      progressPartId: "video",
     });
     const audioDownload = await downloadSingleMedia({
       asset: audioAsset,
       destination: audioPath,
       maxBytes,
       timeoutMs,
+      onProgress,
+      progressPartId: "audio",
     });
 
     if ((videoDownload.sizeBytes || 0) + (audioDownload.sizeBytes || 0) > maxBytes) {
@@ -254,12 +305,13 @@ function mergedMediaExtension(asset) {
   return extension === ".webm" ? ".webm" : ".mp4";
 }
 
-async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) {
+async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, onProgress, progressPartId = "media" }) {
   await fs.mkdir(path.dirname(destination), { recursive: true });
 
   const tempPath = `${destination}.part`;
   const headers = { ...MEDIA_HEADERS, ...(asset.request_headers || {}) };
-  const expectedType = await probeContentType({ asset, headers, maxBytes, timeoutMs });
+  const expectedInfo = await probeContentInfo({ asset, headers, maxBytes, timeoutMs });
+  const expectedType = expectedInfo.contentType;
   let response;
 
   await fs.unlink(tempPath).catch(() => {});
@@ -292,7 +344,7 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) 
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, "上游返回的媒体类型不符合预期。", 502);
   }
 
-  const contentLength = safeInt(response.headers.get("content-length"));
+  const contentLength = safeInt(response.headers.get("content-length")) || expectedInfo.contentLength;
 
   if (contentLength && contentLength > maxBytes) {
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
@@ -300,6 +352,13 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) 
 
   let size = 0;
   const file = await fs.open(tempPath, "w");
+
+  onProgress?.({
+    type: "stream_start",
+    part_id: progressPartId,
+    content_length: contentLength,
+    downloaded_bytes: 0,
+  });
 
   try {
     const reader = response.body?.getReader();
@@ -312,6 +371,12 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) 
         throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
       }
       await file.write(buffer);
+      onProgress?.({
+        type: "stream_progress",
+        part_id: progressPartId,
+        content_length: contentLength,
+        downloaded_bytes: size,
+      });
     } else {
       while (true) {
         const { done, value } = await reader.read();
@@ -331,6 +396,12 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) 
         }
 
         await file.write(Buffer.from(value));
+        onProgress?.({
+          type: "stream_progress",
+          part_id: progressPartId,
+          content_length: contentLength,
+          downloaded_bytes: size,
+        });
       }
     }
   } finally {
@@ -344,12 +415,42 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) 
 
   await fs.rename(tempPath, destination);
 
+  onProgress?.({
+    type: "stream_complete",
+    part_id: progressPartId,
+    content_length: contentLength || size,
+    downloaded_bytes: size,
+  });
+
   return {
     path: destination,
     contentType,
     sourceUrl: asset.source_url,
     sizeBytes: size,
   };
+}
+
+async function estimateSingleMediaSize({ asset, maxBytes, timeoutMs }) {
+  const headers = { ...MEDIA_HEADERS, ...(asset.request_headers || {}) };
+
+  for (const sourceUrl of mediaUrlsForAsset(asset)) {
+    try {
+      const info = await probeContentInfo({
+        asset: { ...asset, source_url: sourceUrl },
+        headers,
+        maxBytes,
+        timeoutMs,
+      });
+
+      if (info.contentLength) {
+        return info.contentLength;
+      }
+    } catch {
+      // Size estimation is best-effort; the real download still validates limits.
+    }
+  }
+
+  return null;
 }
 
 function hasCompanionAudio(asset) {
@@ -437,7 +538,7 @@ export function extensionForAsset(asset, contentType = "") {
   return asset.media_type === "video" ? ".mp4" : ".jpg";
 }
 
-async function probeContentType({ asset, headers, maxBytes, timeoutMs }) {
+async function probeContentInfo({ asset, headers, maxBytes, timeoutMs }) {
   let response;
 
   try {
@@ -447,11 +548,11 @@ async function probeContentType({ asset, headers, maxBytes, timeoutMs }) {
       timeoutMs,
     );
   } catch {
-    return "";
+    return { contentType: "", contentLength: null };
   }
 
   if (response.status >= 400) {
-    return "";
+    return { contentType: "", contentLength: null };
   }
 
   const contentLength = safeInt(response.headers.get("content-length"));
@@ -460,7 +561,10 @@ async function probeContentType({ asset, headers, maxBytes, timeoutMs }) {
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
   }
 
-  return normalizeContentType(response.headers.get("content-type"));
+  return {
+    contentType: normalizeContentType(response.headers.get("content-type")),
+    contentLength,
+  };
 }
 
 function contentTypeMatches(mediaType, contentType, sourceUrl) {

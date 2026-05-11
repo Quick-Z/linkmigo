@@ -1,5 +1,7 @@
 import path from "node:path";
 
+const DEFAULT_CACHE_TTL_SECONDS = 2 * 60 * 60;
+
 function intEnv(name, fallback) {
   const raw = process.env[name]?.trim();
 
@@ -37,7 +39,7 @@ export function getSocialDownloaderSettings() {
     cacheRoot,
     cacheTtlSeconds: positiveIntEnv(
       "SOCIAL_CACHE_TTL_SECONDS",
-      positiveIntEnv("IG_CACHE_TTL_SECONDS", 2 * 60 * 60),
+      positiveIntEnv("IG_CACHE_TTL_SECONDS", DEFAULT_CACHE_TTL_SECONDS),
     ),
     cacheCleanupIntervalSeconds: positiveIntEnv(
       "SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS",

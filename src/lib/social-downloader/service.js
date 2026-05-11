@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { CacheStore } from "./cache";
 import { AppError, ErrorCode } from "./errors";
-import { downloadMedia, extensionForAsset } from "./downloader";
+import { downloadMedia, estimateMediaDownloadSize, extensionForAsset } from "./downloader";
 import { getSocialDownloaderSettings } from "./settings";
 import { normalizeSocialUrl, resolveSocialPost } from "./social";
 import { buildZipFile } from "./zip";
@@ -36,13 +36,31 @@ export function getCacheStore() {
   return cacheStore;
 }
 
-export async function resolveUrl(rawUrl) {
+export async function resolveUrl(rawUrl, options = {}) {
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
   const settings = getSocialDownloaderSettings();
   const cache = getCacheStore();
   const normalized = normalizeSocialUrl(rawUrl);
+
+  onProgress?.({
+    phase: "resolving",
+    downloaded_bytes: 0,
+    total_bytes: null,
+    asset_index: null,
+    asset_count: null,
+  });
+
   const cached = await cache.findByCanonical(normalized.canonical_url);
 
   if (cached && isUsableCachedRecord(cached, normalized)) {
+    onProgress?.({
+      phase: "completed",
+      downloaded_bytes: cached.assets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0),
+      total_bytes: cached.assets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0),
+      asset_index: cached.assets.length,
+      asset_count: cached.assets.length,
+    });
+
     return resolveResponse(cached);
   }
 
@@ -59,6 +77,7 @@ export async function resolveUrl(rawUrl) {
     parsedAssets: parsedPost.assets,
     metrics: parsedPost.metrics,
     creatorHandle: parsedPost.creator_handle,
+    onProgress,
   });
 
   return resolveResponse(record);
@@ -103,11 +122,24 @@ export async function getZipFile(requestId, options = {}) {
   };
 }
 
-async function downloadAndCacheAssets({ settings, cache, normalized, parsedAssets, metrics, creatorHandle }) {
+async function downloadAndCacheAssets({ settings, cache, normalized, parsedAssets, metrics, creatorHandle, onProgress }) {
   const requestId = crypto.randomUUID().replaceAll("-", "");
   const recordDir = cache.recordDir(requestId, normalized.platform);
   const downloadedAssets = [];
   let lastDownloadError = null;
+  const progressParts = new Map();
+
+  onProgress?.({
+    phase: "preparing_download",
+    downloaded_bytes: 0,
+    total_bytes: null,
+    asset_index: null,
+    asset_count: parsedAssets.length,
+  });
+
+  const estimatedTotalBytes = onProgress
+    ? await estimateTotalDownloadBytes(parsedAssets, settings)
+    : null;
 
   await fs.mkdir(path.join(recordDir, "assets"), { recursive: true });
 
@@ -121,12 +153,36 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
       let destination = path.join(recordDir, relativePath);
       let downloaded;
 
+      emitDownloadProgress({
+        onProgress,
+        progressParts,
+        estimatedTotalBytes,
+        phase: "downloading",
+        assetIndex: index + 1,
+        assetCount: parsedAssets.length,
+      });
+
       try {
         downloaded = await downloadMedia({
           asset: parsedAsset,
           destination,
           maxBytes: settings.maxAssetBytes,
           timeoutMs: settings.mediaDownloadTimeoutMs,
+          onProgress: (event) => {
+            updateDownloadProgressPart({
+              event,
+              progressParts,
+              assetIndex: index + 1,
+            });
+            emitDownloadProgress({
+              onProgress,
+              progressParts,
+              estimatedTotalBytes,
+              phase: "downloading",
+              assetIndex: index + 1,
+              assetCount: parsedAssets.length,
+            });
+          },
         });
       } catch (error) {
         if (error instanceof AppError) {
@@ -160,6 +216,15 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
         width: parsedAsset.width ?? null,
         height: parsedAsset.height ?? null,
       });
+
+      emitDownloadProgress({
+        onProgress,
+        progressParts,
+        estimatedTotalBytes,
+        phase: "downloading",
+        assetIndex: index + 1,
+        assetCount: parsedAssets.length,
+      });
     }
 
     if (!downloadedAssets.length) {
@@ -184,11 +249,88 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
 
     await cache.saveRecord(record);
 
+    onProgress?.({
+      phase: "completed",
+      downloaded_bytes: downloadedAssets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0),
+      total_bytes: downloadedAssets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0),
+      asset_index: downloadedAssets.length,
+      asset_count: downloadedAssets.length,
+    });
+
     return record;
   } catch (error) {
     // 项目规则禁止批量删除文件/目录；失败时不自动清理临时缓存目录。
     throw error;
   }
+}
+
+async function estimateTotalDownloadBytes(parsedAssets, settings) {
+  let totalBytes = 0;
+  let allPartsKnown = true;
+
+  for (const asset of parsedAssets) {
+    const estimate = await estimateMediaDownloadSize({
+      asset,
+      maxBytes: settings.maxAssetBytes,
+      timeoutMs: settings.httpTimeoutMs,
+    });
+
+    if (estimate.knownParts !== estimate.partCount) {
+      allPartsKnown = false;
+    }
+
+    if (estimate.totalBytes) {
+      totalBytes += estimate.totalBytes;
+    }
+  }
+
+  return allPartsKnown && totalBytes ? totalBytes : null;
+}
+
+function updateDownloadProgressPart({ event, progressParts, assetIndex }) {
+  if (!event || !event.part_id) {
+    return;
+  }
+
+  const partKey = `${assetIndex}:${event.part_id}`;
+  const existing = progressParts.get(partKey) ?? {
+    contentLength: null,
+    downloadedBytes: 0,
+  };
+  const contentLength = event.content_length || existing.contentLength;
+  const downloadedBytes = Math.max(0, event.downloaded_bytes || 0);
+
+  progressParts.set(partKey, {
+    contentLength,
+    downloadedBytes,
+  });
+}
+
+function emitDownloadProgress({
+  onProgress,
+  progressParts,
+  estimatedTotalBytes,
+  phase,
+  assetIndex,
+  assetCount,
+}) {
+  if (!onProgress) {
+    return;
+  }
+
+  const downloadedBytes = [...progressParts.values()]
+    .reduce((sum, part) => sum + (part.downloadedBytes || 0), 0);
+  const knownTotalBytes = [...progressParts.values()]
+    .reduce((sum, part) => sum + (part.contentLength || 0), 0);
+  const totalBytes = estimatedTotalBytes || knownTotalBytes || null;
+
+  onProgress({
+    phase,
+    downloaded_bytes: downloadedBytes,
+    total_bytes: totalBytes,
+    asset_index: assetIndex,
+    asset_count: assetCount,
+  });
 }
 
 function isUsableCachedRecord(record, normalized) {

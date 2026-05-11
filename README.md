@@ -17,6 +17,8 @@ npm install
 npm run dev
 ```
 
+开发服务会监听所有本机网卡，既可以用 `http://localhost:3000` 访问，也可以在同一局域网用 `http://<本机 IP>:3000` 访问。
+
 打包项目并运行
 
 ```bash

@@ -336,6 +336,10 @@ function normalizeTwitterUrl(parsed) {
 
   if (parsed.pathname === "/i/bookmarks") {
     tweetId = parsed.searchParams.get("post_id") ?? "";
+  } else if (parts.length >= 4 && parts[0] === "i" && parts[1] === "web" && parts[2] === "status") {
+    tweetId = parts[3];
+  } else if (parts.length >= 3 && parts[0] === "i" && parts[1] === "status") {
+    tweetId = parts[2];
   } else if (parts.length >= 3 && parts[1] === "status") {
     username = parts[0];
     tweetId = parts[2];
@@ -646,18 +650,21 @@ async function resolveTwitterPost(normalized, settings) {
     }
   }
 
-  const tweet = data ? extractTwitterTweet(data, tweetId) : null;
+  const tweetResult = data ? extractTwitterTweetResult(data, tweetId) : null;
+  const tweet = normalizeTwitterTweet(tweetResult);
   let media = null;
   let metrics = createMetrics("twitter_public_best_effort");
 
   if (!tweet) {
+    handleTwitterUnavailable(tweetResult);
+
     const syndication = await requestTwitterSyndication(tweetId, settings);
 
     media = Array.isArray(syndication?.mediaDetails) ? syndication.mediaDetails : null;
   } else {
     const legacy = tweet.legacy && typeof tweet.legacy === "object" ? tweet.legacy : {};
 
-    media = dig(legacy, "extended_entities", "media");
+    media = twitterMediaFromTweet(tweet);
     metrics = {
       like_count: optionalInt(legacy.favorite_count),
       comment_count: optionalInt(legacy.reply_count),
@@ -687,6 +694,7 @@ async function resolveTwitterPost(normalized, settings) {
           source_url: `${imageUrl}?name=4096x4096`,
           media_type: "image",
           filename_hint: `twitter_${tweetId}_${index + 1}.jpg`,
+          request_headers: twitterMediaHeaders(normalized.canonical_url),
         });
       }
     } else if (["video", "animated_gif"].includes(item.type)) {
@@ -697,6 +705,7 @@ async function resolveTwitterPost(normalized, settings) {
           source_url: videoUrl,
           media_type: "video",
           filename_hint: `twitter_${tweetId}_${index + 1}.mp4`,
+          request_headers: twitterMediaHeaders(normalized.canonical_url),
         });
       }
     }
@@ -2095,21 +2104,11 @@ function bestTwitterVideoUrl(item) {
   const best = mp4s.reduce((current, candidate) =>
     (optionalInt(candidate.bitrate) || 0) > (optionalInt(current.bitrate) || 0) ? candidate : current,
   );
-  const url = new URL(best.url);
-  const query = new URLSearchParams();
 
-  for (const [key, value] of url.searchParams.entries()) {
-    if (key !== "tag") {
-      query.append(key, value);
-    }
-  }
-
-  url.search = query.toString();
-
-  return url.toString();
+  return htmlUnescape(best.url);
 }
 
-function extractTwitterTweet(data, tweetId) {
+function extractTwitterTweetResult(data, tweetId) {
   const instructions = dig(data, "data", "threaded_conversation_with_injections_v2", "instructions");
 
   if (!Array.isArray(instructions)) {
@@ -2117,6 +2116,10 @@ function extractTwitterTweet(data, tweetId) {
   }
 
   for (const instruction of instructions) {
+    if (instruction?.type && instruction.type !== "TimelineAddEntries") {
+      continue;
+    }
+
     const entries = Array.isArray(instruction?.entries) ? instruction.entries : [];
 
     for (const entry of entries) {
@@ -2130,15 +2133,62 @@ function extractTwitterTweet(data, tweetId) {
         return null;
       }
 
-      if (result.__typename === "TweetWithVisibilityResults") {
-        return result.tweet && typeof result.tweet === "object" ? result.tweet : null;
-      }
-
       return result;
     }
   }
 
   return null;
+}
+
+function normalizeTwitterTweet(tweetResult) {
+  if (!tweetResult || typeof tweetResult !== "object") {
+    return null;
+  }
+
+  if (tweetResult.__typename === "TweetWithVisibilityResults") {
+    return tweetResult.tweet && typeof tweetResult.tweet === "object" ? tweetResult.tweet : null;
+  }
+
+  return tweetResult.__typename === "Tweet" ? tweetResult : null;
+}
+
+function twitterMediaFromTweet(tweet) {
+  const legacy = tweet?.legacy && typeof tweet.legacy === "object" ? tweet.legacy : {};
+  const retweetedResult =
+    dig(legacy, "retweeted_status_result", "result", "tweet") ||
+    dig(legacy, "retweeted_status_result", "result");
+  const retweetedLegacy = retweetedResult?.legacy && typeof retweetedResult.legacy === "object"
+    ? retweetedResult.legacy
+    : retweetedResult && typeof retweetedResult === "object"
+      ? retweetedResult
+      : null;
+  const retweetedMedia = retweetedLegacy ? dig(retweetedLegacy, "extended_entities", "media") : null;
+  const media = retweetedMedia || dig(legacy, "extended_entities", "media") || dig(legacy, "entities", "media");
+
+  return Array.isArray(media) ? media : null;
+}
+
+function handleTwitterUnavailable(tweetResult) {
+  if (!tweetResult || typeof tweetResult !== "object") {
+    return;
+  }
+
+  if (!["TweetUnavailable", "TweetTombstone"].includes(tweetResult.__typename)) {
+    return;
+  }
+
+  const reason = dig(tweetResult, "result", "reason") || tweetResult.reason || "";
+  const tombstoneText = dig(tweetResult, "tombstone", "text", "text") || "";
+
+  if (reason === "Protected") {
+    throw new AppError(ErrorCode.LOGIN_REQUIRED, "这个 Twitter/X 帖子来自受保护账号，需要登录后访问。", 403);
+  }
+
+  if (reason === "NsfwLoggedOut" || /^Age-restricted/i.test(tombstoneText)) {
+    throw new AppError(ErrorCode.LOGIN_REQUIRED, "这个 Twitter/X 内容需要登录或年龄验证。", 403);
+  }
+
+  throw new AppError(ErrorCode.NO_MEDIA_FOUND, "这个 Twitter/X 帖子不可用或已被删除。", 404);
 }
 
 function metricsFromTiktok(detail) {
@@ -2269,7 +2319,9 @@ function firstJsonCount(text, keys) {
 function twitterSyndicationToken(tweetId) {
   const value = (Number.parseInt(tweetId, 10) / 1_000_000_000_000_000) * Math.PI;
 
-  return base36Float(value).replaceAll("0", "").replaceAll(".", "");
+  return base36Float(value)
+    .replace(".", "")
+    .replace(/^0+|0+$/g, "");
 }
 
 function base36Float(value) {
@@ -2333,6 +2385,13 @@ function xiaohongshuMediaHeaders(pageUrl) {
     "user-agent": XIAOHONGSHU_HEADERS["user-agent"],
     accept: "image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8",
     "accept-language": XIAOHONGSHU_HEADERS["accept-language"],
+  };
+}
+
+function twitterMediaHeaders(pageUrl) {
+  return {
+    Referer: pageUrl,
+    Origin: "https://x.com",
   };
 }
 

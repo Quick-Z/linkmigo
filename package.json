@@ -8,10 +8,13 @@
     "start": "next start"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
+    "ffmpeg-static": "^5.3.0",
     "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "undici": "^8.2.0"
+    "undici": "^8.2.0",
+    "youtubei.js": "^17.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

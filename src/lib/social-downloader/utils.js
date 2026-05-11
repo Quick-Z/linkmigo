@@ -224,7 +224,7 @@ function getProxyDispatcher() {
   return cachedProxyAgent;
 }
 
-function getProxyUrl() {
+export function getProxyUrl() {
   return (
     process.env.SOCIAL_PROXY_URL?.trim() ||
     process.env.IG_PROXY_URL?.trim() ||

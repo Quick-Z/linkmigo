@@ -45,6 +45,13 @@ export function getSocialDownloaderSettings() {
     ),
     cacheMaxBytes: intEnv("IG_CACHE_MAX_BYTES", 2 * 1024 * 1024 * 1024),
     httpTimeoutMs: Math.max(1, floatEnv("IG_HTTP_TIMEOUT_SECONDS", 20)) * 1000,
+    mediaDownloadTimeoutMs: Math.max(
+      1,
+      floatEnv(
+        "SOCIAL_MEDIA_TIMEOUT_SECONDS",
+        floatEnv("IG_MEDIA_TIMEOUT_SECONDS", 10 * 60),
+      ),
+    ) * 1000,
     maxAssetBytes: intEnv(
       "SOCIAL_MAX_ASSET_BYTES",
       intEnv("IG_MAX_ASSET_BYTES", 512 * 1024 * 1024),

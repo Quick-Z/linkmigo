@@ -12,6 +12,8 @@ import { writeUserActionLog } from "../user-action-logger";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
+const mediaCacheVersion = 5;
+const platformsWithMergedMedia = new Set(["youtube", "bilibili"]);
 
 export function getCacheStore() {
   const settings = getSocialDownloaderSettings();
@@ -40,7 +42,7 @@ export async function resolveUrl(rawUrl) {
   const normalized = normalizeSocialUrl(rawUrl);
   const cached = await cache.findByCanonical(normalized.canonical_url);
 
-  if (cached) {
+  if (cached && isUsableCachedRecord(cached, normalized)) {
     return resolveResponse(cached);
   }
 
@@ -105,6 +107,7 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
   const requestId = crypto.randomUUID().replaceAll("-", "");
   const recordDir = cache.recordDir(requestId, normalized.platform);
   const downloadedAssets = [];
+  let lastDownloadError = null;
 
   await fs.mkdir(path.join(recordDir, "assets"), { recursive: true });
 
@@ -123,10 +126,11 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
           asset: parsedAsset,
           destination,
           maxBytes: settings.maxAssetBytes,
-          timeoutMs: settings.httpTimeoutMs,
+          timeoutMs: settings.mediaDownloadTimeoutMs,
         });
       } catch (error) {
         if (error instanceof AppError) {
+          lastDownloadError = error;
           continue;
         }
 
@@ -159,13 +163,14 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
     }
 
     if (!downloadedAssets.length) {
-      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "发现了媒体地址，但无法下载任何资源。", 502);
+      throw lastDownloadError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "发现了媒体地址，但无法下载任何资源。", 502);
     }
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + settings.cacheTtlSeconds * 1000);
     const record = {
       request_id: requestId,
+      media_version: mediaCacheVersion,
       canonical_url: normalized.canonical_url,
       shortcode: normalized.shortcode,
       kind: normalized.kind,
@@ -184,6 +189,14 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
     // 项目规则禁止批量删除文件/目录；失败时不自动清理临时缓存目录。
     throw error;
   }
+}
+
+function isUsableCachedRecord(record, normalized) {
+  if (!platformsWithMergedMedia.has(normalized.platform)) {
+    return true;
+  }
+
+  return Number(record.media_version || 0) >= mediaCacheVersion;
 }
 
 function resolveResponse(record) {

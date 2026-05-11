@@ -19,6 +19,7 @@ const platformLabels = {
   twitter: "Twitter/X",
   bilibili: "Bilibili",
   facebook: "Facebook",
+  youtube: "YouTube",
 };
 
 const copyByLanguage = {
@@ -58,6 +59,7 @@ const copyByLanguage = {
       twitter: "Twitter/X",
       bilibili: "Bilibili",
       facebook: "Facebook",
+      youtube: "YouTube",
     },
     preferences: "偏好设置",
     previous: "上一张",
@@ -70,7 +72,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 Instagram、TikTok 或抖音链接...",
+    urlPlaceholder: "粘贴 Instagram、TikTok、抖音或 YouTube 链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -113,6 +115,7 @@ const copyByLanguage = {
       twitter: "Twitter/X",
       bilibili: "Bilibili",
       facebook: "Facebook",
+      youtube: "YouTube",
     },
     preferences: "Preferences",
     previous: "Previous",
@@ -125,7 +128,7 @@ const copyByLanguage = {
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, TikTok, or Douyin URL...",
+    urlPlaceholder: "Paste Instagram, TikTok, Douyin, or YouTube URL...",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -248,6 +251,22 @@ const darkPlatformThemeOverrides = {
     border: "rgba(48, 226, 226, 0.34)",
     borderStrong: "rgba(48, 226, 226, 0.5)",
   },
+  youtube: {
+    accentStrong: "#ff6d78",
+    accentText: "#ffc3c7",
+    accentMuted: "#f29aa2",
+    buttonText: "#ffe8ea",
+    border: "rgba(255, 109, 120, 0.34)",
+    borderStrong: "rgba(255, 109, 120, 0.5)",
+  },
+  bilibili: {
+    accentStrong: "#45c8f5",
+    accentText: "#b8edff",
+    accentMuted: "#8fd8f2",
+    buttonText: "#e6f8ff",
+    border: "rgba(69, 200, 245, 0.34)",
+    borderStrong: "rgba(69, 200, 245, 0.5)",
+  },
   neutral: {
     accentStrong: "#c4d2e6",
     accentText: "#d7e2f2",
@@ -326,6 +345,46 @@ const buttonThemes = {
     skeletonGradient: "linear-gradient(90deg, rgba(237, 254, 255, 0.78) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(235, 252, 254, 0.76) 78%, rgba(255, 247, 249, 0.58) 100%)",
     previewGradient: "linear-gradient(135deg, #d9ffff 0%, #c5f5ff 50%, #ffd6df 100%)",
     mediaTint: "rgba(238, 254, 255, 0.78)",
+  },
+  youtube: {
+    accent: "#e9444f",
+    accentStrong: "#c72f39",
+    accentText: "#7c2c34",
+    accentMuted: "#a34d55",
+    buttonText: "#752c33",
+    border: "rgba(233, 68, 79, 0.32)",
+    borderStrong: "rgba(233, 68, 79, 0.45)",
+    ring: "rgba(233, 68, 79, 0.16)",
+    panelShadow: "0 24px 60px rgba(233, 68, 79, 0.12), 0 12px 30px rgba(31, 41, 55, 0.08)",
+    buttonShadow: "0 18px 36px rgba(233, 68, 79, 0.15), 0 8px 18px rgba(31, 41, 55, 0.08)",
+    selectedShadow: "0 20px 38px rgba(233, 68, 79, 0.14)",
+    glassEnd: "rgba(255, 246, 247, 0.76)",
+    cardEnd: "rgba(255, 249, 250, 0.88)",
+    buttonGradient: "linear-gradient(135deg, rgba(255,255,255,0.94) 0%, rgba(255,245,246,0.93) 50%, rgba(246,249,252,0.98) 100%)",
+    progressGradient: "linear-gradient(90deg, #e9444f 0%, #ff8b94 54%, #7b8aa1 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(255, 241, 243, 0.8) 0%, rgba(255, 255, 255, 0.96) 48%, rgba(249, 252, 255, 0.82) 100%)",
+    previewGradient: "linear-gradient(135deg, #ffd7db 0%, #fff5f6 50%, #e9eef5 100%)",
+    mediaTint: "rgba(255, 244, 246, 0.78)",
+  },
+  bilibili: {
+    accent: "#32b9ea",
+    accentStrong: "#178fb8",
+    accentText: "#236078",
+    accentMuted: "#518194",
+    buttonText: "#20576f",
+    border: "rgba(50, 185, 234, 0.32)",
+    borderStrong: "rgba(251, 113, 159, 0.36)",
+    ring: "rgba(50, 185, 234, 0.17)",
+    panelShadow: "0 24px 60px rgba(50, 185, 234, 0.13), 0 12px 30px rgba(251, 113, 159, 0.08)",
+    buttonShadow: "0 18px 36px rgba(50, 185, 234, 0.15), 0 8px 18px rgba(251, 113, 159, 0.09)",
+    selectedShadow: "0 20px 38px rgba(50, 185, 234, 0.14), 0 8px 16px rgba(251, 113, 159, 0.08)",
+    glassEnd: "rgba(240, 252, 255, 0.76)",
+    cardEnd: "rgba(247, 253, 255, 0.88)",
+    buttonGradient: "linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(238,251,255,0.93) 52%, rgba(255,242,247,0.96) 100%)",
+    progressGradient: "linear-gradient(90deg, #32b9ea 0%, #9ddff5 56%, #fb719f 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(232, 250, 255, 0.8) 0%, rgba(255, 255, 255, 0.96) 48%, rgba(255, 244, 248, 0.72) 100%)",
+    previewGradient: "linear-gradient(135deg, #cff5ff 0%, #f7fdff 52%, #ffd7e5 100%)",
+    mediaTint: "rgba(240, 252, 255, 0.78)",
   },
   neutral: {
     accent: "#7b8aa1",
@@ -1272,6 +1331,14 @@ function detectPlatform(value) {
 
     if (hostname === "douyin.com" || hostname.endsWith(".douyin.com") || hostname === "iesdouyin.com" || hostname.endsWith(".iesdouyin.com")) {
       return "douyin";
+    }
+
+    if (hostname === "youtube.com" || hostname.endsWith(".youtube.com") || hostname === "youtu.be" || hostname.endsWith(".youtu.be") || hostname === "youtube-nocookie.com" || hostname.endsWith(".youtube-nocookie.com")) {
+      return "youtube";
+    }
+
+    if (hostname === "bilibili.com" || hostname.endsWith(".bilibili.com") || hostname === "b23.tv") {
+      return "bilibili";
     }
   } catch {
     return "";

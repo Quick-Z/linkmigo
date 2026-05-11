@@ -1,9 +1,15 @@
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
 import { fetchWithTimeout } from "./utils";
+
+const require = createRequire(import.meta.url);
+const packagedFfmpegPath = require("ffmpeg-static");
 
 const MEDIA_HEADERS = {
   "user-agent":
@@ -24,6 +30,7 @@ const EXTENSION_CONTENT_TYPES = {
   ".mp3": "audio/mpeg",
   ".mp4": "video/mp4",
   ".png": "image/png",
+  ".webm": "video/webm",
   ".webp": "image/webp",
 };
 
@@ -38,9 +45,19 @@ const CONTENT_TYPE_EXTENSIONS = {
   "image/webp": ".webp",
   "video/mp4": ".mp4",
   "video/quicktime": ".mov",
+  "video/webm": ".webm",
 };
 
 export async function downloadMedia({ asset, destination, maxBytes, timeoutMs }) {
+  if (hasCompanionAudio(asset)) {
+    return await downloadMergedMedia({
+      asset,
+      destination,
+      maxBytes,
+      timeoutMs,
+    });
+  }
+
   const urls = mediaUrlsForAsset(asset);
   let lastError = null;
 
@@ -62,6 +79,179 @@ export async function downloadMedia({ asset, destination, maxBytes, timeoutMs })
   }
 
   throw lastError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载失败。", 502);
+}
+
+async function downloadMergedMedia({ asset, destination, maxBytes, timeoutMs }) {
+  const videoUrls = mediaUrlsForAsset(asset);
+  const audioUrls = mediaUrlsForAsset({
+    source_url: asset.audio_source_url,
+    fallback_urls: asset.audio_fallback_urls,
+  });
+  let lastError = null;
+
+  for (const sourceUrl of videoUrls) {
+    for (const audioUrl of audioUrls) {
+      try {
+        return await downloadAndMergeMedia({
+          asset,
+          sourceUrl,
+          audioUrl,
+          destination,
+          maxBytes,
+          timeoutMs,
+        });
+      } catch (error) {
+        if (!(error instanceof AppError)) {
+          throw error;
+        }
+
+        lastError = error;
+      }
+    }
+  }
+
+  throw lastError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体音视频合并失败。", 502);
+}
+
+async function downloadAndMergeMedia({ asset, sourceUrl, audioUrl, destination, maxBytes, timeoutMs }) {
+  const videoAsset = {
+    ...asset,
+    source_url: sourceUrl,
+    media_type: "video",
+  };
+  const audioAsset = {
+    source_url: audioUrl,
+    media_type: "audio",
+    filename_hint: asset.audio_filename_hint || "audio.m4a",
+    request_headers: asset.audio_request_headers || asset.request_headers,
+  };
+  const videoPath = `${destination}.video${extensionForAsset(videoAsset)}`;
+  const audioPath = `${destination}.audio${extensionForAsset(audioAsset)}`;
+  const outputExtension = mergedMediaExtension(asset);
+  const mergedTempPath = `${destination}.merge${outputExtension}.part`;
+
+  await fs.unlink(videoPath).catch(() => {});
+  await fs.unlink(audioPath).catch(() => {});
+  await fs.unlink(mergedTempPath).catch(() => {});
+
+  try {
+    const videoDownload = await downloadSingleMedia({
+      asset: videoAsset,
+      destination: videoPath,
+      maxBytes,
+      timeoutMs,
+    });
+    const audioDownload = await downloadSingleMedia({
+      asset: audioAsset,
+      destination: audioPath,
+      maxBytes,
+      timeoutMs,
+    });
+
+    if ((videoDownload.sizeBytes || 0) + (audioDownload.sizeBytes || 0) > maxBytes) {
+      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+    }
+
+    const { sizeBytes } = await mergeMediaFiles({
+      videoPath,
+      audioPath,
+      destination,
+      tempPath: mergedTempPath,
+      outputExtension,
+      maxBytes,
+    });
+
+    return {
+      path: destination,
+      contentType: EXTENSION_CONTENT_TYPES[outputExtension] || "video/mp4",
+      sourceUrl,
+      sizeBytes,
+    };
+  } finally {
+    await fs.unlink(videoPath).catch(() => {});
+    await fs.unlink(audioPath).catch(() => {});
+    await fs.unlink(mergedTempPath).catch(() => {});
+  }
+}
+
+async function mergeMediaFiles({ videoPath, audioPath, destination, tempPath, outputExtension, maxBytes }) {
+  const ffmpegPath = resolveFfmpegPath();
+
+  if (!ffmpegPath) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "服务器缺少 ffmpeg，无法合并音视频。", 500);
+  }
+
+  await fs.unlink(tempPath).catch(() => {});
+
+  await new Promise((resolve, reject) => {
+    const ffmpegArgs = [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      videoPath,
+      "-i",
+      audioPath,
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      "-c",
+      "copy",
+      "-shortest",
+      "-f",
+      outputExtension === ".webm" ? "webm" : "mp4",
+      tempPath,
+    ];
+
+    if (outputExtension !== ".webm") {
+      ffmpegArgs.splice(-4, 0, "-movflags", "+faststart");
+    }
+
+    const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
+    let stderr = "";
+
+    ffmpeg.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4000);
+    });
+    ffmpeg.on("error", (error) => {
+      reject(new AppError(ErrorCode.DOWNLOAD_FAILED, `媒体音视频合并失败：${error.message}`, 502));
+    });
+    ffmpeg.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new AppError(
+        ErrorCode.DOWNLOAD_FAILED,
+        "媒体音视频合并失败。",
+        502,
+        stderr ? { ffmpeg: stderr.trim() } : undefined,
+      ));
+    });
+  });
+
+  const stat = await fs.stat(tempPath);
+
+  if (stat.size === 0) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "合并后的媒体资源为空。", 502);
+  }
+
+  if (stat.size > maxBytes) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+  }
+
+  await fs.rename(tempPath, destination);
+
+  return { sizeBytes: stat.size };
+}
+
+function mergedMediaExtension(asset) {
+  const extension = extensionForAsset(asset).toLowerCase();
+
+  return extension === ".webm" ? ".webm" : ".mp4";
 }
 
 async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) {
@@ -162,6 +352,25 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs }) 
   };
 }
 
+function hasCompanionAudio(asset) {
+  return typeof asset?.audio_source_url === "string" && asset.audio_source_url.startsWith("http");
+}
+
+function resolveFfmpegPath() {
+  const binaryName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  const candidates = [
+    process.env.FFMPEG_PATH,
+    packagedFfmpegPath,
+    path.join(process.cwd(), "node_modules", "ffmpeg-static", binaryName),
+  ];
+
+  return candidates.find((candidate) =>
+    typeof candidate === "string" &&
+    candidate.length > 0 &&
+    existsSync(candidate),
+  );
+}
+
 function mediaUrlsForAsset(asset) {
   const urls = [asset.source_url, ...(Array.isArray(asset.fallback_urls) ? asset.fallback_urls : [])];
   const seen = new Set();
@@ -211,6 +420,7 @@ export function extensionForAsset(asset, contentType = "") {
     ".mp4",
     ".mov",
     ".m4v",
+    ".webm",
     ".m4a",
     ".mp3",
     ".aac",

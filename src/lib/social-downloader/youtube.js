@@ -8,6 +8,7 @@ import {
   fetchWithTimeout,
   firstPresentInt,
   getProxyUrl,
+  isSocksProxyUrl,
   optionalInt,
 } from "./utils";
 
@@ -367,6 +368,12 @@ function getYtdlAgent() {
     return undefined;
   }
 
+  if (isSocksProxyUrl(proxyUrl)) {
+    cachedYtdlAgent = null;
+    cachedYtdlAgentProxyUrl = "";
+    return undefined;
+  }
+
   if (cachedYtdlAgent && cachedYtdlAgentProxyUrl === proxyUrl) {
     return cachedYtdlAgent;
   }
@@ -518,7 +525,7 @@ function toYoutubeAppError(error) {
     502,
     {
       proxy: getProxyUrl() ? "enabled" : "disabled",
-      hint: "如果你的网络需要代理访问 YouTube，请在 .env.local 配置 SOCIAL_PROXY_URL，例如 http://127.0.0.1:7890。",
+      hint: "请确认服务器网络或系统代理可访问 YouTube；也可以在 .env.local 配置 SOCIAL_PROXY_URL，例如 http://127.0.0.1:7890。",
     },
   );
 }

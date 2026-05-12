@@ -27,7 +27,9 @@ npm run start
 ```
 
 
-如果服务端访问 Instagram / TikTok / 抖音 / 小红书 / 快手 / YouTube 等平台报“上游访问受限”，通常是 Node 服务端没有走代理。可以创建 `.env.local`：
+服务端会优先使用电脑当前网络环境直接访问外网。如果 VPN 是全局路由 / TUN 模式，通常不需要额外配置；如果 VPN 客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP / HTTPS / SOCKS5 代理。
+
+如果服务端访问 Instagram / TikTok / 抖音 / 小红书 / 快手 / YouTube 等平台报“上游访问受限”，可以创建 `.env.local` 手动指定代理，这会覆盖系统代理探测结果：
 
 ```bash
 SOCIAL_PROXY_URL=http://127.0.0.1:7890
@@ -41,6 +43,14 @@ HTTPS_PROXY=http://127.0.0.1:7890
 HTTP_PROXY=http://127.0.0.1:7890
 ALL_PROXY=http://127.0.0.1:7890
 ```
+
+如果不想自动读取系统代理，可以在 `.env.local` 里关闭：
+
+```bash
+SOCIAL_AUTO_SYSTEM_PROXY=0
+```
+
+如果 VPN 使用 PAC 自动代理脚本，而不是明确的系统 HTTP / HTTPS / SOCKS5 代理端口，Node 服务端可能无法解析 PAC，仍建议手动配置 `SOCIAL_PROXY_URL`。
 
 资源下载后会先保存在本地缓存目录。默认保存路径是：
 

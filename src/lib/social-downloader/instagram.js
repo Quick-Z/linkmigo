@@ -178,7 +178,7 @@ async function ensureInstagramNetwork(settings) {
     if (error?.name === "AbortError") {
       throw new AppError(
         ErrorCode.UPSTREAM_BLOCKED,
-        "无法访问 Instagram 页面（连接超时）。请确认服务器网络可访问 Instagram，或配置 SOCIAL_PROXY_URL。",
+        "无法访问 Instagram 页面（连接超时）。请确认服务器网络或系统代理可访问 Instagram，或配置 SOCIAL_PROXY_URL。",
         502,
       );
     }
@@ -190,7 +190,7 @@ async function ensureInstagramNetwork(settings) {
 
     throw new AppError(
       ErrorCode.UPSTREAM_BLOCKED,
-      `无法访问 Instagram 页面（${detail}）。请确认服务器网络可访问 Instagram，或配置 SOCIAL_PROXY_URL。`,
+      `无法访问 Instagram 页面（${detail}）。请确认服务器网络或系统代理可访问 Instagram，或配置 SOCIAL_PROXY_URL。`,
       502,
       {
         cause: code || (error instanceof Error ? error.message : "fetch failed"),

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 import {
   fetch as undiciFetch,
@@ -14,6 +15,12 @@ export const PAGE_HEADERS = {
     "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
   "accept-language": "en-US,en;q=0.9",
 };
+
+const SYSTEM_PROXY_CACHE_MS = 30_000;
+const PROXY_DISABLE_VALUES = new Set(["0", "false", "no", "off", "none", "direct", "disable", "disabled"]);
+
+let cachedSystemProxyCheckedAt = 0;
+let cachedSystemProxyUrl = "";
 
 export function optionalInt(value) {
   if (value == null || value === "" || typeof value === "boolean") {
@@ -176,7 +183,7 @@ export async function fetchTextResponse({
       502,
       {
         proxy: getProxyUrl() ? "enabled" : "disabled",
-        hint: "如果你的网络需要代理访问该平台，请在 .env.local 配置 SOCIAL_PROXY_URL，例如 http://127.0.0.1:7890。",
+        hint: "请确认服务器网络或系统代理可访问该平台；也可以在 .env.local 配置 SOCIAL_PROXY_URL，例如 http://127.0.0.1:7890。",
       },
     );
   }
@@ -225,17 +232,266 @@ function getProxyDispatcher() {
 }
 
 export function getProxyUrl() {
+  const configuredProxyUrl = getConfiguredProxyUrl();
+
+  if (configuredProxyUrl != null) {
+    return configuredProxyUrl;
+  }
+
+  return getSystemProxyUrl();
+}
+
+export function isSocksProxyUrl(proxyUrl) {
+  return /^socks(?:5)?:\/\//i.test(String(proxyUrl || "").trim());
+}
+
+function getConfiguredProxyUrl() {
+  for (const name of [
+    "SOCIAL_PROXY_URL",
+    "IG_PROXY_URL",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+  ]) {
+    const value = process.env[name]?.trim();
+
+    if (!value) {
+      continue;
+    }
+
+    return isProxyDisabledValue(value) ? "" : normalizeProxyUrl(value, "http");
+  }
+
+  return null;
+}
+
+function getSystemProxyUrl() {
+  if (!shouldUseSystemProxy()) {
+    cachedSystemProxyCheckedAt = 0;
+    cachedSystemProxyUrl = "";
+    return "";
+  }
+
+  const now = Date.now();
+
+  if (now - cachedSystemProxyCheckedAt < SYSTEM_PROXY_CACHE_MS) {
+    return cachedSystemProxyUrl;
+  }
+
+  cachedSystemProxyCheckedAt = now;
+  cachedSystemProxyUrl = detectSystemProxyUrl();
+
+  return cachedSystemProxyUrl;
+}
+
+function shouldUseSystemProxy() {
+  const value =
+    process.env.SOCIAL_AUTO_SYSTEM_PROXY?.trim() ||
+    process.env.IG_AUTO_SYSTEM_PROXY?.trim();
+
+  return value ? !isProxyDisabledValue(value) : true;
+}
+
+function detectSystemProxyUrl() {
+  if (process.platform === "darwin") {
+    return detectMacosProxyUrl();
+  }
+
+  if (process.platform === "win32") {
+    return detectWindowsProxyUrl();
+  }
+
+  if (process.platform === "linux") {
+    return detectLinuxProxyUrl();
+  }
+
+  return "";
+}
+
+function detectMacosProxyUrl() {
+  const output = runProxyCommand("scutil", ["--proxy"]);
+
+  if (!output) {
+    return "";
+  }
+
+  const settings = keyValueLines(output);
+
   return (
-    process.env.SOCIAL_PROXY_URL?.trim() ||
-    process.env.IG_PROXY_URL?.trim() ||
-    process.env.HTTPS_PROXY?.trim() ||
-    process.env.https_proxy?.trim() ||
-    process.env.HTTP_PROXY?.trim() ||
-    process.env.http_proxy?.trim() ||
-    process.env.ALL_PROXY?.trim() ||
-    process.env.all_proxy?.trim() ||
-    ""
+    proxyUrlFromSystemSettings(settings, "HTTPS", "http") ||
+    proxyUrlFromSystemSettings(settings, "HTTP", "http") ||
+    proxyUrlFromSystemSettings(settings, "SOCKS", "socks5")
   );
+}
+
+function proxyUrlFromSystemSettings(settings, prefix, protocol) {
+  if (!isSystemProxyEnabled(settings[`${prefix}Enable`])) {
+    return "";
+  }
+
+  return proxyUrlFromHostPort(settings[`${prefix}Proxy`], settings[`${prefix}Port`], protocol);
+}
+
+function detectWindowsProxyUrl() {
+  const registryKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+  const enabledOutput = runProxyCommand("reg", ["query", registryKey, "/v", "ProxyEnable"]);
+  const proxyEnabled = /ProxyEnable\s+REG_DWORD\s+0x1\b/i.test(enabledOutput);
+
+  if (!proxyEnabled) {
+    return "";
+  }
+
+  const serverOutput = runProxyCommand("reg", ["query", registryKey, "/v", "ProxyServer"]);
+  const proxyServer = windowsRegistryValue(serverOutput, "ProxyServer");
+
+  return proxyUrlFromWindowsProxyServer(proxyServer);
+}
+
+function proxyUrlFromWindowsProxyServer(proxyServer) {
+  const value = proxyServer.trim();
+
+  if (!value) {
+    return "";
+  }
+
+  if (!value.includes("=")) {
+    return normalizeProxyUrl(value, "http");
+  }
+
+  const proxies = {};
+
+  for (const entry of value.split(";")) {
+    const [rawKey, ...rawValue] = entry.split("=");
+    const key = rawKey?.trim().toLowerCase();
+    const proxy = rawValue.join("=").trim();
+
+    if (key && proxy) {
+      proxies[key] = proxy;
+    }
+  }
+
+  return (
+    normalizeProxyUrl(proxies.https, "http") ||
+    normalizeProxyUrl(proxies.http, "http") ||
+    normalizeProxyUrl(proxies.socks, "socks5")
+  );
+}
+
+function detectLinuxProxyUrl() {
+  const mode = unquoteGsettings(runProxyCommand("gsettings", ["get", "org.gnome.system.proxy", "mode"]));
+
+  if (mode !== "manual") {
+    return "";
+  }
+
+  return (
+    linuxGsettingsProxyUrl("https", "http") ||
+    linuxGsettingsProxyUrl("http", "http") ||
+    linuxGsettingsProxyUrl("socks", "socks5")
+  );
+}
+
+function linuxGsettingsProxyUrl(schemaSuffix, protocol) {
+  const schema = `org.gnome.system.proxy.${schemaSuffix}`;
+  const host = unquoteGsettings(runProxyCommand("gsettings", ["get", schema, "host"]));
+  const port = unquoteGsettings(runProxyCommand("gsettings", ["get", schema, "port"]));
+
+  return proxyUrlFromHostPort(host, port, protocol);
+}
+
+function runProxyCommand(command, args) {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1000,
+    });
+  } catch {
+    return "";
+  }
+}
+
+function keyValueLines(output) {
+  const values = {};
+
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z0-9]+)\s*:\s*(.*?)\s*$/);
+
+    if (match) {
+      values[match[1]] = match[2];
+    }
+  }
+
+  return values;
+}
+
+function windowsRegistryValue(output, name) {
+  const escapedName = escapeRegExp(name);
+  const pattern = new RegExp(`\\b${escapedName}\\b\\s+REG_\\w+\\s+(.+)`, "i");
+
+  for (const line of output.split(/\r?\n/)) {
+    const match = pattern.exec(line);
+
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  return "";
+}
+
+function proxyUrlFromHostPort(host, port, protocol) {
+  const hostname = String(host || "").trim();
+  const portNumber = Number.parseInt(String(port || "").trim(), 10);
+
+  if (!hostname || !Number.isFinite(portNumber) || portNumber <= 0) {
+    return "";
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(hostname)) {
+    return normalizeProxyUrl(hostname, protocol);
+  }
+
+  const formattedHost = hostname.includes(":") && !hostname.startsWith("[")
+    ? `[${hostname}]`
+    : hostname;
+
+  return `${protocol}://${formattedHost}:${portNumber}`;
+}
+
+function normalizeProxyUrl(value, fallbackProtocol) {
+  const proxyUrl = String(value || "").trim().replace(/^["']|["']$/g, "");
+
+  if (!proxyUrl || isProxyDisabledValue(proxyUrl)) {
+    return "";
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(proxyUrl)) {
+    return proxyUrl;
+  }
+
+  return `${fallbackProtocol}://${proxyUrl}`;
+}
+
+function isSystemProxyEnabled(value) {
+  return String(value || "").trim() === "1";
+}
+
+function isProxyDisabledValue(value) {
+  return PROXY_DISABLE_VALUES.has(String(value || "").trim().toLowerCase());
+}
+
+function unquoteGsettings(value) {
+  const trimmed = String(value || "").trim();
+
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith("\"") && trimmed.endsWith("\""))) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
 }
 
 function getFetchFailureDetail(error) {

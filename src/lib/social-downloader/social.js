@@ -235,6 +235,7 @@ export async function resolveSocialPost(normalized, settings) {
 
 function normalizeTiktokUrl(parsed) {
   const parts = parsed.pathname.split("/").filter(Boolean);
+  const host = parsed.hostname.toLowerCase();
   let postId = "";
   let kind = "video";
 
@@ -259,9 +260,9 @@ function normalizeTiktokUrl(parsed) {
     };
   }
 
-  const shortCode = parts[0] ?? "";
+  const shortCode = tiktokShortCode(host, parts);
 
-  if (["vt.tiktok.com", "vm.tiktok.com", "t.tiktok.com"].includes(parsed.hostname.toLowerCase()) && shortCode) {
+  if (shortCode) {
     return {
       canonical_url: cleanUrl(parsed),
       shortcode: shortCode,
@@ -271,6 +272,18 @@ function normalizeTiktokUrl(parsed) {
   }
 
   throw new AppError(ErrorCode.UNSUPPORTED_URL, "仅支持 TikTok 视频、图集或短链接。", 400);
+}
+
+function tiktokShortCode(host, parts) {
+  if (["vt.tiktok.com", "vm.tiktok.com", "t.tiktok.com"].includes(host)) {
+    return parts[0] ?? "";
+  }
+
+  if (["tiktok.com", "www.tiktok.com", "m.tiktok.com"].includes(host) && parts[0] === "t") {
+    return parts[1] ?? "";
+  }
+
+  return "";
 }
 
 function normalizeDouyinUrl(parsed) {

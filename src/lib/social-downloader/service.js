@@ -13,7 +13,7 @@ import { writeUserActionLog } from "../user-action-logger";
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
 const mediaCacheVersion = 5;
-const platformsWithMergedMedia = new Set(["youtube", "bilibili", "pornhub"]);
+const platformsWithMergedMedia = new Set(["youtube", "bilibili", "acfun", "pornhub"]);
 
 export function getCacheStore() {
   const settings = getSocialDownloaderSettings();

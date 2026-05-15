@@ -18,6 +18,7 @@ const platformLabels = {
   tiktok: "TikTok",
   douyin: "Douyin",
   kuaishou: "Kuaishou",
+  acfun: "AcFun",
   twitter: "Twitter/X",
   bilibili: "Bilibili",
   facebook: "Facebook",
@@ -65,6 +66,7 @@ const copyByLanguage = {
       tiktok: "TikTok",
       douyin: "抖音",
       kuaishou: "快手",
+      acfun: "AcFun",
       twitter: "Twitter/X",
       bilibili: "Bilibili",
       facebook: "Facebook",
@@ -83,7 +85,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 Instagram、TikTok、抖音、小红书、快手、YouTube 或 Pornhub 链接...",
+    urlPlaceholder: "粘贴 Instagram、TikTok、抖音、小红书、快手、AcFun、YouTube 或 Pornhub 链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -128,6 +130,7 @@ const copyByLanguage = {
       tiktok: "TikTok",
       douyin: "Douyin",
       kuaishou: "Kuaishou",
+      acfun: "AcFun",
       twitter: "Twitter/X",
       bilibili: "Bilibili",
       facebook: "Facebook",
@@ -146,7 +149,7 @@ const copyByLanguage = {
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, TikTok, Douyin, Xiaohongshu, Kuaishou, YouTube, or Pornhub URL...",
+    urlPlaceholder: "Paste Instagram, TikTok, Douyin, Xiaohongshu, Kuaishou, AcFun, YouTube, or Pornhub URL...",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -308,6 +311,22 @@ const darkPlatformThemeOverrides = {
     progressGradient: "linear-gradient(90deg, #FF5000 0%, #FF9B58 54%, #FE3666 100%)",
     skeletonGradient: "linear-gradient(90deg, rgba(255,80,0,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(254,54,102,0.22) 100%)",
     previewGradient: "linear-gradient(135deg, rgba(255,80,0,0.34) 0%, rgba(255,255,255,0.08) 50%, rgba(254,54,102,0.3) 100%)",
+  },
+  acfun: {
+    accent: "#FD4C5D",
+    accentStrong: "#36A7FF",
+    accentText: "#FFD4DA",
+    accentMuted: "#F29AA5",
+    buttonText: "#FFF2F4",
+    border: "rgba(253, 76, 93, 0.36)",
+    borderStrong: "rgba(54, 167, 255, 0.46)",
+    ring: "rgba(253, 76, 93, 0.22)",
+    panelShadow: "0 28px 70px rgba(253, 76, 93, 0.2), 0 14px 34px rgba(54, 167, 255, 0.14)",
+    buttonShadow: "0 18px 38px rgba(253, 76, 93, 0.26), 0 8px 20px rgba(54, 167, 255, 0.16)",
+    selectedShadow: "0 22px 42px rgba(253, 76, 93, 0.24), 0 8px 18px rgba(54, 167, 255, 0.14)",
+    progressGradient: "linear-gradient(90deg, #FD4C5D 0%, #FFFFFF 52%, #36A7FF 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(253,76,93,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(54,167,255,0.22) 100%)",
+    previewGradient: "linear-gradient(135deg, rgba(253,76,93,0.34) 0%, rgba(255,255,255,0.08) 50%, rgba(54,167,255,0.3) 100%)",
   },
   youtube: {
     accent: "#FF335C",
@@ -505,6 +524,26 @@ const buttonThemes = {
     skeletonGradient: "linear-gradient(90deg, rgba(255,80,0,0.18) 0%, rgba(255,255,255,0.96) 48%, rgba(254,54,102,0.14) 100%)",
     previewGradient: "linear-gradient(135deg, #FFD7BE 0%, #FFF7F0 52%, #FFD6E1 100%)",
     mediaTint: "rgba(255, 248, 240, 0.78)",
+  },
+  acfun: {
+    accent: "#FD4C5D",
+    accentStrong: "#36A7FF",
+    accentText: "#8F2431",
+    accentMuted: "#A76572",
+    buttonText: "#7B1F2A",
+    border: "rgba(253, 76, 93, 0.34)",
+    borderStrong: "rgba(54, 167, 255, 0.38)",
+    ring: "rgba(253, 76, 93, 0.18)",
+    panelShadow: "0 24px 60px rgba(253, 76, 93, 0.13), 0 12px 30px rgba(54, 167, 255, 0.08)",
+    buttonShadow: "0 18px 36px rgba(253, 76, 93, 0.16), 0 8px 18px rgba(54, 167, 255, 0.1)",
+    selectedShadow: "0 20px 38px rgba(253, 76, 93, 0.15), 0 8px 16px rgba(54, 167, 255, 0.08)",
+    glassEnd: "rgba(255, 246, 248, 0.76)",
+    cardEnd: "rgba(255, 249, 250, 0.88)",
+    buttonGradient: "linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(255,246,248,0.94) 52%, rgba(240,249,255,0.96) 100%)",
+    progressGradient: "linear-gradient(90deg, #FD4C5D 0%, #FFFFFF 52%, #36A7FF 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(253,76,93,0.2) 0%, rgba(255,255,255,0.96) 48%, rgba(54,167,255,0.14) 100%)",
+    previewGradient: "linear-gradient(135deg, #FFD6DB 0%, #FFFFFF 52%, #D6EFFF 100%)",
+    mediaTint: "rgba(255, 246, 248, 0.78)",
   },
   youtube: {
     accent: "#FF0033",
@@ -1805,6 +1844,10 @@ function detectPlatform(value) {
 
     if (hostname === "kuaishou.com" || hostname.endsWith(".kuaishou.com") || hostname === "gifshow.com" || hostname.endsWith(".gifshow.com")) {
       return "kuaishou";
+    }
+
+    if (hostname === "acfun.cn" || hostname.endsWith(".acfun.cn")) {
+      return "acfun";
     }
 
     if (hostname === "youtube.com" || hostname.endsWith(".youtube.com") || hostname === "youtu.be" || hostname.endsWith(".youtu.be") || hostname === "youtube-nocookie.com" || hostname.endsWith(".youtube-nocookie.com")) {

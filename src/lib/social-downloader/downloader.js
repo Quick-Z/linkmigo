@@ -64,6 +64,17 @@ export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, o
 
   for (const sourceUrl of urls) {
     try {
+      if (asset.is_hls || isHlsUrl(sourceUrl)) {
+        return await downloadHlsMedia({
+          asset: { ...asset, source_url: sourceUrl },
+          destination,
+          maxBytes,
+          timeoutMs,
+          onProgress,
+          progressPartId: "media",
+        });
+      }
+
       return await downloadSingleMedia({
         asset: { ...asset, source_url: sourceUrl },
         destination,
@@ -223,6 +234,377 @@ async function downloadAndMergeMedia({ asset, sourceUrl, audioUrl, destination, 
     await fs.unlink(audioPath).catch(() => {});
     await fs.unlink(mergedTempPath).catch(() => {});
   }
+}
+
+async function downloadHlsMedia({ asset, destination, maxBytes, timeoutMs, onProgress, progressPartId = "media" }) {
+  const ffmpegPath = resolveFfmpegPath();
+
+  if (!ffmpegPath) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "服务器缺少 ffmpeg，无法下载 HLS 视频。", 500);
+  }
+
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+
+  const tempPath = `${destination}.part`;
+  const headers = { ...MEDIA_HEADERS, ...(asset.request_headers || {}) };
+  const mediaTempPath = `${destination}.hls.part`;
+
+  await fs.unlink(tempPath).catch(() => {});
+  await fs.unlink(mediaTempPath).catch(() => {});
+
+  onProgress?.({
+    type: "stream_start",
+    part_id: progressPartId,
+    content_length: null,
+    downloaded_bytes: 0,
+  });
+
+  try {
+    try {
+      const hlsDownload = await downloadHlsSegments({
+        playlistUrl: asset.source_url,
+        destination: mediaTempPath,
+        headers,
+        maxBytes,
+        timeoutMs,
+        onProgress,
+        progressPartId,
+      });
+
+      await remuxLocalHlsMedia({
+        ffmpegPath,
+        inputPath: hlsDownload.path,
+        destination: tempPath,
+        timeoutMs,
+      });
+    } finally {
+      await fs.unlink(mediaTempPath).catch(() => {});
+    }
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw error;
+  }
+
+  const stat = await fs.stat(tempPath);
+
+  if (stat.size === 0) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 视频资源为空。", 502);
+  }
+
+  if (stat.size > maxBytes) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+  }
+
+  await fs.rename(tempPath, destination);
+
+  onProgress?.({
+    type: "stream_complete",
+    part_id: progressPartId,
+    content_length: stat.size,
+    downloaded_bytes: stat.size,
+  });
+
+  return {
+    path: destination,
+    contentType: "video/mp4",
+    sourceUrl: asset.source_url,
+    sizeBytes: stat.size,
+  };
+}
+
+async function downloadHlsSegments({
+  playlistUrl,
+  destination,
+  headers,
+  maxBytes,
+  timeoutMs,
+  onProgress,
+  progressPartId,
+}) {
+  const playlist = await resolveHlsMediaPlaylist({
+    playlistUrl,
+    headers,
+    timeoutMs,
+  });
+  const file = await fs.open(destination, "w");
+  let size = 0;
+
+  try {
+    for (const segmentUrl of playlist.segmentUrls) {
+      const response = await fetchWithTimeout(
+        segmentUrl,
+        { cache: "no-store", headers },
+        timeoutMs,
+      );
+
+      if ([401, 403, 410, 429].includes(response.status)) {
+        throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 分片被平台或 CDN 拒绝访问。", 502);
+      }
+
+      if (response.status >= 400) {
+        throw new AppError(ErrorCode.DOWNLOAD_FAILED, `HLS 分片下载失败，状态码 ${response.status}。`, 502);
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+
+      if (!buffer.length) {
+        continue;
+      }
+
+      size += buffer.length;
+
+      if (size > maxBytes) {
+        throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+      }
+
+      await file.write(buffer);
+      onProgress?.({
+        type: "stream_progress",
+        part_id: progressPartId,
+        content_length: null,
+        downloaded_bytes: size,
+      });
+    }
+  } finally {
+    await file.close();
+  }
+
+  if (size === 0) {
+    await fs.unlink(destination).catch(() => {});
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 视频资源为空。", 502);
+  }
+
+  return {
+    path: destination,
+    sizeBytes: size,
+  };
+}
+
+async function resolveHlsMediaPlaylist({ playlistUrl, headers, timeoutMs, depth = 0 }) {
+  if (depth > 4) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 播放列表层级过深。", 502);
+  }
+
+  const playlistText = await fetchHlsPlaylistText({ playlistUrl, headers, timeoutMs });
+  const variants = parseHlsVariants(playlistText, playlistUrl);
+
+  if (variants.length > 0) {
+    const bestVariant = variants.reduce((best, candidate) =>
+      hlsVariantScore(candidate) > hlsVariantScore(best) ? candidate : best,
+    );
+
+    return await resolveHlsMediaPlaylist({
+      playlistUrl: bestVariant.url,
+      headers,
+      timeoutMs,
+      depth: depth + 1,
+    });
+  }
+
+  const segmentUrls = parseHlsSegments(playlistText, playlistUrl);
+
+  if (segmentUrls.length === 0) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 播放列表中没有可下载分片。", 502);
+  }
+
+  if (hasEncryptedHlsSegments(playlistText)) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 视频使用加密分片，暂不支持下载。", 502);
+  }
+
+  return {
+    playlistUrl,
+    segmentUrls,
+  };
+}
+
+async function fetchHlsPlaylistText({ playlistUrl, headers, timeoutMs }) {
+  let response;
+
+  try {
+    response = await fetchWithTimeout(
+      playlistUrl,
+      { cache: "no-store", headers },
+      timeoutMs,
+    );
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 播放列表请求超时。", 504);
+    }
+
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 播放列表请求失败。", 502);
+  }
+
+  if ([401, 403, 410, 429].includes(response.status)) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "HLS 播放列表被平台或 CDN 拒绝访问。", 502);
+  }
+
+  if (response.status >= 400) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, `HLS 播放列表请求失败，状态码 ${response.status}。`, 502);
+  }
+
+  return await response.text();
+}
+
+function parseHlsVariants(playlistText, playlistUrl) {
+  const lines = playlistText.split(/\r?\n/);
+  const variants = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+
+    if (!line.startsWith("#EXT-X-STREAM-INF")) {
+      continue;
+    }
+
+    const nextUri = nextHlsUri(lines, index + 1);
+
+    if (!nextUri) {
+      continue;
+    }
+
+    variants.push({
+      url: new URL(nextUri, playlistUrl).toString(),
+      bandwidth: safeInt(hlsAttribute(line, "BANDWIDTH")),
+      resolution: hlsAttribute(line, "RESOLUTION"),
+    });
+  }
+
+  return variants;
+}
+
+function parseHlsSegments(playlistText, playlistUrl) {
+  const lines = playlistText.split(/\r?\n/);
+  const urls = [];
+  const mapUri = firstHlsMapUri(lines);
+
+  if (mapUri) {
+    urls.push(new URL(mapUri, playlistUrl).toString());
+  }
+
+  for (const line of lines) {
+    const value = line.trim();
+
+    if (!value || value.startsWith("#")) {
+      continue;
+    }
+
+    urls.push(new URL(value, playlistUrl).toString());
+  }
+
+  return urls;
+}
+
+function firstHlsMapUri(lines) {
+  for (const line of lines) {
+    const value = line.trim();
+
+    if (value.startsWith("#EXT-X-MAP")) {
+      return hlsAttribute(value, "URI");
+    }
+  }
+
+  return "";
+}
+
+function nextHlsUri(lines, startIndex) {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const value = lines[index].trim();
+
+    if (!value || value.startsWith("#")) {
+      continue;
+    }
+
+    return value;
+  }
+
+  return "";
+}
+
+function hlsAttribute(line, name) {
+  const pattern = new RegExp(`${name}=("[^"]+"|[^,]+)`, "i");
+  const match = pattern.exec(line);
+
+  return match ? match[1].replace(/^"|"$/g, "") : "";
+}
+
+function hlsVariantScore(variant) {
+  const resolution = /^(\d+)x(\d+)$/i.exec(variant.resolution || "");
+  const pixels = resolution ? (safeInt(resolution[1]) || 0) * (safeInt(resolution[2]) || 0) : 0;
+
+  return pixels + (variant.bandwidth || 0);
+}
+
+function hasEncryptedHlsSegments(playlistText) {
+  return playlistText
+    .split(/\r?\n/)
+    .some((line) => /^#EXT-X-KEY:/i.test(line) && !/METHOD=NONE/i.test(line));
+}
+
+async function remuxLocalHlsMedia({ ffmpegPath, inputPath, destination, timeoutMs }) {
+  await fs.unlink(destination).catch(() => {});
+
+  await new Promise((resolve, reject) => {
+    const ffmpegArgs = [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      inputPath,
+      "-map",
+      "0:v:0?",
+      "-map",
+      "0:a:0?",
+      "-c",
+      "copy",
+      "-movflags",
+      "+faststart",
+      "-f",
+      "mp4",
+      destination,
+    ];
+    const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
+    let stderr = "";
+    let completed = false;
+    const timer = setTimeout(() => {
+      ffmpeg.kill("SIGKILL");
+    }, timeoutMs);
+
+    ffmpeg.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4000);
+    });
+    ffmpeg.on("error", (error) => {
+      if (completed) {
+        return;
+      }
+
+      completed = true;
+      clearTimeout(timer);
+      reject(new AppError(ErrorCode.DOWNLOAD_FAILED, `HLS 视频转封装失败：${error.message}`, 502));
+    });
+    ffmpeg.on("close", (code, signal) => {
+      if (completed) {
+        return;
+      }
+
+      completed = true;
+      clearTimeout(timer);
+
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new AppError(
+        ErrorCode.DOWNLOAD_FAILED,
+        signal === "SIGKILL" ? "HLS 视频转封装超时。" : "HLS 视频转封装失败。",
+        signal === "SIGKILL" ? 504 : 502,
+        stderr ? { ffmpeg: stderr.trim() } : undefined,
+      ));
+    });
+  });
 }
 
 async function mergeMediaFiles({ videoPath, audioPath, destination, tempPath, outputExtension, maxBytes }) {
@@ -434,6 +816,10 @@ async function estimateSingleMediaSize({ asset, maxBytes, timeoutMs }) {
   const headers = { ...MEDIA_HEADERS, ...(asset.request_headers || {}) };
 
   for (const sourceUrl of mediaUrlsForAsset(asset)) {
+    if (asset.is_hls || isHlsUrl(sourceUrl)) {
+      continue;
+    }
+
     try {
       const info = await probeContentInfo({
         asset: { ...asset, source_url: sourceUrl },
@@ -536,6 +922,14 @@ export function extensionForAsset(asset, contentType = "") {
   }
 
   return asset.media_type === "video" ? ".mp4" : ".jpg";
+}
+
+function isHlsUrl(value) {
+  try {
+    return new URL(value).pathname.toLowerCase().endsWith(".m3u8");
+  } catch {
+    return /\.m3u8(?:$|\?)/i.test(String(value));
+  }
 }
 
 async function probeContentInfo({ asset, headers, maxBytes, timeoutMs }) {

@@ -2,8 +2,8 @@
 
 LinkMigo「链密狗」是一款还算好看的资源下载工具。
 
-目前支持 Instagram、TikTok、抖音、小红书、快手、Twitter/X、Bilibili、Facebook 和 YouTube 的公开视频资源解析。
-YouTube 和 Bilibili 会优先选择公开接口可返回的最高分辨率视频轨道，并在服务端合并音频后返回可直接播放的单个视频文件。
+目前支持 Instagram、TikTok、抖音、小红书、快手、Twitter/X、Bilibili、Facebook、YouTube 和 Pornhub 的公开视频资源解析。
+YouTube、Bilibili 和 Pornhub 会优先选择公开页面可返回的高质量视频资源，并在需要时由服务端合并或转封装后返回可直接播放的单个视频文件。
 
 安装环境
 
@@ -29,7 +29,7 @@ npm run start
 
 服务端会优先使用电脑当前网络环境直接访问外网。如果 VPN 是全局路由 / TUN 模式，通常不需要额外配置；如果 VPN 客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP / HTTPS / SOCKS5 代理。
 
-如果服务端访问 Instagram / TikTok / 抖音 / 小红书 / 快手 / YouTube 等平台报“上游访问受限”，可以创建 `.env.local` 手动指定代理，这会覆盖系统代理探测结果：
+如果服务端访问 Instagram / TikTok / 抖音 / 小红书 / 快手 / YouTube / Pornhub 等平台报“上游访问受限”，可以创建 `.env.local` 手动指定代理，这会覆盖系统代理探测结果：
 
 ```bash
 SOCIAL_PROXY_URL=http://127.0.0.1:7890

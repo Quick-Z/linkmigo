@@ -21,6 +21,7 @@ import {
   responseJson,
 } from "./utils";
 import { normalizeInstagramUrl, resolveInstagramPost } from "./instagram";
+import { normalizePornhubUrl, resolvePornhubPost } from "./pornhub";
 import { normalizeYoutubeUrl, resolveYoutubePost } from "./youtube";
 
 const BILIBILI_HEADERS = {
@@ -138,7 +139,7 @@ export function normalizeSocialUrl(rawUrl) {
   } catch {
     throw new AppError(
       ErrorCode.UNSUPPORTED_URL,
-      "暂时支持 Instagram、TikTok、抖音、小红书、快手、Twitter/X、Bilibili、Facebook、YouTube 的公开链接。",
+      "暂时支持 Instagram、TikTok、抖音、小红书、快手、Twitter/X、Bilibili、Facebook、YouTube、Pornhub 的公开链接。",
       400,
     );
   }
@@ -186,9 +187,13 @@ export function normalizeSocialUrl(rawUrl) {
     return normalizeYoutubeUrl(parsed);
   }
 
+  if (isPornhubHost(host)) {
+    return normalizePornhubUrl(parsed);
+  }
+
   throw new AppError(
     ErrorCode.UNSUPPORTED_URL,
-    "暂时支持 Instagram、TikTok、抖音、小红书、快手、Twitter/X、Bilibili、Facebook、YouTube 的公开链接。",
+    "暂时支持 Instagram、TikTok、抖音、小红书、快手、Twitter/X、Bilibili、Facebook、YouTube、Pornhub 的公开链接。",
     400,
   );
 }
@@ -228,6 +233,10 @@ export async function resolveSocialPost(normalized, settings) {
 
   if (normalized.platform === "youtube") {
     return await resolveYoutubePost(normalized, settings);
+  }
+
+  if (normalized.platform === "pornhub") {
+    return await resolvePornhubPost(normalized, settings);
   }
 
   throw new AppError(ErrorCode.UNSUPPORTED_URL, "这个平台暂未接入解析器。", 400);
@@ -3293,4 +3302,19 @@ function isYoutubeHost(host) {
     "youtube-nocookie.com",
     "www.youtube-nocookie.com",
   ].includes(host);
+}
+
+function isPornhubHost(host) {
+  return [
+    "pornhub.com",
+    "www.pornhub.com",
+    "cn.pornhub.com",
+    "m.pornhub.com",
+    "rt.pornhub.com",
+    "de.pornhub.com",
+    "fr.pornhub.com",
+    "es.pornhub.com",
+    "it.pornhub.com",
+    "pt.pornhub.com",
+  ].includes(host) || host.endsWith(".pornhub.com");
 }

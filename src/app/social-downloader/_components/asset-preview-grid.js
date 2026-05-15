@@ -464,6 +464,7 @@ function VideoPreview({ labels, previewUrl, theme }) {
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(1);
+  const canSeek = duration > 0;
 
   function syncTime() {
     const video = videoRef.current;
@@ -499,7 +500,7 @@ function VideoPreview({ labels, previewUrl, theme }) {
     const video = videoRef.current;
     const nextTime = Number(event.target.value);
 
-    if (!video || !Number.isFinite(nextTime)) {
+    if (!video || !canSeek || !Number.isFinite(nextTime)) {
       return;
     }
 
@@ -580,14 +581,15 @@ function VideoPreview({ labels, previewUrl, theme }) {
 
           <input
             aria-label={labels.progress}
-            className="min-w-0 flex-1 cursor-pointer accent-current"
-            max={duration || 1}
+            className={`min-w-0 flex-1 accent-current ${canSeek ? "cursor-pointer" : "cursor-not-allowed opacity-60"}`}
+            disabled={!canSeek}
+            max={canSeek ? duration : 1}
             min="0"
             onChange={seek}
             step="0.1"
             style={{ color: theme.accentText, accentColor: theme.accent }}
             type="range"
-            value={Math.min(currentTime, duration || 1)}
+            value={canSeek ? Math.min(currentTime, duration) : 0}
           />
 
           <span className="hidden shrink-0 text-xs font-semibold tabular-nums min-[420px]:inline" style={{ color: theme.toolbarText }}>

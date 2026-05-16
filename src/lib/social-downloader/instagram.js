@@ -154,6 +154,10 @@ export function normalizeInstagramUrl(rawUrl) {
   };
 }
 
+export function isInstagramHost(host) {
+  return INSTAGRAM_HOSTS.has(host);
+}
+
 export async function resolveInstagramPost(normalized, settings) {
   await ensureInstagramNetwork(settings);
 

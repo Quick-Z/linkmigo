@@ -23,6 +23,18 @@ import {
 } from "./post-info";
 
 const PORNHUB_VIEWKEY_RE = /^[A-Za-z0-9_-]{4,96}$/;
+const PORNHUB_HOSTS = new Set([
+  "pornhub.com",
+  "www.pornhub.com",
+  "cn.pornhub.com",
+  "m.pornhub.com",
+  "rt.pornhub.com",
+  "de.pornhub.com",
+  "fr.pornhub.com",
+  "es.pornhub.com",
+  "it.pornhub.com",
+  "pt.pornhub.com",
+]);
 const PORNHUB_ACCESS_COOKIE = [
   "age_verified=1",
   "accessAgeDisclaimerPH=1",
@@ -59,6 +71,10 @@ export function normalizePornhubUrl(parsed) {
     kind: "video",
     platform: "pornhub",
   };
+}
+
+export function isPornhubHost(host) {
+  return PORNHUB_HOSTS.has(host) || host.endsWith(".pornhub.com");
 }
 
 export async function resolvePornhubPost(normalized, settings) {

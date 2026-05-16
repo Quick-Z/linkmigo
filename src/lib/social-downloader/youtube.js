@@ -19,6 +19,16 @@ import {
 } from "./post-info";
 
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+  "youtu.be",
+  "www.youtu.be",
+  "youtube-nocookie.com",
+  "www.youtube-nocookie.com",
+]);
 
 let cachedYtdlAgent = null;
 let cachedYtdlAgentProxyUrl = "";
@@ -52,6 +62,10 @@ export function normalizeYoutubeUrl(parsed) {
     kind,
     platform: "youtube",
   };
+}
+
+export function isYoutubeHost(host) {
+  return YOUTUBE_HOSTS.has(host);
 }
 
 export async function resolveYoutubePost(normalized, settings) {

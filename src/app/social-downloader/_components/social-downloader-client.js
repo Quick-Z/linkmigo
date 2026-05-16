@@ -22,6 +22,7 @@ const platformLabels = {
   twitter: "Twitter/X",
   bilibili: "Bilibili",
   facebook: "Facebook",
+  pinterest: "Pinterest",
   xiaohongshu: "Xiaohongshu",
   youtube: "YouTube",
   pornhub: "Pornhub",
@@ -84,6 +85,7 @@ const copyByLanguage = {
       twitter: "Twitter/X",
       bilibili: "Bilibili",
       facebook: "Facebook",
+      pinterest: "Pinterest",
       xiaohongshu: "小红书",
       youtube: "YouTube",
       pornhub: "Pornhub",
@@ -99,7 +101,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 ins、小红书、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
+    urlPlaceholder: "粘贴 ins、小红书、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -162,6 +164,7 @@ const copyByLanguage = {
       twitter: "Twitter/X",
       bilibili: "Bilibili",
       facebook: "Facebook",
+      pinterest: "Pinterest",
       xiaohongshu: "Xiaohongshu",
       youtube: "YouTube",
       pornhub: "Pornhub",
@@ -177,7 +180,7 @@ const copyByLanguage = {
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, Xiaohongshu, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
+    urlPlaceholder: "Paste Instagram, Xiaohongshu, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -436,6 +439,22 @@ const darkPlatformThemeOverrides = {
     skeletonGradient: "linear-gradient(90deg, rgba(24,119,242,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(59,89,152,0.22) 100%)",
     previewGradient: "linear-gradient(135deg, rgba(24,119,242,0.34) 0%, rgba(255,255,255,0.08) 52%, rgba(59,89,152,0.34) 100%)",
   },
+  pinterest: {
+    accent: "#FF4A62",
+    accentStrong: "#E60023",
+    accentText: "#FFD0D8",
+    accentMuted: "#F59AA8",
+    buttonText: "#FFF1F3",
+    border: "rgba(255, 74, 98, 0.36)",
+    borderStrong: "rgba(230, 0, 35, 0.48)",
+    ring: "rgba(255, 74, 98, 0.22)",
+    panelShadow: "0 28px 70px rgba(230, 0, 35, 0.22), 0 14px 34px rgba(0, 0, 0, 0.2)",
+    buttonShadow: "0 18px 38px rgba(230, 0, 35, 0.28), 0 8px 20px rgba(255, 255, 255, 0.08)",
+    selectedShadow: "0 22px 42px rgba(230, 0, 35, 0.24)",
+    progressGradient: "linear-gradient(90deg, #E60023 0%, #FF7A95 58%, #FFFFFF 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(230,0,35,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(31,31,31,0.3) 100%)",
+    previewGradient: "linear-gradient(135deg, rgba(230,0,35,0.36) 0%, rgba(255,255,255,0.08) 48%, rgba(31,31,31,0.44) 100%)",
+  },
   xiaohongshu: {
     accent: "#FF5369",
     accentStrong: "#FF2442",
@@ -612,6 +631,26 @@ const buttonThemes = {
     skeletonGradient: "linear-gradient(90deg, rgba(244,122,0,0.2) 0%, rgba(255,255,255,0.96) 48%, rgba(31,31,31,0.12) 100%)",
     previewGradient: "linear-gradient(135deg, #FFE0B2 0%, #FFF8EE 52%, #D9DEE5 100%)",
     mediaTint: "rgba(255, 248, 238, 0.78)",
+  },
+  pinterest: {
+    accent: "#E60023",
+    accentStrong: "#9C0017",
+    accentText: "#8A0015",
+    accentMuted: "#B14557",
+    buttonText: "#7B0012",
+    border: "rgba(230, 0, 35, 0.32)",
+    borderStrong: "rgba(156, 0, 23, 0.34)",
+    ring: "rgba(230, 0, 35, 0.17)",
+    panelShadow: "0 24px 60px rgba(230, 0, 35, 0.13), 0 12px 30px rgba(31, 31, 31, 0.08)",
+    buttonShadow: "0 18px 36px rgba(230, 0, 35, 0.15), 0 8px 18px rgba(31, 31, 31, 0.08)",
+    selectedShadow: "0 20px 38px rgba(230, 0, 35, 0.14)",
+    glassEnd: "rgba(255, 244, 247, 0.76)",
+    cardEnd: "rgba(255, 248, 249, 0.88)",
+    buttonGradient: "linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(255,244,246,0.93) 52%, rgba(250,250,250,0.98) 100%)",
+    progressGradient: "linear-gradient(90deg, #E60023 0%, #FF7A95 58%, #1F1F1F 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(230,0,35,0.18) 0%, rgba(255,255,255,0.96) 48%, rgba(31,31,31,0.12) 100%)",
+    previewGradient: "linear-gradient(135deg, #FFD6DD 0%, #FFF5F7 52%, #D9DEE5 100%)",
+    mediaTint: "rgba(255, 244, 247, 0.78)",
   },
   bilibili: {
     accent: "#00A1D6",
@@ -2463,7 +2502,7 @@ function getPlatformLabel(platform, copy = copyByLanguage.zh) {
 }
 
 function platformMediaLabel(platform, copy = copyByLanguage.zh) {
-  if (["youtube", "tiktok", "douyin", "kuaishou", "acfun", "bilibili", "facebook", "pornhub"].includes(platform)) {
+  if (["youtube", "tiktok", "douyin", "kuaishou", "acfun", "bilibili", "facebook", "pinterest", "pornhub"].includes(platform)) {
     return copy.video;
   }
 
@@ -2706,6 +2745,19 @@ function getPostChrome(platform, theme) {
       tagText: "#1666d0",
       metricIconBackground: "rgba(24,119,242,0.1)",
     },
+    pinterest: {
+      mediaBackground: "linear-gradient(135deg, #fff0f4 0%, #ffffff 46%, #ffeef2 100%)",
+      mediaLabel: "Pinterest",
+      surfaceLabel: "Pin",
+      accent: "#e60023",
+      avatarRing: "linear-gradient(135deg, #e60023, #ff7a95)",
+      pillBackground: "rgba(230,0,35,0.1)",
+      pillText: "#c1122c",
+      tagBackground: "rgba(230,0,35,0.08)",
+      tagBorder: "rgba(230,0,35,0.16)",
+      tagText: "#c1122c",
+      metricIconBackground: "rgba(230,0,35,0.1)",
+    },
     pornhub: {
       shellBackground: "#111111",
       shellBorder: "rgba(247,151,30,0.28)",
@@ -2802,6 +2854,10 @@ function detectPlatform(value) {
 
     if (hostname === "facebook.com" || hostname.endsWith(".facebook.com") || hostname === "fb.watch") {
       return "facebook";
+    }
+
+    if (hostname === "pinterest.com" || hostname.endsWith(".pinterest.com") || hostname === "pin.it") {
+      return "pinterest";
     }
 
     if (hostname === "xiaohongshu.com" || hostname.endsWith(".xiaohongshu.com") || hostname === "xhslink.com" || hostname.endsWith(".xhslink.com") || hostname === "xhs.cn" || hostname.endsWith(".xhs.cn") || hostname === "rednote.com" || hostname.endsWith(".rednote.com")) {

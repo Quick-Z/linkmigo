@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { URL, URLSearchParams } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
@@ -37,26 +39,31 @@ const INSTAGRAM_HOSTS = new Set([
   "g.ddinstagram.com",
 ]);
 const SHORTCODE_RE = /^[A-Za-z0-9_-]{4,64}$/;
+const SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const WEB_APP_ID = "936619743392459";
 const GQL_DOC_ID = "8845758582119845";
 
 const COMMON_PAGE_HEADERS = {
-  ...PAGE_HEADERS,
-  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "cache-control": "no-cache",
+  "user-agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/148.0.0.0 Safari/537.36",
+  "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"',
+  "upgrade-insecure-requests": "1",
 };
 
 const MOBILE_HEADERS = {
+  "x-ig-app-id": "567067343352427",
   "x-ig-app-locale": "en_US",
   "x-ig-device-locale": "en_US",
   "x-ig-mapped-locale": "en_US",
+  "x-asbd-id": "129477",
   "user-agent":
     "Instagram 275.0.0.27.98 Android (33/13; 280dpi; 720x1423; Xiaomi; Redmi 7; onclite; qcom; en_US; 458229237)",
   "accept-language": "en-US",
   "x-fb-http-engine": "Liger",
   "x-fb-client-ip": "True",
   "x-fb-server-cluster": "True",
-  "content-length": "0",
 };
 
 const EMBED_HEADERS = {
@@ -150,6 +157,9 @@ export function normalizeInstagramUrl(rawUrl) {
 export async function resolveInstagramPost(normalized, settings) {
   await ensureInstagramNetwork(settings);
 
+  const resolvedPosts = [];
+  let htmlText = "";
+
   for (const resolver of [
     resolveFromMobileApi,
     resolveFromEmbedContext,
@@ -158,24 +168,45 @@ export async function resolveInstagramPost(normalized, settings) {
     const post = await resolver(normalized.shortcode, settings);
 
     if (post.assets.length > 0) {
-      return post;
+      resolvedPosts.push(post);
     }
   }
 
-  const html = await fetchPublicPage(normalized.canonical_url, settings);
-  const metrics = parseMetricsFromHtml(html);
-  const creatorHandle = parseCreatorFromHtml(html);
+  let htmlError = null;
 
-  return {
-    assets: parseAssetsFromHtml(html),
-    metrics,
-    creator_handle: creatorHandle,
-    post_info: parsePostInfoFromHtml(html, {
+  try {
+    const html = await fetchPublicPage(normalized.canonical_url, settings);
+    const metrics = parseMetricsFromHtml(html);
+    const creatorHandle = parseCreatorFromHtml(html);
+
+    htmlText = html;
+    resolvedPosts.push({
+      assets: parseAssetsFromHtml(html),
       metrics,
-      creatorHandle,
-      shortcode: normalized.shortcode,
-    }),
-  };
+      creator_handle: creatorHandle,
+      post_info: parsePostInfoFromHtml(html, {
+        metrics,
+        creatorHandle,
+        shortcode: normalized.shortcode,
+      }),
+    });
+  } catch (error) {
+    htmlError = error;
+  }
+
+  const merged = mergeInstagramResolverPosts(resolvedPosts);
+  merged.assets = upgradeInstagramAssetsFromText(merged.assets, htmlText);
+  merged.assets = await upgradeInstagramAssetsFromRenderedPage(merged.assets, normalized.shortcode, settings);
+
+  if (merged.assets.length > 0) {
+    return merged;
+  }
+
+  if (htmlError) {
+    throw htmlError;
+  }
+
+  return merged;
 }
 
 async function ensureInstagramNetwork(settings) {
@@ -226,11 +257,11 @@ export async function fetchPublicPage(canonicalUrl, settings) {
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "Instagram 返回了空页面。", 404);
   }
 
-  if (looksLikeLoginRequired(html)) {
+  if (looksLikeLoginRequired(html) && !hasPublicMediaData(html)) {
     throw new AppError(ErrorCode.LOGIN_REQUIRED, "这个页面需要登录或无法公开读取。", 403);
   }
 
-  if (looksLikeRateLimitOrChallenge(html)) {
+  if (looksLikeRateLimitOrChallenge(html) && !hasPublicMediaData(html)) {
     throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "Instagram 返回了限流或挑战页面。", 429);
   }
 
@@ -251,6 +282,70 @@ export function parseAssetsFromInstagramData(data) {
   }
 
   return dedupeInstagramAssets(assets);
+}
+
+function mergeInstagramResolverPosts(posts) {
+  const usablePosts = posts.filter((post) => post && typeof post === "object");
+  const metrics = mergeInstagramMetrics(usablePosts);
+  const creatorHandle = pickSingleLineText(...usablePosts.map((post) => post.creator_handle));
+  const postInfo = bestInstagramPostInfo(usablePosts);
+
+  return {
+    assets: dedupeInstagramAssets(usablePosts.flatMap((post) => post.assets || [])),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: postInfo,
+  };
+}
+
+function mergeInstagramMetrics(posts) {
+  const metrics = createMetrics();
+
+  for (const post of posts) {
+    const sourceMetrics = post.metrics && typeof post.metrics === "object" ? post.metrics : {};
+
+    for (const key of ["like_count", "comment_count", "view_count", "save_count", "share_count"]) {
+      const value = optionalInt(sourceMetrics[key]);
+
+      if (value != null && (metrics[key] == null || value > metrics[key])) {
+        metrics[key] = value;
+      }
+    }
+
+    if (sourceMetrics.source && metrics.source === "public_best_effort") {
+      metrics.source = sourceMetrics.source;
+    }
+  }
+
+  return metrics;
+}
+
+function bestInstagramPostInfo(posts) {
+  let best = null;
+  let bestScore = -1;
+
+  for (const post of posts) {
+    const info = post.post_info && typeof post.post_info === "object" ? post.post_info : null;
+
+    if (!info) {
+      continue;
+    }
+
+    const score = [
+      info.title,
+      info.author,
+      info.author_handle,
+      info.body,
+    ].reduce((sum, value) => sum + (value ? String(value).length : 0), 0) +
+      (Array.isArray(info.tags) ? info.tags.length * 20 : 0);
+
+    if (score > bestScore) {
+      best = info;
+      bestScore = score;
+    }
+  }
+
+  return best;
 }
 
 export function parseMetricsFromInstagramData(data) {
@@ -282,6 +377,9 @@ export function parseMetricsFromHtml(html) {
       "__additionalDataLoaded",
       "__bbox",
       "edge_sidecar_to_children",
+      "image_versions2",
+      "carousel_media",
+      "xdt_shortcode_media",
     ])) {
       extractMetricsFromJson(data, metrics);
     }
@@ -321,6 +419,9 @@ export function parseAssetsFromHtml(html) {
       "__additionalDataLoaded",
       "__bbox",
       "edge_sidecar_to_children",
+      "image_versions2",
+      "carousel_media",
+      "xdt_shortcode_media",
     ])) {
       extractFromJson(data, candidates);
     }
@@ -400,10 +501,30 @@ async function getMediaId(shortcode, settings) {
     const data = await responseJson(response);
     const mediaId = data && typeof data === "object" ? data.media_id : "";
 
-    return mediaId ? String(mediaId) : "";
+    if (mediaId) {
+      return String(mediaId);
+    }
   } catch {
-    return "";
+    // Fall back to decoding the public shortcode below.
   }
+
+  return mediaIdFromShortcode(shortcode);
+}
+
+function mediaIdFromShortcode(shortcode) {
+  let mediaId = 0n;
+
+  for (const character of String(shortcode || "")) {
+    const value = SHORTCODE_ALPHABET.indexOf(character);
+
+    if (value < 0) {
+      return "";
+    }
+
+    mediaId = mediaId * 64n + BigInt(value);
+  }
+
+  return mediaId > 0n ? mediaId.toString() : "";
 }
 
 async function requestMobileMediaInfo(mediaId, settings) {
@@ -554,6 +675,9 @@ export function parseCreatorFromHtml(html) {
       "__additionalDataLoaded",
       "__bbox",
       "edge_sidecar_to_children",
+      "image_versions2",
+      "carousel_media",
+      "xdt_shortcode_media",
     ])) {
       const creatorHandle = parseCreatorFromInstagramData(data);
 
@@ -650,6 +774,9 @@ export function parsePostInfoFromHtml(html, options = {}) {
       "__additionalDataLoaded",
       "__bbox",
       "edge_sidecar_to_children",
+      "image_versions2",
+      "carousel_media",
+      "xdt_shortcode_media",
     ])) {
       const postInfo = parsePostInfoFromInstagramData(data, { metrics, creatorHandle });
 
@@ -1099,12 +1226,9 @@ function bestMediaVersion(versions) {
     return null;
   }
 
-  return candidates.reduce((best, candidate) => {
-    const bestPixels = (optionalInt(best.width) ?? 0) * (optionalInt(best.height) ?? 0);
-    const candidatePixels = (optionalInt(candidate.width) ?? 0) * (optionalInt(candidate.height) ?? 0);
-
-    return candidatePixels > bestPixels ? candidate : best;
-  }, candidates[0]);
+  return candidates.reduce((best, candidate) =>
+    compareInstagramMediaVersions(candidate, best) > 0 ? candidate : best,
+  candidates[0]);
 }
 
 function bestDisplayResourceUrl(resources) {
@@ -1123,13 +1247,15 @@ function parsedAssetFromUrl(rawUrl, mediaType, width = null, height = null) {
   }
 
   const url = cleanMediaUrl(rawUrl);
+  const urls = instagramMediaUrlVariants(url, mediaType);
 
   if (!url) {
     return null;
   }
 
   return {
-    source_url: url,
+    source_url: urls[0],
+    fallback_urls: urls.slice(1),
     media_type: mediaType,
     width: optionalInt(width),
     height: optionalInt(height),
@@ -1138,27 +1264,391 @@ function parsedAssetFromUrl(rawUrl, mediaType, width = null, height = null) {
 
 function dedupeInstagramAssets(assets) {
   const deduped = new Map();
+  const keyAliases = new Map();
+  const order = [];
 
   for (const asset of assets) {
-    const key = dedupeKey(asset.source_url);
+    const keys = instagramAssetMatchKeys(asset);
+    const key = keys.map((candidateKey) => keyAliases.get(candidateKey)).find(Boolean) || keys[0];
     const existing = deduped.get(key);
 
     if (existing) {
-      if (existing.width == null && asset.width) {
-        existing.width = asset.width;
-      }
-
-      if (existing.height == null && asset.height) {
-        existing.height = asset.height;
+      if (compareInstagramAssets(asset, existing) > 0) {
+        deduped.set(key, {
+          ...existing,
+          ...asset,
+          width: asset.width ?? existing.width ?? null,
+          height: asset.height ?? existing.height ?? null,
+        });
       }
 
       continue;
     }
 
     deduped.set(key, asset);
+    keys.forEach((candidateKey) => keyAliases.set(candidateKey, key));
+    order.push(key);
   }
 
-  return [...deduped.values()];
+  return order.map((key) => deduped.get(key)).filter(Boolean);
+}
+
+function upgradeInstagramAssetsFromText(assets, text) {
+  if (!assets.length || !text) {
+    return assets;
+  }
+
+  const candidates = instagramUpgradeCandidatesFromText(text);
+
+  if (candidates.length === 0) {
+    return assets;
+  }
+
+  return assets.map((asset) => {
+    let best = asset;
+    const assetKeys = new Set(instagramAssetMatchKeys(asset));
+
+    for (const candidateAsset of candidates) {
+      const candidate = {
+        ...asset,
+        ...candidateAsset,
+        width: candidateAsset.width ?? asset.width ?? null,
+        height: candidateAsset.height ?? asset.height ?? null,
+        fallback_urls: [asset.source_url, ...(asset.fallback_urls || [])],
+      };
+
+      if (
+        instagramAssetMatchKeys(candidate).some((key) => assetKeys.has(key)) &&
+        compareInstagramAssets(candidate, best) > 0
+      ) {
+        best = candidate;
+      }
+    }
+
+    return best;
+  });
+}
+
+async function upgradeInstagramAssetsFromRenderedPage(assets, shortcode, settings) {
+  if (!shouldUseRenderedInstagramFallback(assets)) {
+    return assets;
+  }
+
+  const html = await fetchRenderedInstagramHtml(shortcode, settings);
+
+  return html ? upgradeInstagramAssetsFromText(assets, html) : assets;
+}
+
+function shouldUseRenderedInstagramFallback(assets) {
+  if (isDisabledValue(process.env.SOCIAL_RENDERED_INSTAGRAM_FALLBACK)) {
+    return false;
+  }
+
+  return assets.some((asset) =>
+    asset?.media_type === "image" &&
+    ((optionalInt(asset.width) || 0) <= 1080 || !/ig_cache_key=|xpids\.1440/i.test(asset.source_url || "")),
+  );
+}
+
+async function fetchRenderedInstagramHtml(shortcode, settings) {
+  const chromePath = resolveChromePath();
+
+  if (!chromePath) {
+    return "";
+  }
+
+  const timeoutMs = Math.min(Math.max(settings.httpTimeoutMs * 2, 20_000), 45_000);
+
+  try {
+    const { stdout } = await execFileAsync(
+      chromePath,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--dump-dom",
+        "--virtual-time-budget=7000",
+        `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/`,
+      ],
+      {
+        timeout: timeoutMs,
+        maxBuffer: 30 * 1024 * 1024,
+      },
+    );
+
+    return stdout;
+  } catch {
+    return "";
+  }
+}
+
+function execFileAsync(file, args, options) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function resolveChromePath() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    process.env.GOOGLE_CHROME_PATH,
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+
+  return candidates.find((candidate) =>
+    typeof candidate === "string" &&
+    candidate.length > 0 &&
+    existsSync(candidate),
+  ) || "";
+}
+
+function instagramUpgradeCandidatesFromText(text) {
+  const candidates = parseAssetsFromHtml(text);
+
+  for (const url of instagramRawMediaCandidates(text)) {
+    const mediaType = mediaTypeFromUrl(url);
+
+    if (!mediaType) {
+      continue;
+    }
+
+    candidates.push({
+      source_url: url,
+      media_type: mediaType,
+      width: null,
+      height: null,
+    });
+  }
+
+  return dedupeInstagramAssets(candidates);
+}
+
+function instagramRawMediaCandidates(text) {
+  const candidates = [];
+  const seen = new Set();
+  const unescaped = htmlUnescape(String(text || ""))
+    .replace(/\\u0025/gi, "%")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\u003d/gi, "=")
+    .replace(/\\\//g, "/");
+  const pattern =
+    /https?:\\?\/\\?\/[^"'<>\\\s]+?(?:cdninstagram|fbcdn)[^"'<>\\\s]+?\.(?:jpe?g|png|webp|heic|mp4|mov|m4v)(?:\?[^"'<>\\\s]*)?/gi;
+  let match;
+
+  while ((match = pattern.exec(unescaped))) {
+    const url = cleanMediaUrl(match[0]);
+
+    if (!url || seen.has(url)) {
+      continue;
+    }
+
+    seen.add(url);
+    candidates.push(url);
+  }
+
+  return candidates;
+}
+
+function isDisabledValue(value) {
+  return /^(?:0|false|no|off|disabled)$/i.test(String(value || "").trim());
+}
+
+function compareInstagramMediaVersions(candidate, current) {
+  const left = instagramVersionScore(candidate);
+  const right = instagramVersionScore(current);
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index];
+    }
+  }
+
+  return 0;
+}
+
+function instagramVersionScore(version) {
+  const width = optionalInt(version?.width) || 0;
+  const height = optionalInt(version?.height) || 0;
+
+  return [
+    width * height,
+    Math.max(width, height),
+    instagramUrlQualityScore(version?.url),
+    firstPresentInt(version?.bitrate, version?.bandwidth, version?.size) || 0,
+  ];
+}
+
+function compareInstagramAssets(candidate, current) {
+  return compareInstagramMediaVersions(
+    {
+      url: candidate?.source_url,
+      width: candidate?.width,
+      height: candidate?.height,
+    },
+    {
+      url: current?.source_url,
+      width: current?.width,
+      height: current?.height,
+    },
+  );
+}
+
+function instagramAssetDedupeKey(asset) {
+  const keys = instagramAssetMatchKeys(asset);
+
+  return keys[0] || `${asset.media_type}:${dedupeKey(asset.source_url)}`;
+}
+
+function instagramAssetMatchKeys(asset) {
+  const keys = [];
+
+  try {
+    const parsed = new URL(asset.source_url);
+    const cacheKey = parsed.searchParams.get("ig_cache_key");
+
+    if (cacheKey) {
+      keys.push(`${asset.media_type}:ig:${cacheKey}`);
+    }
+
+    const host = parsed.hostname.toLowerCase();
+
+    if (/(?:cdninstagram|fbcdn|instagram)\.com$/.test(host) || host.includes("cdninstagram.com")) {
+      keys.push(`${asset.media_type}:path:${parsed.pathname}`);
+    }
+  } catch {
+    // Fall back to the full URL below.
+  }
+
+  keys.push(`${asset.media_type}:url:${dedupeKey(asset.source_url)}`);
+
+  return keys;
+}
+
+function instagramUrlQualityScore(rawUrl) {
+  if (typeof rawUrl !== "string") {
+    return 0;
+  }
+
+  let score = 0;
+  let text = rawUrl;
+
+  try {
+    const parsed = new URL(rawUrl);
+
+    text = `${parsed.pathname} ${parsed.search}`;
+    score += instagramEncodedFormatScore(parsed.searchParams.get("efg"));
+    score += instagramEncodedFormatScore(parsed.searchParams.get("__sig"));
+  } catch {
+    // Use the raw text below.
+  }
+
+  const lowered = text.toLowerCase();
+  const sizeMatches = [...lowered.matchAll(/(?:^|[._/-])(\d{3,4})(?:x\d{3,4})?(?:[._/-]|$)/g)]
+    .map((match) => Number.parseInt(match[1], 10))
+    .filter((value) => Number.isFinite(value));
+
+  if (sizeMatches.length > 0) {
+    score += Math.max(...sizeMatches);
+  }
+
+  if (/original|orig|full|high|hd|uhd|1440/.test(lowered)) {
+    score += 300;
+  }
+
+  if (/thumbnail|thumb|preview|p\d+x\d+/.test(lowered)) {
+    score -= 500;
+  }
+
+  return score;
+}
+
+function instagramMediaUrlVariants(url, mediaType) {
+  if (mediaType !== "image") {
+    return [url];
+  }
+
+  let parsed;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [url];
+  }
+
+  const host = parsed.hostname.toLowerCase();
+
+  if (!/(?:cdninstagram|fbcdn|instagram)\.com$/.test(host) && !host.includes("cdninstagram.com")) {
+    return [url];
+  }
+
+  const variants = [];
+  const stp = parsed.searchParams.get("stp") || "";
+
+  if (stp) {
+    const unresized = new URL(parsed);
+
+    unresized.searchParams.delete("stp");
+    variants.push(unresized.toString());
+
+    if (/s\d{3,4}x\d{3,4}/i.test(stp)) {
+      const larger = new URL(parsed);
+
+      larger.searchParams.set("stp", stp.replace(/s\d{3,4}x\d{3,4}/gi, "s1440x1440"));
+      variants.push(larger.toString());
+    }
+  }
+
+  variants.push(url);
+
+  return uniqueInstagramUrls(variants);
+}
+
+function uniqueInstagramUrls(urls) {
+  const seen = new Set();
+
+  return urls.filter((candidate) => {
+    if (!candidate || seen.has(candidate)) {
+      return false;
+    }
+
+    seen.add(candidate);
+    return true;
+  });
+}
+
+function instagramEncodedFormatScore(value) {
+  if (!value) {
+    return 0;
+  }
+
+  const decoded = decodeBase64Text(value);
+  const match = /(?:^|[._-])(\d{3,4})(?:[._-]|$)/.exec(decoded);
+  const size = match ? Number.parseInt(match[1], 10) : 0;
+
+  return (Number.isFinite(size) ? size : 0) + (/original|orig|hd|high/i.test(decoded) ? 300 : 0);
+}
+
+function decodeBase64Text(value) {
+  try {
+    const normalized = String(value).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
 }
 
 function extractMetricsFromJson(data, metrics) {
@@ -1656,6 +2146,17 @@ function looksLikeRateLimitOrChallenge(html) {
     "checkpoint_required",
     "suspicious automated behavior",
   ].some((marker) => lowered.includes(marker));
+}
+
+function hasPublicMediaData(html) {
+  return [
+    '"image_versions2"',
+    '"video_versions"',
+    '"carousel_media"',
+    '"edge_sidecar_to_children"',
+    '"xdt_shortcode_media"',
+    '"shortcode_media"',
+  ].some((marker) => html.includes(marker));
 }
 
 function createMetrics() {

@@ -13,8 +13,7 @@ import { writeUserActionLog } from "../user-action-logger";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-const mediaCacheVersion = 5;
-const platformsWithMergedMedia = new Set(["youtube", "bilibili", "acfun", "pornhub"]);
+const mediaCacheVersion = 18;
 
 export function getCacheStore() {
   const settings = getSocialDownloaderSettings();
@@ -344,10 +343,6 @@ function emitDownloadProgress({
 function isUsableCachedRecord(record, normalized) {
   if (!record.post_info || typeof record.post_info !== "object") {
     return false;
-  }
-
-  if (!platformsWithMergedMedia.has(normalized.platform)) {
-    return true;
   }
 
   return Number(record.media_version || 0) >= mediaCacheVersion;

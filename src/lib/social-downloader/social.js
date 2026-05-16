@@ -2144,19 +2144,21 @@ function addPinterestImageUrl(candidates, value, score = 0, meta = {}) {
       continue;
     }
 
-    candidates.push({
-      url,
-      width: optionalInt(meta.width),
-      height: optionalInt(meta.height),
-      score,
-    });
+    for (const variantUrl of pinterestImageUrlVariants(url)) {
+      candidates.push({
+        url: variantUrl,
+        width: optionalInt(meta.width) || pinterestImageWidthFromUrl(variantUrl),
+        height: optionalInt(meta.height),
+        score: score + pinterestImageUrlScore(variantUrl),
+      });
+    }
   }
 }
 
 function pinterestImageQualityScore(key) {
   const text = String(key || "").toLowerCase();
 
-  if (/(?:^|_)orig(?:inal)?|1200x|736x/.test(text)) {
+  if (/(?:^|_)orig(?:inal)?|originals|1200x|736x/.test(text)) {
     return 1200;
   }
 
@@ -2216,19 +2218,19 @@ function isPinterestMediaUrl(url, mediaType) {
   }
 
   return /\.(?:jpe?g|png|webp|gif)(?:$|\?)/i.test(text) ||
-    /pinimg\.com\/(?:originals|[0-9x]+)\//i.test(text);
+    /pinimg\.com\/(?:originals|(?:control\d*\/)?[0-9]+x)\//i.test(text);
 }
 
 function pinterestMetaAssets(text, shortcode, mediaHeaders) {
   const assets = [];
-  const videoUrls = uniqueUrls([
+  const videoUrls = sortPinterestMediaUrls([
     ...metaContents(text, ["og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream"]),
     ...pinterestRegexMediaUrls(text, "video"),
-  ].filter((url) => isPinterestMediaUrl(url, "video")));
-  const imageUrls = uniqueUrls([
+  ], "video");
+  const imageUrls = sortPinterestMediaUrls([
     ...metaContents(text, ["og:image", "og:image:url", "og:image:secure_url", "twitter:image"]),
     ...pinterestRegexMediaUrls(text, "image"),
-  ].filter((url) => isPinterestMediaUrl(url, "image")));
+  ], "image");
 
   if (videoUrls[0]) {
     assets.push({
@@ -2251,6 +2253,110 @@ function pinterestMetaAssets(text, shortcode, mediaHeaders) {
   }
 
   return assets;
+}
+
+function sortPinterestMediaUrls(urls, mediaType) {
+  const expanded = mediaType === "image"
+    ? urls.flatMap((url) => pinterestImageUrlVariants(url))
+    : urls;
+  const unique = uniqueUrls(expanded.filter((url) => isPinterestMediaUrl(url, mediaType)));
+
+  return unique.sort((left, right) => {
+    const leftScore = mediaType === "image" ? pinterestImageUrlScore(left) : pinterestUrlScore(left);
+    const rightScore = mediaType === "image" ? pinterestImageUrlScore(right) : pinterestUrlScore(right);
+
+    return rightScore - leftScore;
+  });
+}
+
+function pinterestImageUrlVariants(url) {
+  const normalized = htmlUnescape(String(url || "")).replace(/\\\//g, "/");
+
+  if (!normalized) {
+    return [];
+  }
+
+  let parsed;
+
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    return [normalized];
+  }
+
+  if (!/pinimg\.com$/i.test(parsed.hostname)) {
+    return [normalized];
+  }
+
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  let tail = [];
+
+  if (/^control\d*$/i.test(parts[0]) && /^[0-9]+x$/i.test(parts[1])) {
+    tail = parts.slice(2);
+  } else if (/^(?:originals|[0-9]+x)$/i.test(parts[0])) {
+    tail = parts.slice(1);
+  } else {
+    return [normalized];
+  }
+
+  if (tail.length < 2) {
+    return [normalized];
+  }
+
+  const base = `${parsed.protocol}//${parsed.host}`;
+  const suffix = tail.join("/");
+  const search = parsed.search || "";
+
+  return uniqueUrls([
+    `${base}/originals/${suffix}${search}`,
+    `${base}/control1/1200x/${suffix}${search}`,
+    `${base}/1200x/${suffix}${search}`,
+    `${base}/736x/${suffix}${search}`,
+    normalized,
+  ]);
+}
+
+function pinterestImageUrlScore(url) {
+  let pathname = "";
+
+  try {
+    pathname = new URL(url).pathname.toLowerCase();
+  } catch {
+    pathname = String(url || "").toLowerCase();
+  }
+
+  if (/\/originals\//.test(pathname)) {
+    return 5000;
+  }
+
+  const sized = /\/(?:control\d*\/)?([0-9]+)x\//.exec(pathname);
+
+  if (sized) {
+    const width = Number.parseInt(sized[1], 10) || 0;
+    const controlBonus = /\/control\d*\//.test(pathname) ? 100 : 0;
+
+    return width + controlBonus;
+  }
+
+  if (/large|orig|full/.test(pathname)) {
+    return 1000;
+  }
+
+  if (/thumb|small|236x/.test(pathname)) {
+    return -500;
+  }
+
+  return 0;
+}
+
+function pinterestImageWidthFromUrl(url) {
+  try {
+    const match = /\/(?:control\d*\/)?([0-9]+)x\//i.exec(new URL(url).pathname);
+
+    return match ? optionalInt(match[1]) : null;
+  } catch {
+    return null;
+  }
 }
 
 function pinterestRegexMediaUrls(text, mediaType) {

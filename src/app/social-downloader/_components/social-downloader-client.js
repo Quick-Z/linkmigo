@@ -46,6 +46,15 @@ const copyByLanguage = {
     language: "语言",
     lightMode: "亮色",
     likes: "点赞",
+    author: "作者",
+    body: "正文内容",
+    closeDetails: "关闭信息",
+    noContent: "暂无正文内容",
+    noTags: "暂无 tag",
+    openPostDetails: "查看文案和数据",
+    postDetails: "帖子信息",
+    tags: "Tag",
+    title: "标题",
     mediaTypeAudio: "音频",
     mediaTypeImage: "图片",
     mediaTypeVideo: "视频",
@@ -110,6 +119,15 @@ const copyByLanguage = {
     language: "Language",
     lightMode: "Light",
     likes: "Likes",
+    author: "Author",
+    body: "Caption",
+    closeDetails: "Close details",
+    noContent: "No caption available",
+    noTags: "No tags",
+    openPostDetails: "View caption and data",
+    postDetails: "Post Details",
+    tags: "Tags",
+    title: "Title",
     mediaTypeAudio: "Audio",
     mediaTypeImage: "Image",
     mediaTypeVideo: "Video",
@@ -699,6 +717,7 @@ export function SocialDownloaderClient() {
   const [resolveProgress, setResolveProgress] = useState(null);
   const [resolvingPlatform, setResolvingPlatform] = useState("");
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
+  const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
   const resolveRunRef = useRef(0);
 
   const normalizedUrl = extractUrlCandidate(url);
@@ -740,6 +759,7 @@ export function SocialDownloaderClient() {
   useEffect(() => {
     if (!result) {
       setSelectedAssetIds([]);
+      setIsPostInfoOpen(false);
       return;
     }
 
@@ -766,6 +786,7 @@ export function SocialDownloaderClient() {
     setIsLoading(true);
     setError(null);
     setResult(null);
+    setIsPostInfoOpen(false);
     setResolveProgress(createInitialResolveProgress());
     setSelectedAssetIds([]);
 
@@ -875,6 +896,7 @@ export function SocialDownloaderClient() {
     setResult(null);
     setError(null);
     setIsLoading(false);
+    setIsPostInfoOpen(false);
     setIsInputFocused(false);
     setIsUrlInputHovered(false);
     setResolveProgress(null);
@@ -1191,7 +1213,18 @@ export function SocialDownloaderClient() {
 
               <div className="grid shrink-0 gap-3 border-b px-3 py-3 sm:px-5 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start" style={{ borderColor: resultTheme.panelBorder }}>
                 <div className="-mt-1 flex min-w-0 flex-wrap items-center gap-2.5 overflow-visible pb-1 pt-1">
-                  <div className="mr-1 shrink-0 text-lg font-semibold" style={{ color: resultTheme.bodyText }}>{creatorLabel}</div>
+                  <button
+                    className="lm-themed-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
+                    onClick={() => setIsPostInfoOpen(true)}
+                    style={buildCreatorButtonStyle(resultTheme)}
+                    title={copy.openPostDetails}
+                    type="button"
+                  >
+                    <span className="truncate">{creatorLabel}</span>
+                    <span className="grid size-5 shrink-0 place-items-center rounded-full border text-[11px]" style={buildInfoBadgeStyle(resultTheme)}>
+                      <InfoIcon />
+                    </span>
+                  </button>
                   {createMetricItems(result.metrics, copy).map((item) => (
                     <StatPill key={item.label} label={item.label} language={language} theme={resultTheme} value={item.value} />
                   ))}
@@ -1231,6 +1264,16 @@ export function SocialDownloaderClient() {
           ) : null}
         </div>
       </section>
+
+      {result && isPostInfoOpen ? (
+        <PostInfoModal
+          copy={copy}
+          language={language}
+          onClose={() => setIsPostInfoOpen(false)}
+          result={result}
+          theme={resultTheme}
+        />
+      ) : null}
     </main>
   );
 }
@@ -1531,6 +1574,305 @@ function ClearIcon() {
   );
 }
 
+function InfoIcon() {
+  return (
+    <svg aria-hidden="true" className="size-3.5" fill="none" viewBox="0 0 24 24">
+      <path d="M12 11v6" stroke="currentColor" strokeLinecap="round" strokeWidth="2.4" />
+      <path d="M12 7.4h.01" stroke="currentColor" strokeLinecap="round" strokeWidth="3.2" />
+      <path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function PostInfoModal({ copy, language, onClose, result, theme }) {
+  const info = result.post_info ?? {};
+  const metrics = info.metrics ?? result.metrics;
+  const title = displayTitle(info);
+  const author = displayAuthorName(info, result);
+  const handle = displayAuthorHandle(info, result);
+  const body = info.body || "";
+  const tags = Array.isArray(info.tags) ? info.tags : [];
+  const metricItems = createMetricItems(metrics, copy);
+  const postChrome = getPostChrome(result.platform, theme);
+  const previewAsset = result.assets?.[0] ?? null;
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center px-8 py-7 backdrop-blur-[18px]"
+      onMouseDown={onClose}
+      role="presentation"
+      style={buildPostModalBackdropStyle(theme)}
+    >
+      <section
+        aria-label={copy.postDetails}
+        aria-modal="true"
+        className="relative grid h-[min(84vh,45rem)] w-[min(92vw,70rem)] grid-cols-[minmax(0,1.08fr)_minmax(23rem,0.92fr)] overflow-hidden rounded-[1.4rem] border shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        style={buildPlatformPostShellStyle(postChrome)}
+      >
+        <SocialPostMediaPane
+          asset={previewAsset}
+          chrome={postChrome}
+          copy={copy}
+          platform={result.platform}
+          title={title || body || result.shortcode}
+        />
+
+        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]" style={{ background: postChrome.contentBackground }}>
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b px-5 py-4" style={{ borderColor: postChrome.divider }}>
+            <div className="flex min-w-0 items-center gap-3">
+              <PlatformAvatar chrome={postChrome} handle={handle || author || result.platform} />
+              <div className="min-w-0">
+                <div className="truncate text-[15px] font-bold" style={{ color: postChrome.text }}>
+                  {author || handle || getPlatformLabel(result.platform, copy)}
+                </div>
+                <div className="truncate text-xs font-semibold" style={{ color: postChrome.muted }}>
+                  {handle ? `@${handle.replace(/^@+/, "")}` : getPlatformLabel(result.platform, copy)}
+                </div>
+              </div>
+            </div>
+            <button
+              aria-label={copy.closeDetails}
+              className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border transition hover:scale-[1.03]"
+              onClick={onClose}
+              style={buildPostCloseButtonStyle(postChrome)}
+              type="button"
+            >
+              <ClearIcon />
+            </button>
+          </div>
+
+          <div className="lm-floating-scroll min-h-0 overflow-y-auto px-5 py-5">
+            <div className="grid gap-5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="rounded-full px-3 py-1.5 text-xs font-bold" style={buildPostPlatformPillStyle(postChrome)}>
+                  {getPlatformLabel(result.platform, copy)}
+                </span>
+                <span className="text-xs font-semibold" style={{ color: postChrome.muted }}>
+                  {postChrome.surfaceLabel}
+                </span>
+              </div>
+
+              {title ? (
+                <h2 className="break-words text-[1.55rem] font-black leading-tight" style={{ color: postChrome.text }}>
+                  {title}
+                </h2>
+              ) : null}
+
+              <div className="break-words whitespace-pre-wrap text-[15px] font-medium leading-7" style={{ color: postChrome.text }}>
+                {body || copy.noContent}
+              </div>
+
+              {tags.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {tags.map((tag) => (
+                    <span className="max-w-full break-all rounded-full px-3 py-1.5 text-xs font-bold" key={tag} style={buildPostTagStyle(postChrome)}>
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="border-t px-5 py-4" style={{ borderColor: postChrome.divider }}>
+            <PostMetricBar chrome={postChrome} copy={copy} items={metricItems} language={language} />
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SocialPostMediaPane({ asset, chrome, copy, platform, title }) {
+  return (
+    <div className="relative min-h-0 overflow-hidden" style={{ background: chrome.mediaBackground }}>
+      <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between px-5 py-4">
+        <span className="text-xs font-black uppercase tracking-[0.18em]" style={{ color: chrome.mediaText }}>
+          {chrome.mediaLabel}
+        </span>
+        <span className="rounded-full px-3 py-1 text-xs font-bold" style={buildPostMediaBadgeStyle(chrome)}>
+          {platformMediaLabel(platform, copy)}
+        </span>
+      </div>
+
+      <div className="grid h-full place-items-center px-8 py-14">
+        <div className="relative flex aspect-[4/5] max-h-full w-full max-w-[29rem] items-center justify-center overflow-hidden rounded-[1.15rem] border" style={buildPostMediaFrameStyle(chrome)}>
+          <PostAssetPreview asset={asset} chrome={chrome} title={title} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PostAssetPreview({ asset, chrome, title }) {
+  if (!asset) {
+    return (
+      <div className="grid h-full w-full place-items-center px-8 text-center" style={{ color: chrome.mediaText }}>
+        <span className="text-lg font-bold">{title}</span>
+      </div>
+    );
+  }
+
+  const previewUrl = apiUrl(asset.preview_url);
+
+  if (asset.media_type === "video") {
+    return (
+      <video
+        className="h-full w-full object-cover"
+        controls
+        muted
+        playsInline
+        preload="metadata"
+        src={previewUrl}
+      />
+    );
+  }
+
+  if (asset.media_type === "audio") {
+    return (
+      <div className="grid h-full w-full place-items-center" style={{ background: chrome.audioBackground }}>
+        <div className="grid size-28 place-items-center rounded-full border text-5xl font-black" style={buildPostAudioIconStyle(chrome)}>
+          ♪
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    /* eslint-disable-next-line @next/next/no-img-element */
+    <img
+      alt={title}
+      className="h-full w-full object-cover"
+      draggable={false}
+      src={previewUrl}
+    />
+  );
+}
+
+function PlatformAvatar({ chrome, handle }) {
+  const initial = String(handle || "?").replace(/^@+/, "").trim()[0]?.toUpperCase() || "?";
+
+  return (
+    <div className="grid size-12 shrink-0 place-items-center rounded-full p-[2px]" style={{ background: chrome.avatarRing }}>
+      <div className="grid size-full place-items-center rounded-full text-sm font-black" style={{ background: chrome.avatarFill, color: chrome.avatarText }}>
+        {initial}
+      </div>
+    </div>
+  );
+}
+
+function PostMetricBar({ chrome, copy, items, language }) {
+  return (
+    <div className="grid grid-cols-5 gap-2">
+      {items.map((item) => (
+        <div className="flex min-w-0 items-center gap-2 rounded-[0.85rem] px-3 py-2" key={item.label} style={buildPostMetricStyle(chrome)}>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full" style={buildPostMetricIconStyle(chrome)}>
+            <MetricIcon label={item.label} copy={copy} />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-[11px] font-bold" style={{ color: chrome.muted }}>{item.label}</div>
+            <div className="truncate text-sm font-black" style={{ color: item.value == null ? chrome.muted : chrome.accent }}>
+              {formatCompactNumber(item.value, language)}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MetricIcon({ copy, label }) {
+  const icon = label === copy.likes
+    ? "heart"
+    : label === copy.comments
+      ? "comment"
+      : label === copy.views
+        ? "play"
+        : label === copy.shares
+          ? "share"
+          : "bookmark";
+
+  if (icon === "heart") {
+    return (
+      <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+        <path d="M20.2 5.8c-1.7-1.8-4.4-1.8-6.1 0L12 7.9 9.9 5.8c-1.7-1.8-4.4-1.8-6.1 0-1.8 1.9-1.8 4.9 0 6.7L12 21l8.2-8.5c1.8-1.8 1.8-4.8 0-6.7Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  if (icon === "comment") {
+    return (
+      <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+        <path d="M20 11.6a7.5 7.5 0 0 1-8 7.4 8.8 8.8 0 0 1-3.3-.7L4 20l1.4-4.1A7.4 7.4 0 1 1 20 11.6Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  if (icon === "play") {
+    return (
+      <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+        <path d="M8 5.8v12.4c0 .7.8 1.1 1.4.7l9.3-6.2c.5-.3.5-1.1 0-1.4L9.4 5.1C8.8 4.7 8 5.1 8 5.8Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  if (icon === "share") {
+    return (
+      <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+        <path d="m20 4-8.6 16-1.6-7.2L4 10.2 20 4Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="M7 4.8c0-1 .8-1.8 1.8-1.8h6.4c1 0 1.8.8 1.8 1.8V21l-5-3.2L7 21V4.8Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function displayTitle(info) {
+  const title = String(info.title || "").trim();
+  const body = String(info.body || "").trim();
+
+  return title && title !== body ? title : "";
+}
+
+function displayAuthorName(info, result) {
+  const author = String(info.author || "").trim();
+  const handle = displayAuthorHandle(info, result);
+
+  if (author && handle && author !== handle) {
+    return author;
+  }
+
+  if (author) {
+    return author;
+  }
+
+  return handle ? `@${handle.replace(/^@+/, "")}` : "";
+}
+
+function displayAuthorHandle(info, result) {
+  return String(info.author_handle || result.creator_handle || "").trim().replace(/^@+/, "");
+}
+
 function StatPill({ label, language, theme, value }) {
   return (
     <div
@@ -1707,6 +2049,27 @@ function buildLinkChipStyle(theme) {
   };
 }
 
+function buildCreatorButtonStyle(theme) {
+  return {
+    color: theme.bodyText,
+    backgroundColor: hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.16 : 0.07),
+    backgroundImage: theme.glassGradientSoft,
+    borderColor: theme.border,
+    boxShadow: `0 12px 24px ${hexToRgba(theme.accent, 0.08)}`,
+    transition: themeTransition,
+    ...buildActionInteractionVars(theme),
+  };
+}
+
+function buildInfoBadgeStyle(theme) {
+  return {
+    color: theme.accentText,
+    backgroundColor: theme.iconBackground,
+    borderColor: theme.panelBorder,
+    transition: themeTransition,
+  };
+}
+
 function buildResultShellStyle(theme) {
   return {
     backgroundColor: hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.1 : 0.045),
@@ -1714,6 +2077,89 @@ function buildResultShellStyle(theme) {
     borderColor: theme.panelBorder,
     boxShadow: theme.panelShadow,
     transition: themeTransition,
+  };
+}
+
+function buildPostModalBackdropStyle(theme) {
+  return {
+    background: theme.colorMode === "dark"
+      ? "rgba(3, 8, 17, 0.58)"
+      : "rgba(219, 233, 252, 0.46)",
+    transition: themeTransition,
+  };
+}
+
+function buildPlatformPostShellStyle(chrome) {
+  return {
+    background: chrome.shellBackground,
+    borderColor: chrome.shellBorder,
+    boxShadow: chrome.shellShadow,
+    color: chrome.text,
+    transition: themeTransition,
+  };
+}
+
+function buildPostCloseButtonStyle(chrome) {
+  return {
+    color: chrome.closeText,
+    background: chrome.closeBackground,
+    borderColor: chrome.divider,
+    boxShadow: chrome.closeShadow,
+    transition: themeTransition,
+  };
+}
+
+function buildPostPlatformPillStyle(chrome) {
+  return {
+    color: chrome.pillText,
+    background: chrome.pillBackground,
+    border: `1px solid ${chrome.divider}`,
+  };
+}
+
+function buildPostTagStyle(chrome) {
+  return {
+    color: chrome.tagText,
+    background: chrome.tagBackground,
+    border: `1px solid ${chrome.tagBorder}`,
+  };
+}
+
+function buildPostMediaBadgeStyle(chrome) {
+  return {
+    color: chrome.mediaText,
+    background: chrome.mediaBadgeBackground,
+    border: `1px solid ${chrome.mediaBorder}`,
+  };
+}
+
+function buildPostMediaFrameStyle(chrome) {
+  return {
+    background: chrome.mediaFrameBackground,
+    borderColor: chrome.mediaBorder,
+    boxShadow: chrome.mediaShadow,
+  };
+}
+
+function buildPostMetricStyle(chrome) {
+  return {
+    background: chrome.metricBackground,
+    border: `1px solid ${chrome.metricBorder}`,
+  };
+}
+
+function buildPostMetricIconStyle(chrome) {
+  return {
+    color: chrome.accent,
+    background: chrome.metricIconBackground,
+  };
+}
+
+function buildPostAudioIconStyle(chrome) {
+  return {
+    color: chrome.accent,
+    background: chrome.metricIconBackground,
+    borderColor: chrome.mediaBorder,
   };
 }
 
@@ -1808,6 +2254,288 @@ function triggerBrowserDownload(href) {
 
 function getPlatformLabel(platform, copy = copyByLanguage.zh) {
   return platform ? copy.platformLabels?.[platform] ?? platformLabels[platform] ?? platform : copy.publicPlatform;
+}
+
+function platformMediaLabel(platform, copy = copyByLanguage.zh) {
+  if (["youtube", "tiktok", "douyin", "kuaishou", "acfun", "bilibili", "facebook", "pornhub"].includes(platform)) {
+    return copy.video;
+  }
+
+  return copy.image;
+}
+
+function getPostChrome(platform, theme) {
+  const base = {
+    shellBackground: "#ffffff",
+    shellBorder: "rgba(15, 23, 42, 0.12)",
+    shellShadow: "0 30px 80px rgba(15, 23, 42, 0.22)",
+    contentBackground: "#ffffff",
+    mediaBackground: "linear-gradient(135deg, #f4f6f9 0%, #eef1f7 100%)",
+    mediaFrameBackground: "#f8fafc",
+    mediaBadgeBackground: "rgba(255,255,255,0.78)",
+    mediaBorder: "rgba(15, 23, 42, 0.1)",
+    mediaShadow: "0 22px 48px rgba(15, 23, 42, 0.18)",
+    mediaText: "#223049",
+    mediaLabel: "post preview",
+    contentLabel: "post",
+    surfaceLabel: "Public post",
+    text: "#182235",
+    muted: "#718096",
+    divider: "rgba(15, 23, 42, 0.1)",
+    accent: theme.accent,
+    avatarRing: `linear-gradient(135deg, ${theme.accent} 0%, ${theme.accentStrong} 100%)`,
+    avatarFill: "#ffffff",
+    avatarText: theme.accentText,
+    pillBackground: hexToRgba(theme.accent, 0.08),
+    pillText: theme.accentText,
+    tagBackground: hexToRgba(theme.accent, 0.08),
+    tagBorder: hexToRgba(theme.accent, 0.16),
+    tagText: theme.accentText,
+    metricBackground: "rgba(248, 250, 252, 0.86)",
+    metricBorder: "rgba(15, 23, 42, 0.06)",
+    metricIconBackground: hexToRgba(theme.accent, 0.1),
+    closeBackground: "rgba(255,255,255,0.82)",
+    closeText: theme.accentText,
+    closeShadow: "0 10px 24px rgba(15,23,42,0.1)",
+    audioBackground: `linear-gradient(135deg, ${hexToRgba(theme.accent, 0.16)} 0%, rgba(255,255,255,0.9) 100%)`,
+  };
+
+  const platformChrome = {
+    instagram: {
+      mediaBackground: "linear-gradient(135deg, #fff7e8 0%, #fff 28%, #f9e9ff 62%, #e8efff 100%)",
+      mediaLabel: "Instagram",
+      surfaceLabel: "Feed post",
+      accent: "#d62976",
+      avatarRing: "conic-gradient(from 210deg, #feda75, #fa7e1e, #d62976, #962fbf, #4f5bd5, #feda75)",
+      pillBackground: "linear-gradient(135deg, rgba(254,218,117,0.28), rgba(214,41,118,0.14), rgba(79,91,213,0.14))",
+      tagText: "#00376b",
+      tagBackground: "rgba(0, 55, 107, 0.07)",
+      tagBorder: "rgba(0, 55, 107, 0.12)",
+      metricIconBackground: "rgba(214, 41, 118, 0.09)",
+    },
+    tiktok: {
+      shellBackground: "#08090d",
+      shellBorder: "rgba(37,244,238,0.26)",
+      contentBackground: "#0d0f16",
+      mediaBackground: "linear-gradient(145deg, #07080d 0%, #11131c 52%, #1b0d16 100%)",
+      mediaFrameBackground: "#050507",
+      mediaBadgeBackground: "rgba(255,255,255,0.08)",
+      mediaBorder: "rgba(255,255,255,0.14)",
+      mediaText: "#f5fbff",
+      mediaLabel: "TikTok",
+      surfaceLabel: "For You",
+      text: "#f7f8fb",
+      muted: "#9ba6b7",
+      divider: "rgba(255,255,255,0.1)",
+      accent: "#25f4ee",
+      avatarRing: "linear-gradient(135deg, #25f4ee 0%, #ffffff 50%, #fe2c55 100%)",
+      avatarFill: "#0d0f16",
+      avatarText: "#ffffff",
+      pillBackground: "rgba(37,244,238,0.12)",
+      pillText: "#b8fffc",
+      tagBackground: "rgba(254,44,85,0.12)",
+      tagBorder: "rgba(254,44,85,0.22)",
+      tagText: "#ff9aad",
+      metricBackground: "rgba(255,255,255,0.055)",
+      metricBorder: "rgba(255,255,255,0.08)",
+      metricIconBackground: "rgba(37,244,238,0.12)",
+      closeBackground: "rgba(255,255,255,0.08)",
+      closeText: "#ffffff",
+      closeShadow: "none",
+      audioBackground: "linear-gradient(135deg, rgba(37,244,238,0.18), rgba(254,44,85,0.16))",
+    },
+    douyin: {
+      shellBackground: "#08090d",
+      shellBorder: "rgba(37,244,238,0.26)",
+      contentBackground: "#0c0e15",
+      mediaBackground: "linear-gradient(145deg, #05060a 0%, #11151c 50%, #190b13 100%)",
+      mediaFrameBackground: "#050507",
+      mediaBadgeBackground: "rgba(255,255,255,0.08)",
+      mediaBorder: "rgba(255,255,255,0.14)",
+      mediaText: "#f5fbff",
+      mediaLabel: "Douyin",
+      surfaceLabel: "Recommend",
+      text: "#f7f8fb",
+      muted: "#9ba6b7",
+      divider: "rgba(255,255,255,0.1)",
+      accent: "#25f4ee",
+      avatarRing: "linear-gradient(135deg, #25f4ee 0%, #ffffff 50%, #fe2c55 100%)",
+      avatarFill: "#0c0e15",
+      avatarText: "#ffffff",
+      pillBackground: "rgba(37,244,238,0.12)",
+      pillText: "#b8fffc",
+      tagBackground: "rgba(254,44,85,0.12)",
+      tagBorder: "rgba(254,44,85,0.22)",
+      tagText: "#ff9aad",
+      metricBackground: "rgba(255,255,255,0.055)",
+      metricBorder: "rgba(255,255,255,0.08)",
+      metricIconBackground: "rgba(37,244,238,0.12)",
+      closeBackground: "rgba(255,255,255,0.08)",
+      closeText: "#ffffff",
+      closeShadow: "none",
+      audioBackground: "linear-gradient(135deg, rgba(37,244,238,0.18), rgba(254,44,85,0.16))",
+    },
+    twitter: {
+      shellBackground: "#000000",
+      shellBorder: "rgba(239,243,244,0.16)",
+      contentBackground: "#000000",
+      mediaBackground: "linear-gradient(135deg, #050505 0%, #10151d 100%)",
+      mediaFrameBackground: "#0b0f14",
+      mediaBadgeBackground: "rgba(29,155,240,0.14)",
+      mediaBorder: "rgba(239,243,244,0.14)",
+      mediaText: "#f7f9f9",
+      mediaLabel: "X",
+      surfaceLabel: "Post",
+      text: "#f7f9f9",
+      muted: "#8b98a5",
+      divider: "rgba(239,243,244,0.14)",
+      accent: "#1d9bf0",
+      avatarRing: "linear-gradient(135deg, #1d9bf0, #94d4ff)",
+      avatarFill: "#111820",
+      avatarText: "#f7f9f9",
+      pillBackground: "rgba(29,155,240,0.13)",
+      pillText: "#8ecdf8",
+      tagBackground: "rgba(29,155,240,0.12)",
+      tagBorder: "rgba(29,155,240,0.22)",
+      tagText: "#1d9bf0",
+      metricBackground: "rgba(239,243,244,0.06)",
+      metricBorder: "rgba(239,243,244,0.08)",
+      metricIconBackground: "rgba(29,155,240,0.13)",
+      closeBackground: "rgba(239,243,244,0.08)",
+      closeText: "#f7f9f9",
+      closeShadow: "none",
+    },
+    youtube: {
+      shellBackground: "#0f0f0f",
+      shellBorder: "rgba(255,255,255,0.12)",
+      contentBackground: "#181818",
+      mediaBackground: "#050505",
+      mediaFrameBackground: "#000000",
+      mediaBadgeBackground: "rgba(255,0,0,0.16)",
+      mediaBorder: "rgba(255,255,255,0.14)",
+      mediaText: "#ffffff",
+      mediaLabel: "YouTube",
+      surfaceLabel: "Watch",
+      text: "#ffffff",
+      muted: "#aaa",
+      divider: "rgba(255,255,255,0.11)",
+      accent: "#ff0033",
+      avatarRing: "linear-gradient(135deg, #ff0033, #ff7b7b)",
+      avatarFill: "#272727",
+      avatarText: "#fff",
+      pillBackground: "rgba(255,255,255,0.08)",
+      pillText: "#ffffff",
+      tagBackground: "rgba(62,166,255,0.14)",
+      tagBorder: "rgba(62,166,255,0.22)",
+      tagText: "#3ea6ff",
+      metricBackground: "rgba(255,255,255,0.07)",
+      metricBorder: "rgba(255,255,255,0.08)",
+      metricIconBackground: "rgba(255,0,51,0.14)",
+      closeBackground: "rgba(255,255,255,0.08)",
+      closeText: "#ffffff",
+      closeShadow: "none",
+    },
+    xiaohongshu: {
+      mediaBackground: "linear-gradient(135deg, #fff5f7 0%, #ffffff 48%, #f5f5f5 100%)",
+      mediaLabel: "Xiaohongshu",
+      surfaceLabel: "Note",
+      accent: "#ff2442",
+      avatarRing: "linear-gradient(135deg, #ff2442, #ff9aa8)",
+      pillBackground: "rgba(255,36,66,0.1)",
+      pillText: "#d91f3b",
+      tagBackground: "rgba(255,36,66,0.08)",
+      tagBorder: "rgba(255,36,66,0.14)",
+      tagText: "#d91f3b",
+      metricIconBackground: "rgba(255,36,66,0.1)",
+    },
+    kuaishou: {
+      mediaBackground: "linear-gradient(135deg, #fff3e8 0%, #fff 48%, #ffe7f0 100%)",
+      mediaLabel: "Kuaishou",
+      surfaceLabel: "Work",
+      accent: "#ff5000",
+      avatarRing: "linear-gradient(135deg, #ff5000, #fe3666)",
+      pillBackground: "rgba(255,80,0,0.1)",
+      pillText: "#cf4508",
+      tagBackground: "rgba(255,80,0,0.08)",
+      tagBorder: "rgba(255,80,0,0.14)",
+      tagText: "#cf4508",
+      metricIconBackground: "rgba(255,80,0,0.1)",
+    },
+    acfun: {
+      mediaBackground: "linear-gradient(135deg, #fff0f2 0%, #ffffff 48%, #eef7ff 100%)",
+      mediaLabel: "AcFun",
+      surfaceLabel: "Video",
+      accent: "#fd4c5d",
+      avatarRing: "linear-gradient(135deg, #fd4c5d, #36a7ff)",
+      pillBackground: "rgba(253,76,93,0.1)",
+      pillText: "#d93c4b",
+      tagBackground: "rgba(54,167,255,0.1)",
+      tagBorder: "rgba(54,167,255,0.16)",
+      tagText: "#1f7fc6",
+      metricIconBackground: "rgba(253,76,93,0.1)",
+    },
+    bilibili: {
+      mediaBackground: "linear-gradient(135deg, #eaf8ff 0%, #ffffff 48%, #f3f7ff 100%)",
+      mediaLabel: "Bilibili",
+      surfaceLabel: "Video",
+      accent: "#00aeec",
+      avatarRing: "linear-gradient(135deg, #00aeec, #fb7299)",
+      pillBackground: "rgba(0,174,236,0.1)",
+      pillText: "#008ac0",
+      tagBackground: "rgba(0,174,236,0.08)",
+      tagBorder: "rgba(0,174,236,0.14)",
+      tagText: "#008ac0",
+      metricIconBackground: "rgba(0,174,236,0.1)",
+    },
+    facebook: {
+      mediaBackground: "linear-gradient(135deg, #edf4ff 0%, #ffffff 54%, #eef2ff 100%)",
+      mediaLabel: "Facebook",
+      surfaceLabel: "Post",
+      accent: "#1877f2",
+      avatarRing: "linear-gradient(135deg, #1877f2, #7db4ff)",
+      pillBackground: "rgba(24,119,242,0.1)",
+      pillText: "#1666d0",
+      tagBackground: "rgba(24,119,242,0.08)",
+      tagBorder: "rgba(24,119,242,0.14)",
+      tagText: "#1666d0",
+      metricIconBackground: "rgba(24,119,242,0.1)",
+    },
+    pornhub: {
+      shellBackground: "#111111",
+      shellBorder: "rgba(247,151,30,0.28)",
+      contentBackground: "#181818",
+      mediaBackground: "linear-gradient(135deg, #050505 0%, #171717 54%, #23180c 100%)",
+      mediaFrameBackground: "#000",
+      mediaBadgeBackground: "rgba(247,151,30,0.14)",
+      mediaBorder: "rgba(247,151,30,0.2)",
+      mediaText: "#ffffff",
+      mediaLabel: "Pornhub",
+      surfaceLabel: "Video",
+      text: "#ffffff",
+      muted: "#b8b8b8",
+      divider: "rgba(255,255,255,0.1)",
+      accent: "#f7971e",
+      avatarRing: "linear-gradient(135deg, #f7971e, #ffd08a)",
+      avatarFill: "#222",
+      avatarText: "#fff",
+      pillBackground: "rgba(247,151,30,0.14)",
+      pillText: "#ffd08a",
+      tagBackground: "rgba(247,151,30,0.12)",
+      tagBorder: "rgba(247,151,30,0.2)",
+      tagText: "#ffd08a",
+      metricBackground: "rgba(255,255,255,0.06)",
+      metricBorder: "rgba(255,255,255,0.08)",
+      metricIconBackground: "rgba(247,151,30,0.14)",
+      closeBackground: "rgba(255,255,255,0.08)",
+      closeText: "#ffffff",
+      closeShadow: "none",
+    },
+  };
+
+  return {
+    ...base,
+    ...(platformChrome[platform] ?? {}),
+  };
 }
 
 function getButtonTheme(platform, colorMode = "light") {

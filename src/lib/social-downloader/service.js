@@ -6,6 +6,7 @@ import { CacheStore } from "./cache";
 import { AppError, ErrorCode } from "./errors";
 import { downloadMedia, estimateMediaDownloadSize, extensionForAsset } from "./downloader";
 import { getSocialDownloaderSettings } from "./settings";
+import { createPostInfo } from "./post-info";
 import { normalizeSocialUrl, resolveSocialPost } from "./social";
 import { buildZipFile } from "./zip";
 import { writeUserActionLog } from "../user-action-logger";
@@ -77,6 +78,7 @@ export async function resolveUrl(rawUrl, options = {}) {
     parsedAssets: parsedPost.assets,
     metrics: parsedPost.metrics,
     creatorHandle: parsedPost.creator_handle,
+    postInfo: parsedPost.post_info,
     onProgress,
   });
 
@@ -122,7 +124,7 @@ export async function getZipFile(requestId, options = {}) {
   };
 }
 
-async function downloadAndCacheAssets({ settings, cache, normalized, parsedAssets, metrics, creatorHandle, onProgress }) {
+async function downloadAndCacheAssets({ settings, cache, normalized, parsedAssets, metrics, creatorHandle, postInfo, onProgress }) {
   const requestId = crypto.randomUUID().replaceAll("-", "");
   const recordDir = cache.recordDir(requestId, normalized.platform);
   const downloadedAssets = [];
@@ -233,6 +235,7 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + settings.cacheTtlSeconds * 1000);
+    const normalizedMetrics = metrics ?? createMetrics();
     const record = {
       request_id: requestId,
       media_version: mediaCacheVersion,
@@ -244,7 +247,12 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
       created_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
       assets: downloadedAssets,
-      metrics: metrics ?? createMetrics(),
+      metrics: normalizedMetrics,
+      post_info: createPostInfo(postInfo, {
+        metrics: normalizedMetrics,
+        creatorHandle,
+        source: normalizedMetrics.source,
+      }),
     };
 
     await cache.saveRecord(record);
@@ -334,6 +342,10 @@ function emitDownloadProgress({
 }
 
 function isUsableCachedRecord(record, normalized) {
+  if (!record.post_info || typeof record.post_info !== "object") {
+    return false;
+  }
+
   if (!platformsWithMergedMedia.has(normalized.platform)) {
     return true;
   }
@@ -342,15 +354,23 @@ function isUsableCachedRecord(record, normalized) {
 }
 
 function resolveResponse(record) {
+  const metrics = record.metrics ?? createMetrics();
+  const creatorHandle = record.creator_handle || "";
+
   return {
     request_id: record.request_id,
     canonical_url: record.canonical_url,
     shortcode: record.shortcode,
     kind: record.kind,
     platform: record.platform ?? "instagram",
-    creator_handle: record.creator_handle || "",
+    creator_handle: creatorHandle,
     assets: record.assets.map((asset) => assetResponse(record, asset)),
-    metrics: record.metrics ?? createMetrics(),
+    metrics,
+    post_info: createPostInfo(record.post_info, {
+      metrics,
+      creatorHandle,
+      source: metrics.source,
+    }),
     expires_at: record.expires_at,
   };
 }

@@ -14,6 +14,13 @@ import {
   responseJson,
   scriptTexts,
 } from "./utils";
+import {
+  cleanDisplayText,
+  createPostInfo,
+  normalizeTags,
+  pickSingleLineText,
+  pickText,
+} from "./post-info";
 
 const PORNHUB_VIEWKEY_RE = /^[A-Za-z0-9_-]{4,96}$/;
 const PORNHUB_ACCESS_COOKIE = [
@@ -101,6 +108,8 @@ export async function resolvePornhubPost(normalized, settings) {
   const fallbackUrls = pornhubFallbackUrls(candidates, best);
   const qualityLabel = best.quality ? `${best.quality}p` : "video";
   const flashvars = firstPornhubFlashvars(text);
+  const metrics = metricsFromPornhub(text);
+  const creatorHandle = creatorFromPornhub(text, flashvars);
 
   return {
     assets: dedupeAssets([
@@ -115,8 +124,9 @@ export async function resolvePornhubPost(normalized, settings) {
         is_hls: best.isHls,
       },
     ]),
-    metrics: metricsFromPornhub(text),
-    creator_handle: creatorFromPornhub(text, flashvars),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: postInfoFromPornhub(text, flashvars, metrics, creatorHandle),
   };
 }
 
@@ -490,6 +500,51 @@ function metricsFromPornhub(text) {
   };
 }
 
+function postInfoFromPornhub(text, flashvars, metrics, creatorHandle) {
+  const body = pickText(
+    flashvars?.video_description,
+    flashvars?.description,
+    metaContents(text, ["og:description", "twitter:description", "description"]),
+  );
+  const title = pickSingleLineText(
+    flashvars?.video_title,
+    flashvars?.title,
+    metaContents(text, ["og:title", "twitter:title", "title"]),
+    htmlTitleFromText(text),
+  );
+
+  return createPostInfo(
+    {
+      title,
+      author: creatorHandle,
+      author_handle: creatorHandle,
+      body,
+      tags: normalizeTags(pornhubTags(text, flashvars), body),
+      metrics,
+      source: metrics?.source || "pornhub_public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "pornhub_public_best_effort" },
+  );
+}
+
+function pornhubTags(text, flashvars) {
+  const values = [];
+
+  for (const key of ["tags", "video_tags", "categories"]) {
+    const value = flashvars?.[key];
+
+    if (Array.isArray(value)) {
+      values.push(...value);
+    } else if (typeof value === "string") {
+      values.push(...value.split(","));
+    }
+  }
+
+  values.push(...metaContents(text, ["keywords"]).flatMap((value) => String(value).split(",")));
+
+  return values;
+}
+
 function creatorFromPornhub(text, flashvars) {
   const direct = [
     flashvars?.video_uname,
@@ -507,6 +562,12 @@ function creatorFromPornhub(text, flashvars) {
     /\busername\b["']?\s*[:=]\s*["']([^"']+)/i.exec(text);
 
   return match ? safeCreatorHandle(htmlUnescape(match[1])) : "";
+}
+
+function htmlTitleFromText(text) {
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1];
+
+  return title ? cleanDisplayText(htmlUnescape(title), { maxLength: 240 }) : "";
 }
 
 function safeCreatorHandle(value) {

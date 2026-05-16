@@ -11,6 +11,12 @@ import {
   isSocksProxyUrl,
   optionalInt,
 } from "./utils";
+import {
+  createPostInfo,
+  normalizeTags,
+  pickSingleLineText,
+  pickText,
+} from "./post-info";
 
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 
@@ -103,17 +109,21 @@ async function resolveYoutubePostWithInnertube(normalized, settings) {
     asset.filename_hint = `${filenameBase}${innertubeFormatExtension(format)}`;
   }
 
+  const metrics = {
+    like_count: null,
+    comment_count: null,
+    view_count: optionalInt(details.view_count),
+    save_count: null,
+    share_count: null,
+    source: "youtubei_best_effort",
+  };
+  const creatorHandle = youtubeInnertubeCreatorHandle(details);
+
   return {
     assets: [asset],
-    metrics: {
-      like_count: null,
-      comment_count: null,
-      view_count: optionalInt(details.view_count),
-      save_count: null,
-      share_count: null,
-      source: "youtubei_best_effort",
-    },
-    creator_handle: youtubeInnertubeCreatorHandle(details),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: postInfoFromInnertube(details, metrics, creatorHandle),
   };
 }
 
@@ -282,6 +292,24 @@ function youtubeInnertubeCreatorHandle(details) {
   return channel.name || details.author || "";
 }
 
+function postInfoFromInnertube(details, metrics, creatorHandle) {
+  const channel = details?.channel && typeof details.channel === "object" ? details.channel : {};
+  const body = pickText(details?.short_description, details?.description);
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(details?.title),
+      author: pickSingleLineText(channel.name, details?.author, creatorHandle),
+      author_handle: pickSingleLineText(channel.name, creatorHandle),
+      body,
+      tags: normalizeTags(details?.keywords, body),
+      metrics,
+      source: metrics?.source || "youtubei_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "youtubei_best_effort" },
+  );
+}
+
 async function resolveYoutubePostWithYtdl(normalized, settings) {
   const info = await getYtdlInfo(normalized.canonical_url, settings);
   const details = info?.videoDetails && typeof info.videoDetails === "object" ? info.videoDetails : {};
@@ -329,17 +357,21 @@ async function resolveYoutubePostWithYtdl(normalized, settings) {
     asset.audio_request_headers = headers;
   }
 
+  const metrics = {
+    like_count: optionalInt(details.likes),
+    comment_count: null,
+    view_count: optionalInt(details.viewCount),
+    save_count: null,
+    share_count: null,
+    source: "youtube_ytdl_best_effort",
+  };
+  const creatorHandle = ytdlCreatorHandle(details);
+
   return {
     assets: [asset],
-    metrics: {
-      like_count: optionalInt(details.likes),
-      comment_count: null,
-      view_count: optionalInt(details.viewCount),
-      save_count: null,
-      share_count: null,
-      source: "youtube_ytdl_best_effort",
-    },
-    creator_handle: ytdlCreatorHandle(details),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: postInfoFromYtdl(details, metrics, creatorHandle),
   };
 }
 
@@ -491,6 +523,24 @@ function ytdlCreatorHandle(details) {
   }
 
   return author || details.ownerChannelName || "";
+}
+
+function postInfoFromYtdl(details, metrics, creatorHandle) {
+  const author = details?.author && typeof details.author === "object" ? details.author : {};
+  const body = pickText(details?.description, details?.shortDescription);
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(details?.title),
+      author: pickSingleLineText(author.name, details?.ownerChannelName, creatorHandle),
+      author_handle: pickSingleLineText(author.user, author.name, creatorHandle),
+      body,
+      tags: normalizeTags(details?.keywords, body),
+      metrics,
+      source: metrics?.source || "youtube_ytdl_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "youtube_ytdl_best_effort" },
+  );
 }
 
 function toYoutubeAppError(error) {

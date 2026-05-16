@@ -23,6 +23,14 @@ import {
 import { normalizeInstagramUrl, resolveInstagramPost } from "./instagram";
 import { normalizePornhubUrl, resolvePornhubPost } from "./pornhub";
 import { normalizeYoutubeUrl, resolveYoutubePost } from "./youtube";
+import {
+  cleanDisplayText,
+  cleanSingleLineText,
+  createPostInfo,
+  normalizeTags,
+  pickSingleLineText,
+  pickText,
+} from "./post-info";
 
 const BILIBILI_HEADERS = {
   ...PAGE_HEADERS,
@@ -654,10 +662,13 @@ async function resolveTiktokPost(normalized, settings) {
     }
   }
 
+  const metrics = metricsFromTiktok(detail);
+
   return {
     assets: dedupeAssets(assets),
-    metrics: metricsFromTiktok(detail),
+    metrics,
     creator_handle: author,
+    post_info: postInfoFromTiktok(detail, metrics, author),
   };
 }
 
@@ -699,11 +710,13 @@ async function resolveDouyinPost(normalized, settings) {
   const filenameBase = `douyin_${safeFilenamePart(handle)}_${postId}`;
   const mediaHeaders = douyinMediaHeaders(pageUrl);
   const assets = douyinAssetsFromDetail(detail, filenameBase, mediaHeaders);
+  const metrics = metricsFromDouyin(detail);
 
   return {
     assets: dedupeAssets(assets),
-    metrics: metricsFromDouyin(detail),
+    metrics,
     creator_handle: handle,
+    post_info: postInfoFromDouyin(detail, metrics, handle),
   };
 }
 
@@ -745,10 +758,13 @@ async function resolveXiaohongshuPost(normalized, settings) {
     const fallbackAssets = xiaohongshuMetaAssets(text, active.shortcode, pageUrl);
 
     if (fallbackAssets.length > 0) {
+      const metrics = createMetrics("xiaohongshu_public_best_effort");
+
       return {
         assets: dedupeAssets(fallbackAssets),
-        metrics: createMetrics("xiaohongshu_public_best_effort"),
+        metrics,
         creator_handle: "",
+        post_info: postInfoFromHtmlMeta(text, metrics, ""),
       };
     }
 
@@ -769,10 +785,13 @@ async function resolveXiaohongshuPost(normalized, settings) {
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "小红书页面中没有发现可展示资源。", 404);
   }
 
+  const metrics = metricsFromXiaohongshu(note);
+
   return {
     assets: dedupeAssets(assets),
-    metrics: metricsFromXiaohongshu(note),
+    metrics,
     creator_handle: handle,
+    post_info: postInfoFromXiaohongshu(note, metrics, handle),
   };
 }
 
@@ -828,10 +847,13 @@ async function resolveKuaishouPost(normalized, settings) {
     const fallbackAssets = kuaishouMetaAssets(text, active.shortcode, pageUrl);
 
     if (fallbackAssets.length > 0) {
+      const metrics = createMetrics("kuaishou_public_best_effort");
+
       return {
         assets: dedupeAssets(fallbackAssets),
-        metrics: createMetrics("kuaishou_public_best_effort"),
+        metrics,
         creator_handle: "",
+        post_info: postInfoFromHtmlMeta(text, metrics, ""),
       };
     }
 
@@ -852,10 +874,13 @@ async function resolveKuaishouPost(normalized, settings) {
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "快手页面中没有发现可展示资源。", 404);
   }
 
+  const metrics = metricsFromKuaishou(photo);
+
   return {
     assets: dedupeAssets(assets),
-    metrics: metricsFromKuaishou(photo),
+    metrics,
     creator_handle: handle,
+    post_info: postInfoFromKuaishou(photo, detail, metrics, handle),
   };
 }
 
@@ -877,11 +902,12 @@ async function resolveTwitterPost(normalized, settings) {
   const tweet = normalizeTwitterTweet(tweetResult);
   let media = null;
   let metrics = createMetrics("twitter_public_best_effort");
+  let syndication = null;
 
   if (!tweet) {
     handleTwitterUnavailable(tweetResult);
 
-    const syndication = await requestTwitterSyndication(tweetId, settings);
+    syndication = await requestTwitterSyndication(tweetId, settings);
 
     media = Array.isArray(syndication?.mediaDetails) ? syndication.mediaDetails : null;
   } else {
@@ -938,6 +964,7 @@ async function resolveTwitterPost(normalized, settings) {
     assets: dedupeAssets(assets),
     metrics,
     creator_handle: normalized.canonical_url.includes("/status/") ? normalized.canonical_url.split("/")[3]?.replace("@", "") || "" : "",
+    post_info: postInfoFromTwitter(tweet, syndication, metrics, normalized),
   };
 }
 
@@ -984,7 +1011,8 @@ async function resolveBilibiliPost(normalized, settings) {
   return {
     assets: dedupeAssets(assets),
     metrics,
-    creator_handle: "",
+    creator_handle: bilibiliCreatorHandle(apiData?.view || initialState),
+    post_info: postInfoFromBilibili(apiData?.view || initialState, metrics),
   };
 }
 
@@ -1012,10 +1040,13 @@ async function resolveAcfunPost(normalized, settings) {
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "AcFun 页面中没有发现可下载视频。", 404);
   }
 
+  const metrics = metricsFromAcfun(videoInfo);
+
   return {
     assets: dedupeAssets(assets),
-    metrics: metricsFromAcfun(videoInfo),
+    metrics,
     creator_handle: handle === "unknown" ? "" : handle,
+    post_info: postInfoFromAcfun(videoInfo, metrics, handle === "unknown" ? "" : handle),
   };
 }
 
@@ -1064,6 +1095,15 @@ async function resolveFacebookPost(normalized, settings) {
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "Facebook 页面中没有发现可展示视频。", 404);
   }
 
+  const metrics = {
+    like_count: null,
+    comment_count: null,
+    view_count: firstRegexInt(text, /"play_count":(\d+)/),
+    save_count: null,
+    share_count: firstJsonCount(text, ["share_count", "shareCount", "shares_count", "sharesCount"]),
+    source: "facebook_public_best_effort",
+  };
+
   return {
     assets: [
       {
@@ -1073,15 +1113,9 @@ async function resolveFacebookPost(normalized, settings) {
         request_headers: { Referer: pageUrl },
       },
     ],
-    metrics: {
-      like_count: null,
-      comment_count: null,
-      view_count: firstRegexInt(text, /"play_count":(\d+)/),
-      save_count: null,
-      share_count: firstJsonCount(text, ["share_count", "shareCount", "shares_count", "sharesCount"]),
-      source: "facebook_public_best_effort",
-    },
+    metrics,
     creator_handle: "",
+    post_info: postInfoFromHtmlMeta(text, metrics, ""),
   };
 }
 
@@ -1515,10 +1549,13 @@ async function resolveKuaishouMobilePost({
       return null;
     }
 
+    const metrics = metricsFromKuaishou(photo);
+
     return {
       assets: dedupeAssets(assets),
-      metrics: metricsFromKuaishou(photo),
+      metrics,
       creator_handle: handle,
+      post_info: postInfoFromKuaishou(photo, detail, metrics, handle),
     };
   } catch {
     return null;
@@ -3086,6 +3123,274 @@ function handleTwitterUnavailable(tweetResult) {
   }
 
   throw new AppError(ErrorCode.NO_MEDIA_FOUND, "这个 Twitter/X 帖子不可用或已被删除。", 404);
+}
+
+function postInfoFromTiktok(detail, metrics, creatorHandle) {
+  const author = detail?.author && typeof detail.author === "object" ? detail.author : {};
+  const body = pickText(detail?.desc, dig(detail, "contents", 0, "desc"));
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(dig(detail, "shareMeta", "title"), titleFromBody(body)),
+      author: pickSingleLineText(author.nickname, author.uniqueId, creatorHandle),
+      author_handle: pickSingleLineText(author.uniqueId, creatorHandle),
+      body,
+      tags: normalizeTags(tiktokTags(detail), body),
+      metrics,
+      source: metrics?.source || "tiktok_public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "tiktok_public_best_effort" },
+  );
+}
+
+function postInfoFromDouyin(detail, metrics, creatorHandle) {
+  const author = detail?.author && typeof detail.author === "object" ? detail.author : {};
+  const body = pickText(detail?.desc, detail?.description);
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(detail?.title, titleFromBody(body)),
+      author: pickSingleLineText(author.nickname, author.name, creatorHandle),
+      author_handle: pickSingleLineText(author.unique_id, author.short_id, creatorHandle),
+      body,
+      tags: normalizeTags(douyinTags(detail), body),
+      metrics,
+      source: metrics?.source || "douyin_public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "douyin_public_best_effort" },
+  );
+}
+
+function postInfoFromXiaohongshu(note, metrics, creatorHandle) {
+  const user = note?.user && typeof note.user === "object" ? note.user : {};
+  const body = pickText(note?.desc, note?.description, note?.content);
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(note?.title, titleFromBody(body)),
+      author: pickSingleLineText(user.nickname, user.nickName, creatorHandle),
+      author_handle: pickSingleLineText(user.userId, user.user_id, creatorHandle),
+      body,
+      tags: normalizeTags(xiaohongshuTags(note), body),
+      metrics,
+      source: metrics?.source || "xiaohongshu_public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "xiaohongshu_public_best_effort" },
+  );
+}
+
+function postInfoFromKuaishou(photo, detail, metrics, creatorHandle) {
+  const author = detail?.author && typeof detail.author === "object" ? detail.author : {};
+  const body = pickText(
+    photo?.caption,
+    photo?.captionText,
+    photo?.description,
+    photo?.content,
+    photo?.workDescription,
+  );
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(photo?.title, photo?.workTitle, titleFromBody(body)),
+      author: pickSingleLineText(author.name, photo?.userName, creatorHandle),
+      author_handle: pickSingleLineText(author.id, photo?.userEid, photo?.userId, creatorHandle),
+      body,
+      tags: normalizeTags(kuaishouTags(photo), body),
+      metrics,
+      source: metrics?.source || "kuaishou_public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "kuaishou_public_best_effort" },
+  );
+}
+
+function postInfoFromTwitter(tweet, syndication, metrics, normalized) {
+  const legacy = tweet?.legacy && typeof tweet.legacy === "object" ? tweet.legacy : {};
+  const user = dig(tweet, "core", "user_results", "result", "legacy") || {};
+  const canonicalHandle = normalized.canonical_url.includes("/status/")
+    ? normalized.canonical_url.split("/")[3]?.replace("@", "") || ""
+    : "";
+  const body = pickText(
+    dig(tweet, "note_tweet", "note_tweet_results", "result", "text"),
+    legacy.full_text,
+    syndication?.text,
+  );
+
+  return createPostInfo(
+    {
+      title: titleFromBody(body),
+      author: pickSingleLineText(user.name, syndication?.user?.name, canonicalHandle),
+      author_handle: pickSingleLineText(user.screen_name, syndication?.user?.screen_name, canonicalHandle),
+      body,
+      tags: normalizeTags(twitterTags(legacy), body),
+      metrics,
+      source: metrics?.source || "twitter_public_best_effort",
+    },
+    { metrics, creatorHandle: canonicalHandle, source: metrics?.source || "twitter_public_best_effort" },
+  );
+}
+
+function postInfoFromBilibili(data, metrics) {
+  const video = bilibiliVideoData(data);
+  const creatorHandle = bilibiliCreatorHandle(data);
+  const body = pickText(video?.desc, video?.description, video?.dynamic);
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(video?.title, data?.title),
+      author: creatorHandle,
+      author_handle: creatorHandle,
+      body,
+      tags: normalizeTags(bilibiliTags(data), body),
+      metrics,
+      source: metrics?.source || "bilibili_public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "bilibili_public_best_effort" },
+  );
+}
+
+function postInfoFromAcfun(videoInfo, metrics, creatorHandle) {
+  const body = pickText(videoInfo?.description, videoInfo?.desc, videoInfo?.intro);
+
+  return createPostInfo(
+    {
+      title: pickSingleLineText(videoInfo?.title, videoInfo?.caption, titleFromBody(body)),
+      author: creatorHandle,
+      author_handle: creatorHandle,
+      body,
+      tags: normalizeTags(acfunTags(videoInfo), body),
+      metrics,
+      source: metrics?.source || "acfun_public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "acfun_public_best_effort" },
+  );
+}
+
+function postInfoFromHtmlMeta(text, metrics, creatorHandle) {
+  const body = pickText(metaContents(text, ["og:description", "twitter:description", "description"]));
+  const title = pickSingleLineText(
+    metaContents(text, ["og:title", "twitter:title", "title"]),
+    htmlTitleFromText(text),
+    titleFromBody(body),
+  );
+  const author = pickSingleLineText(metaContents(text, ["author", "article:author", "og:video:actor"]), creatorHandle);
+
+  return createPostInfo(
+    {
+      title,
+      author,
+      author_handle: creatorHandle,
+      body,
+      tags: normalizeTags(metaKeywords(text), body),
+      metrics,
+      source: metrics?.source || "public_best_effort",
+    },
+    { metrics, creatorHandle, source: metrics?.source || "public_best_effort" },
+  );
+}
+
+function titleFromBody(body) {
+  const firstLine = cleanSingleLineText(String(body || "").split("\n")[0], { maxLength: 140 });
+
+  return firstLine.length > 112 ? `${firstLine.slice(0, 109).trimEnd()}...` : firstLine;
+}
+
+function tiktokTags(detail) {
+  const textExtra = Array.isArray(detail?.textExtra) ? detail.textExtra : [];
+
+  return textExtra.map((item) => item?.hashtagName || item?.hashtag_name || item?.name);
+}
+
+function douyinTags(detail) {
+  const textExtra = Array.isArray(detail?.text_extra) ? detail.text_extra : [];
+
+  return textExtra.map((item) => item?.hashtag_name || item?.hashtagName || item?.name);
+}
+
+function xiaohongshuTags(note) {
+  const values = [];
+
+  for (const key of ["tagList", "hashTagList", "hashTags", "topicList"]) {
+    if (Array.isArray(note?.[key])) {
+      values.push(...note[key]);
+    }
+  }
+
+  return values;
+}
+
+function kuaishouTags(photo) {
+  const values = [];
+
+  for (const key of ["tagList", "tags", "topics"]) {
+    if (Array.isArray(photo?.[key])) {
+      values.push(...photo[key]);
+    }
+  }
+
+  return values;
+}
+
+function twitterTags(legacy) {
+  const hashtags = Array.isArray(legacy?.entities?.hashtags) ? legacy.entities.hashtags : [];
+
+  return hashtags.map((item) => item?.text);
+}
+
+function bilibiliVideoData(data) {
+  if (!data || typeof data !== "object") {
+    return {};
+  }
+
+  return data.videoData && typeof data.videoData === "object" ? data.videoData : data;
+}
+
+function bilibiliCreatorHandle(data) {
+  const video = bilibiliVideoData(data);
+  const owner = video?.owner && typeof video.owner === "object" ? video.owner : {};
+
+  return pickSingleLineText(owner.name, data?.upData?.name, data?.owner?.name);
+}
+
+function bilibiliTags(data) {
+  const video = bilibiliVideoData(data);
+  const values = [];
+
+  for (const key of ["tags", "tag", "tagList"]) {
+    if (Array.isArray(video?.[key])) {
+      values.push(...video[key]);
+    }
+
+    if (Array.isArray(data?.[key])) {
+      values.push(...data[key]);
+    }
+  }
+
+  return values;
+}
+
+function acfunTags(videoInfo) {
+  const values = [];
+
+  for (const key of ["tagList", "tags", "tagNames"]) {
+    if (Array.isArray(videoInfo?.[key])) {
+      values.push(...videoInfo[key]);
+    }
+  }
+
+  return values;
+}
+
+function metaKeywords(text) {
+  return metaContents(text, ["keywords", "news_keywords"])
+    .flatMap((value) => String(value).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function htmlTitleFromText(text) {
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1];
+
+  return title ? cleanDisplayText(htmlUnescape(title), { maxLength: 240 }) : "";
 }
 
 function metricsFromTiktok(detail) {

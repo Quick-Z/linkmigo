@@ -18,6 +18,14 @@ import {
   responseJson,
   scriptTexts,
 } from "./utils";
+import {
+  cleanDisplayText,
+  cleanSingleLineText,
+  createPostInfo,
+  pickSingleLineText,
+  pickText,
+  normalizeTags,
+} from "./post-info";
 
 const SUPPORTED_KINDS = new Set(["p", "reel", "reels", "tv"]);
 const INSTAGRAM_HOSTS = new Set([
@@ -155,11 +163,18 @@ export async function resolveInstagramPost(normalized, settings) {
   }
 
   const html = await fetchPublicPage(normalized.canonical_url, settings);
+  const metrics = parseMetricsFromHtml(html);
+  const creatorHandle = parseCreatorFromHtml(html);
 
   return {
     assets: parseAssetsFromHtml(html),
-    metrics: parseMetricsFromHtml(html),
-    creator_handle: parseCreatorFromHtml(html),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: parsePostInfoFromHtml(html, {
+      metrics,
+      creatorHandle,
+      shortcode: normalized.shortcode,
+    }),
   };
 }
 
@@ -360,11 +375,14 @@ async function resolveFromMobileApi(shortcode, settings) {
   }
 
   const data = await requestMobileMediaInfo(mediaId, settings);
+  const metrics = parseMetricsFromInstagramData(data);
+  const creatorHandle = parseCreatorFromInstagramData(data);
 
   return {
     assets: parseAssetsFromInstagramData(data),
-    metrics: parseMetricsFromInstagramData(data),
-    creator_handle: parseCreatorFromInstagramData(data),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: parsePostInfoFromInstagramData(data, { metrics, creatorHandle }),
   };
 }
 
@@ -426,11 +444,14 @@ async function resolveFromEmbedContext(shortcode, settings) {
     const payload = JSON.parse(match[1]);
     const contextJson = payload && typeof payload === "object" ? payload.contextJSON : "";
     const data = typeof contextJson === "string" ? JSON.parse(contextJson) : null;
+    const metrics = parseMetricsFromInstagramData(data);
+    const creatorHandle = parseCreatorFromInstagramData(data);
 
     return {
       assets: parseAssetsFromInstagramData(data),
-      metrics: parseMetricsFromInstagramData(data),
-      creator_handle: parseCreatorFromInstagramData(data),
+      metrics,
+      creator_handle: creatorHandle,
+      post_info: parsePostInfoFromInstagramData(data, { metrics, creatorHandle }),
     };
   } catch {
     return { assets: [], metrics: createMetrics(), creator_handle: "" };
@@ -478,11 +499,14 @@ async function resolveFromWebGraphql(shortcode, settings) {
     const data = await responseJson(response);
     const gqlData = data && typeof data === "object" ? data.data : null;
     const wrapped = { gql_data: gqlData };
+    const metrics = parseMetricsFromInstagramData(wrapped);
+    const creatorHandle = parseCreatorFromInstagramData(wrapped);
 
     return {
       assets: parseAssetsFromInstagramData(wrapped),
-      metrics: parseMetricsFromInstagramData(wrapped),
-      creator_handle: parseCreatorFromInstagramData(wrapped),
+      metrics,
+      creator_handle: creatorHandle,
+      post_info: parsePostInfoFromInstagramData(wrapped, { metrics, creatorHandle }),
     };
   } catch {
     return { assets: [], metrics: createMetrics(), creator_handle: "" };
@@ -550,6 +574,119 @@ export function parseCreatorFromHtml(html) {
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
 
   return creatorHandleFromText(title ? htmlUnescape(title) : "");
+}
+
+export function parsePostInfoFromInstagramData(data, options = {}) {
+  const media = firstInstagramMediaData(data) || (data && typeof data === "object" ? data : {});
+  const metrics = options.metrics ?? parseMetricsFromInstagramData(data);
+  const creatorHandle = cleanSingleLineText(
+    options.creatorHandle || parseCreatorFromInstagramData(data),
+    { maxLength: 120 },
+  );
+  const body = pickText(
+    instagramCaptionText(media),
+    instagramCaptionText(data),
+  );
+  const author = pickSingleLineText(
+    dig(media, "user", "full_name"),
+    dig(media, "user", "username"),
+    dig(media, "owner", "full_name"),
+    dig(media, "owner", "username"),
+    dig(media, "author", "name"),
+    dig(media, "author", "username"),
+    dig(data, "gql_data", "shortcode_media", "owner", "full_name"),
+    dig(data, "gql_data", "xdt_shortcode_media", "owner", "full_name"),
+    creatorHandle,
+  );
+  const title = pickSingleLineText(
+    media.title,
+    media.name,
+    instagramTitleFromCaption(body),
+    author ? `Instagram post by ${author}` : "",
+  );
+
+  return createPostInfo(
+    {
+      title,
+      author,
+      author_handle: creatorHandle,
+      body,
+      tags: normalizeTags(instagramTagsFromData(media), body),
+      metrics,
+      source: metrics?.source || "instagram_public_best_effort",
+    },
+    {
+      metrics,
+      creatorHandle,
+      source: metrics?.source || "instagram_public_best_effort",
+    },
+  );
+}
+
+export function parsePostInfoFromHtml(html, options = {}) {
+  const metrics = options.metrics ?? parseMetricsFromHtml(html);
+  const creatorHandle = cleanSingleLineText(
+    options.creatorHandle || parseCreatorFromHtml(html),
+    { maxLength: 120 },
+  );
+
+  for (const text of scriptTexts(html, { type: "application/ld+json" })) {
+    for (const data of loadsJsonVariants(text)) {
+      const postInfo = parsePostInfoFromInstagramData(data, { metrics, creatorHandle });
+
+      if (postInfo.body || postInfo.title || postInfo.author || postInfo.author_handle) {
+        return postInfo;
+      }
+    }
+  }
+
+  for (const text of scriptTexts(html)) {
+    if (!text) {
+      continue;
+    }
+
+    for (const data of extractEmbeddedJsonObjects(text, [
+      "window._sharedData",
+      "__additionalDataLoaded",
+      "__bbox",
+      "edge_sidecar_to_children",
+    ])) {
+      const postInfo = parsePostInfoFromInstagramData(data, { metrics, creatorHandle });
+
+      if (postInfo.body || postInfo.title || postInfo.author || postInfo.author_handle) {
+        return postInfo;
+      }
+    }
+  }
+
+  const metaTitle = pickSingleLineText(
+    metaContents(html, ["og:title", "twitter:title", "title"]),
+    htmlTitle(html),
+  );
+  const descriptions = metaContents(html, ["og:description", "twitter:description", "description"]);
+  const body = pickText(
+    descriptions.map((description) => captionFromInstagramDescription(description)),
+    descriptions,
+  );
+  const title = cleanInstagramMetaTitle(metaTitle) ||
+    pickSingleLineText(instagramTitleFromCaption(body), creatorHandle ? `Instagram post by ${creatorHandle}` : "");
+
+  return createPostInfo(
+    {
+      title,
+      author: creatorHandle,
+      author_handle: creatorHandle,
+      body,
+      tags: normalizeTags([], body),
+      metrics,
+      source: metrics?.source || "instagram_public_best_effort",
+    },
+    {
+      metrics,
+      creatorHandle,
+      source: metrics?.source || "instagram_public_best_effort",
+    },
+  );
 }
 
 function findCreatorHandle(data, depth = 0) {
@@ -631,6 +768,144 @@ function normalizeCreatorHandle(value) {
   const normalized = value.trim().replace(/^@+/, "");
 
   return /^[A-Za-z0-9._]{2,30}$/.test(normalized) ? normalized : "";
+}
+
+function firstInstagramMediaData(data, depth = 0) {
+  if (!data || typeof data !== "object" || depth > 7) {
+    return null;
+  }
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const nested = firstInstagramMediaData(item, depth + 1);
+
+      if (nested) {
+        return nested;
+      }
+    }
+
+    return null;
+  }
+
+  const gqlMedia = dig(data, "gql_data", "shortcode_media") || dig(data, "gql_data", "xdt_shortcode_media");
+
+  if (gqlMedia && typeof gqlMedia === "object") {
+    return gqlMedia;
+  }
+
+  if (looksLikeMediaData(data)) {
+    return data;
+  }
+
+  for (const key of ["items", "media", "shortcode_media", "xdt_shortcode_media", "node"]) {
+    const nested = firstInstagramMediaData(data[key], depth + 1);
+
+    if (nested) {
+      return nested;
+    }
+  }
+
+  for (const value of Object.values(data)) {
+    const nested = firstInstagramMediaData(value, depth + 1);
+
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+function instagramCaptionText(data) {
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+
+  const edgeCaption = captionFromEdge(data.edge_media_to_caption);
+  const parentCaption = captionFromEdge(data.edge_media_to_parent_comment);
+
+  return pickText(
+    dig(data, "caption", "text"),
+    typeof data.caption === "string" ? data.caption : "",
+    edgeCaption,
+    parentCaption,
+    data.caption_text,
+    data.text,
+    data.description,
+  );
+}
+
+function captionFromEdge(edge) {
+  const edges = Array.isArray(edge?.edges) ? edge.edges : [];
+  const first = edges[0]?.node;
+
+  return first && typeof first === "object" ? first.text : "";
+}
+
+function instagramTagsFromData(data) {
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+
+  const tags = [];
+  const taggedUsers = data.usertags?.in || data.edge_media_to_tagged_user?.edges;
+
+  if (Array.isArray(taggedUsers)) {
+    for (const item of taggedUsers) {
+      const user = item?.user || item?.node?.user || item?.node;
+      const username = user && typeof user === "object" ? user.username : "";
+
+      if (username) {
+        tags.push(username);
+      }
+    }
+  }
+
+  return tags;
+}
+
+function instagramTitleFromCaption(caption) {
+  const firstLine = cleanSingleLineText(String(caption || "").split("\n")[0], { maxLength: 120 });
+
+  if (!firstLine) {
+    return "";
+  }
+
+  return firstLine.length > 96 ? `${firstLine.slice(0, 93).trimEnd()}...` : firstLine;
+}
+
+function captionFromInstagramDescription(value) {
+  const text = cleanDisplayText(value, { maxLength: 8000 });
+
+  if (!text) {
+    return "";
+  }
+
+  const quoted = /:\s*["']([\s\S]+?)["']\s*$/.exec(text);
+
+  if (quoted) {
+    return cleanDisplayText(quoted[1], { maxLength: 8000 });
+  }
+
+  const colon = /\bon\b[^:]{1,80}:\s*([\s\S]+)$/i.exec(text);
+
+  if (colon) {
+    return cleanDisplayText(colon[1].replace(/^["']|["']$/g, ""), { maxLength: 8000 });
+  }
+
+  return "";
+}
+
+function cleanInstagramMetaTitle(value) {
+  return cleanSingleLineText(value, { maxLength: 220 })
+    .replace(/\s*[•-]\s*Instagram(?: photos and videos)?\s*$/i, "")
+    .trim();
+}
+
+function htmlTitle(html) {
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+
+  return title ? htmlUnescape(title) : "";
 }
 
 

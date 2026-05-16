@@ -84,6 +84,45 @@ textarea {
   width: 0;
 }
 
+.lm-metric-marquee {
+  animation: lm-metric-marquee 7s linear infinite;
+  will-change: transform;
+}
+
+.lm-copy-toast {
+  animation: lm-copy-toast-pop 1.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes lm-metric-marquee {
+  0%,
+  14% {
+    transform: translateX(0);
+  }
+
+  86%,
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes lm-copy-toast-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -14px) scale(0.94);
+  }
+
+  18%,
+  72% {
+    opacity: 1;
+    transform: translate(-50%, 8px) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 0) scale(0.98);
+  }
+}
+
 .lm-themed-action:not(:disabled) {
   transform: translateY(0) scale(1);
   will-change: background-color, border-color, box-shadow, transform;

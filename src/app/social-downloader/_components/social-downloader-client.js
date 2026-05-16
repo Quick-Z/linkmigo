@@ -49,6 +49,11 @@ const copyByLanguage = {
     author: "作者",
     body: "正文内容",
     closeDetails: "关闭信息",
+    copiedBody: "文案已复制",
+    copiedTitle: "标题已复制",
+    copyBody: "复制文案",
+    copyFailed: "复制失败，请手动复制",
+    copyTitle: "复制标题",
     noContent: "暂无正文内容",
     noTags: "暂无 tag",
     openPostDetails: "查看文案和数据",
@@ -94,7 +99,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 Instagram、TikTok、抖音、小红书、快手、AcFun、YouTube 或 Pornhub 链接...",
+    urlPlaceholder: "粘贴 ins、小红书、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -122,6 +127,11 @@ const copyByLanguage = {
     author: "Author",
     body: "Caption",
     closeDetails: "Close details",
+    copiedBody: "Caption copied",
+    copiedTitle: "Title copied",
+    copyBody: "Copy caption",
+    copyFailed: "Copy failed. Please copy manually.",
+    copyTitle: "Copy title",
     noContent: "No caption available",
     noTags: "No tags",
     openPostDetails: "View caption and data",
@@ -167,7 +177,7 @@ const copyByLanguage = {
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, TikTok, Douyin, Xiaohongshu, Kuaishou, AcFun, YouTube, or Pornhub URL...",
+    urlPlaceholder: "Paste Instagram, Xiaohongshu, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -1326,7 +1336,7 @@ function PreferenceControls({
   );
 }
 
-function FloatingScrollArea({ children, theme }) {
+function FloatingScrollArea({ children, className = "", contentClassName = "px-3 py-3 sm:px-5", theme }) {
   const viewportRef = useRef(null);
   const [scrollbarState, setScrollbarState] = useState({
     hasOverflow: false,
@@ -1390,9 +1400,9 @@ function FloatingScrollArea({ children, theme }) {
   }, [children, updateScrollbar]);
 
   return (
-    <div className="group relative min-h-0 flex-1">
+    <div className={`group relative min-h-0 flex-1 ${className}`}>
       <div
-        className="lm-floating-scroll h-full min-h-0 overflow-y-auto px-3 py-3 sm:px-5"
+        className={`lm-floating-scroll h-full min-h-0 overflow-y-auto ${contentClassName}`}
         onScroll={updateScrollbar}
         ref={viewportRef}
       >
@@ -1584,6 +1594,22 @@ function InfoIcon() {
   );
 }
 
+function ChevronLeftIcon() {
+  return (
+    <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24">
+      <path d="m15 6-6 6 6 6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24">
+      <path d="m9 6 6 6-6 6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" />
+    </svg>
+  );
+}
+
 function PostInfoModal({ copy, language, onClose, result, theme }) {
   const info = result.post_info ?? {};
   const metrics = info.metrics ?? result.metrics;
@@ -1594,12 +1620,52 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
   const tags = Array.isArray(info.tags) ? info.tags : [];
   const metricItems = createMetricItems(metrics, copy);
   const postChrome = getPostChrome(result.platform, theme);
-  const previewAsset = result.assets?.[0] ?? null;
+  const assets = Array.isArray(result.assets) ? result.assets : [];
+  const [assetIndex, setAssetIndex] = useState(0);
+  const [toast, setToast] = useState(null);
+  const [toastId, setToastId] = useState(0);
+  const previewAsset = assets[assetIndex] ?? assets[0] ?? null;
+  const hasMultipleAssets = assets.length > 1;
+
+  const showPreviousAsset = useCallback(() => {
+    setAssetIndex((current) => (assets.length ? (current - 1 + assets.length) % assets.length : 0));
+  }, [assets.length]);
+
+  const showNextAsset = useCallback(() => {
+    setAssetIndex((current) => (assets.length ? (current + 1) % assets.length : 0));
+  }, [assets.length]);
+
+  const copyText = useCallback(async (text, successMessage, event) => {
+    const value = String(text || "").trim();
+
+    if (!value) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      setToast({ message: successMessage });
+      setToastId((current) => current + 1);
+    } catch {
+      setToast({ message: copy.copyFailed });
+      setToastId((current) => current + 1);
+    }
+  }, [copy.copyFailed]);
 
   useEffect(() => {
     function onKeyDown(event) {
       if (event.key === "Escape") {
         onClose();
+      }
+
+      if (hasMultipleAssets && event.key === "ArrowLeft") {
+        event.preventDefault();
+        showPreviousAsset();
+      }
+
+      if (hasMultipleAssets && event.key === "ArrowRight") {
+        event.preventDefault();
+        showNextAsset();
       }
     }
 
@@ -1608,7 +1674,23 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [onClose]);
+  }, [hasMultipleAssets, onClose, showNextAsset, showPreviousAsset]);
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setToast(null);
+    }, 1600);
+
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    setAssetIndex(0);
+  }, [result.request_id]);
 
   return (
     <div
@@ -1626,9 +1708,14 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
         style={buildPlatformPostShellStyle(postChrome)}
       >
         <SocialPostMediaPane
+          assetIndex={assetIndex}
           asset={previewAsset}
+          assetCount={assets.length}
           chrome={postChrome}
           copy={copy}
+          hasMultipleAssets={hasMultipleAssets}
+          onNext={showNextAsset}
+          onPrevious={showPreviousAsset}
           platform={result.platform}
           title={title || body || result.shortcode}
         />
@@ -1657,8 +1744,8 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
             </button>
           </div>
 
-          <div className="lm-floating-scroll min-h-0 overflow-y-auto px-5 py-5">
-            <div className="grid gap-5">
+          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4 px-5 py-5">
+            <div className="grid shrink-0 gap-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="rounded-full px-3 py-1.5 text-xs font-bold" style={buildPostPlatformPillStyle(postChrome)}>
                   {getPlatformLabel(result.platform, copy)}
@@ -1669,37 +1756,77 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
               </div>
 
               {title ? (
-                <h2 className="break-words text-[1.55rem] font-black leading-tight" style={{ color: postChrome.text }}>
+                <h2
+                  className="cursor-pointer break-words text-[1.55rem] font-black leading-tight transition hover:opacity-75"
+                  onClick={(event) => copyText(title, copy.copiedTitle, event)}
+                  role="button"
+                  style={{ color: postChrome.text }}
+                  tabIndex={0}
+                  title={copy.copyTitle}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      copyText(title, copy.copiedTitle, event);
+                    }
+                  }}
+                >
                   {title}
                 </h2>
               ) : null}
-
-              <div className="break-words whitespace-pre-wrap text-[15px] font-medium leading-7" style={{ color: postChrome.text }}>
-                {body || copy.noContent}
-              </div>
-
-              {tags.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {tags.map((tag) => (
-                    <span className="max-w-full break-all rounded-full px-3 py-1.5 text-xs font-bold" key={tag} style={buildPostTagStyle(postChrome)}>
-                      #{tag}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
             </div>
+
+            <FloatingScrollArea className="min-h-0" contentClassName="pr-5" theme={{ ...theme, accent: postChrome.accent }}>
+              <div className="grid gap-5 pb-1">
+                <div
+                  className={`break-words whitespace-pre-wrap text-[15px] font-medium leading-7 ${body ? "cursor-pointer transition hover:opacity-75" : ""}`}
+                  onClick={(event) => body && copyText(body, copy.copiedBody, event)}
+                  onKeyDown={(event) => {
+                    if (body && (event.key === "Enter" || event.key === " ")) {
+                      event.preventDefault();
+                      copyText(body, copy.copiedBody, event);
+                    }
+                  }}
+                  role={body ? "button" : undefined}
+                  style={{ color: postChrome.text }}
+                  tabIndex={body ? 0 : undefined}
+                  title={body ? copy.copyBody : undefined}
+                >
+                  {body || copy.noContent}
+                </div>
+
+                {tags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {tags.map((tag) => (
+                      <span className="max-w-full break-all rounded-full px-3 py-1.5 text-xs font-bold" key={tag} style={buildPostTagStyle(postChrome)}>
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </FloatingScrollArea>
           </div>
 
           <div className="border-t px-5 py-4" style={{ borderColor: postChrome.divider }}>
             <PostMetricBar chrome={postChrome} copy={copy} items={metricItems} language={language} />
           </div>
         </div>
+
+        {toast ? (
+          <div
+            key={toastId}
+            className="lm-copy-toast pointer-events-none absolute left-1/2 top-4 z-30 rounded-full border px-4 py-2 text-sm font-bold shadow-[0_18px_42px_rgba(15,23,42,0.16)]"
+            style={buildPostToastStyle(postChrome)}
+          >
+            {toast.message}
+          </div>
+        ) : null}
       </section>
     </div>
   );
 }
 
-function SocialPostMediaPane({ asset, chrome, copy, platform, title }) {
+function SocialPostMediaPane({ asset, assetCount, assetIndex, chrome, copy, hasMultipleAssets, onNext, onPrevious, platform, title }) {
   return (
     <div className="relative min-h-0 overflow-hidden" style={{ background: chrome.mediaBackground }}>
       <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between px-5 py-4">
@@ -1716,6 +1843,32 @@ function SocialPostMediaPane({ asset, chrome, copy, platform, title }) {
           <PostAssetPreview asset={asset} chrome={chrome} title={title} />
         </div>
       </div>
+
+      {hasMultipleAssets ? (
+        <>
+          <button
+            aria-label={copy.previous}
+            className="absolute left-4 top-1/2 z-20 grid size-11 -translate-y-1/2 cursor-pointer place-items-center rounded-full border text-sm font-black shadow-[0_14px_34px_rgba(4,15,32,0.22)] backdrop-blur-xl transition hover:scale-[1.04]"
+            onClick={onPrevious}
+            style={buildPostMediaNavStyle(chrome)}
+            type="button"
+          >
+            <ChevronLeftIcon />
+          </button>
+          <button
+            aria-label={copy.next}
+            className="absolute right-4 top-1/2 z-20 grid size-11 -translate-y-1/2 cursor-pointer place-items-center rounded-full border text-sm font-black shadow-[0_14px_34px_rgba(4,15,32,0.22)] backdrop-blur-xl transition hover:scale-[1.04]"
+            onClick={onNext}
+            style={buildPostMediaNavStyle(chrome)}
+            type="button"
+          >
+            <ChevronRightIcon />
+          </button>
+          <div className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-bold backdrop-blur-xl" style={buildPostMediaCounterStyle(chrome)}>
+            {assetIndex + 1} / {assetCount}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -1781,18 +1934,36 @@ function PostMetricBar({ chrome, copy, items, language }) {
   return (
     <div className="grid grid-cols-5 gap-2">
       {items.map((item) => (
-        <div className="flex min-w-0 items-center gap-2 rounded-[0.85rem] px-3 py-2" key={item.label} style={buildPostMetricStyle(chrome)}>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full" style={buildPostMetricIconStyle(chrome)}>
-            <MetricIcon label={item.label} copy={copy} />
-          </span>
-          <div className="min-w-0">
+        <div className="grid min-w-0 gap-2 rounded-[0.85rem] px-2.5 py-2" key={item.label} style={buildPostMetricStyle(chrome)}>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="grid size-7 shrink-0 place-items-center rounded-full" style={buildPostMetricIconStyle(chrome)}>
+              <MetricIcon label={item.label} copy={copy} />
+            </span>
             <div className="truncate text-[11px] font-bold" style={{ color: chrome.muted }}>{item.label}</div>
-            <div className="truncate text-sm font-black" style={{ color: item.value == null ? chrome.muted : chrome.accent }}>
-              {formatCompactNumber(item.value, language)}
-            </div>
+          </div>
+          <div className="min-w-0 overflow-hidden">
+            <MetricValue chrome={chrome} language={language} value={item.value} />
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function MetricValue({ chrome, language, value }) {
+  const text = formatFullNumber(value, language);
+  const shouldMarquee = text.length > 9;
+
+  return (
+    <div className="min-w-0 whitespace-nowrap text-sm font-black leading-5" style={{ color: value == null ? chrome.muted : chrome.accent }} title={text}>
+      {shouldMarquee ? (
+        <span className="lm-metric-marquee inline-flex min-w-full">
+          <span className="pr-6">{text}</span>
+          <span aria-hidden="true" className="pr-6">{text}</span>
+        </span>
+      ) : (
+        <span className="block truncate">{text}</span>
+      )}
     </div>
   );
 }
@@ -1895,6 +2066,14 @@ function createMetricItems(metrics, copy) {
     { label: copy.shares, value: metrics?.share_count },
     { label: copy.favorites, value: metrics?.save_count },
   ];
+}
+
+function formatFullNumber(value, language = "zh") {
+  if (!Number.isFinite(value ?? NaN) || value == null || value < 0) {
+    return "/";
+  }
+
+  return new Intl.NumberFormat(language === "zh" ? "zh-CN" : "en-US").format(value);
 }
 
 function createInitialResolveProgress(phase = "resolving") {
@@ -2141,6 +2320,22 @@ function buildPostMediaFrameStyle(chrome) {
   };
 }
 
+function buildPostMediaNavStyle(chrome) {
+  return {
+    color: chrome.mediaText,
+    background: chrome.mediaBadgeBackground,
+    borderColor: chrome.mediaBorder,
+  };
+}
+
+function buildPostMediaCounterStyle(chrome) {
+  return {
+    color: chrome.mediaText,
+    background: chrome.mediaBadgeBackground,
+    borderColor: chrome.mediaBorder,
+  };
+}
+
 function buildPostMetricStyle(chrome) {
   return {
     background: chrome.metricBackground,
@@ -2160,6 +2355,17 @@ function buildPostAudioIconStyle(chrome) {
     color: chrome.accent,
     background: chrome.metricIconBackground,
     borderColor: chrome.mediaBorder,
+  };
+}
+
+function buildPostToastStyle(chrome) {
+  return {
+    color: chrome.text,
+    background: "rgba(255,255,255,0.58)",
+    borderColor: "rgba(255,255,255,0.72)",
+    boxShadow: `0 18px 42px ${hexToRgba(chrome.accent, 0.16)}, inset 0 1px 0 rgba(255,255,255,0.78)`,
+    WebkitBackdropFilter: "blur(22px) saturate(1.35)",
+    backdropFilter: "blur(22px) saturate(1.35)",
   };
 }
 

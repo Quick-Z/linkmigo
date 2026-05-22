@@ -1,5 +1,10 @@
-import { redirect } from "next/navigation";
+import { SocialDownloaderClient } from "./social-downloader/_components/social-downloader-client";
+
+export const metadata = {
+  title: "LinkMigo",
+  description: "解析公开 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、YouTube、Pornhub 链接并展示媒体资源。",
+};
 
 export default function Home() {
-  redirect("/social-downloader");
+  return <SocialDownloaderClient />;
 }

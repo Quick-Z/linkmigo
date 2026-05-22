@@ -39,6 +39,7 @@ const copyByLanguage = {
     comments: "评论",
     darkMode: "暗色",
     download: "下载",
+    downloadAll: "全部下载",
     downloadSelected: "下载选中项",
     expiredAt: "过期时间",
     favorites: "收藏",
@@ -133,6 +134,7 @@ const copyByLanguage = {
     comments: "Comments",
     darkMode: "Dark",
     download: "Download",
+    downloadAll: "Download All",
     downloadSelected: "Download Selected",
     expiredAt: "Expired at",
     favorites: "Favorites",
@@ -871,6 +873,7 @@ export function SocialDownloaderClient() {
   const [resolvingPlatform, setResolvingPlatform] = useState("");
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
   const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
+  const [postInfoInitialAssetIndex, setPostInfoInitialAssetIndex] = useState(0);
   const resolveRunRef = useRef(0);
 
   const normalizedUrl = extractUrlCandidate(url);
@@ -913,10 +916,12 @@ export function SocialDownloaderClient() {
     if (!result) {
       setSelectedAssetIds([]);
       setIsPostInfoOpen(false);
+      setPostInfoInitialAssetIndex(0);
       return;
     }
 
     setSelectedAssetIds(result.assets.map((asset) => asset.id));
+    setPostInfoInitialAssetIndex(0);
   }, [result]);
 
   async function onSubmit(event) {
@@ -940,6 +945,7 @@ export function SocialDownloaderClient() {
     setError(null);
     setResult(null);
     setIsPostInfoOpen(false);
+    setPostInfoInitialAssetIndex(0);
     setResolveProgress(createInitialResolveProgress());
     setSelectedAssetIds([]);
 
@@ -1050,6 +1056,7 @@ export function SocialDownloaderClient() {
     setError(null);
     setIsLoading(false);
     setIsPostInfoOpen(false);
+    setPostInfoInitialAssetIndex(0);
     setIsInputFocused(false);
     setIsUrlInputHovered(false);
     setResolveProgress(null);
@@ -1121,6 +1128,46 @@ export function SocialDownloaderClient() {
 
       return next;
     });
+  }
+
+  function openPostInfoModal(assetIndex = 0) {
+    const assetCount = result?.assets?.length ?? 0;
+
+    setPostInfoInitialAssetIndex(clampAssetIndex(assetIndex, assetCount));
+    setIsPostInfoOpen(true);
+  }
+
+  function downloadCurrentAsset(asset) {
+    if (!asset) {
+      return;
+    }
+
+    logClientAction("preview_asset_download_clicked", {
+      asset_id: asset.id,
+      filename: asset.filename,
+      media_type: asset.media_type,
+      download_url: asset.download_url,
+      source: "post_info_modal",
+    });
+
+    triggerBrowserDownload(apiUrl(asset.download_url));
+  }
+
+  function downloadAllAssets() {
+    if (!result || result.assets.length === 0) {
+      return;
+    }
+
+    logClientAction("bulk_asset_download_clicked", {
+      request_id: result.request_id,
+      platform: result.platform,
+      shortcode: result.shortcode,
+      selected_asset_ids: result.assets.map((asset) => asset.id),
+      selected_count: result.assets.length,
+      source: "post_info_modal",
+    });
+
+    triggerBrowserDownload(apiUrl(`/api/v1/instagram/requests/${result.request_id}/download.zip`));
   }
 
   function downloadSelected() {
@@ -1368,7 +1415,7 @@ export function SocialDownloaderClient() {
                 <div className="-mt-1 flex min-w-0 flex-wrap items-center gap-2.5 overflow-visible pb-1 pt-1">
                   <button
                     className="lm-themed-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
-                    onClick={() => setIsPostInfoOpen(true)}
+                    onClick={() => openPostInfoModal(0)}
                     style={buildCreatorButtonStyle(resultTheme)}
                     title={copy.openPostDetails}
                     type="button"
@@ -1405,6 +1452,7 @@ export function SocialDownloaderClient() {
               <FloatingScrollArea theme={resultTheme}>
                 <AssetPreviewGrid
                   assets={result.assets}
+                  onPreviewAsset={openPostInfoModal}
                   onToggleAsset={toggleAsset}
                   selectedAssetIds={selectedAssetIds}
                   theme={resultTheme}
@@ -1421,8 +1469,11 @@ export function SocialDownloaderClient() {
       {result && isPostInfoOpen ? (
         <PostInfoModal
           copy={copy}
+          initialAssetIndex={postInfoInitialAssetIndex}
           language={language}
           onClose={() => setIsPostInfoOpen(false)}
+          onDownloadAll={downloadAllAssets}
+          onDownloadAsset={downloadCurrentAsset}
           result={result}
           theme={resultTheme}
         />
@@ -1653,7 +1704,7 @@ function ResolvingState({ copy, language, progress, theme }) {
     <section
       aria-label={copy.parseTitle}
       aria-live="polite"
-      className={`${glassPanelClass} ${theme.panelClass} grid min-h-0 w-full flex-1 content-start gap-5 rounded-[2rem] p-5 sm:p-6`}
+      className={`${glassPanelClass} ${theme.panelClass} grid min-h-0 w-full flex-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-5 overflow-hidden rounded-[2rem] p-5 sm:p-6`}
       style={buildResultShellStyle(theme)}
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1696,19 +1747,21 @@ function ResolvingState({ copy, language, progress, theme }) {
         />
       </div>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
-        {[0, 1, 2, 3].map((index) => (
-          <div
-            className="grid gap-3 rounded-[1.35rem] border border-white/65 bg-white/68 p-3 backdrop-blur-xl"
-            key={index}
-            style={buildSkeletonCardStyle(theme)}
-          >
-            <div className="mc-skeleton aspect-[4/4.2] rounded-[1rem]" style={buildSkeletonStyle(theme)} />
-            <div className="mc-skeleton h-3 rounded-full" style={buildSkeletonStyle(theme)} />
-            <div className="mc-skeleton h-3 w-2/3 rounded-full" style={buildSkeletonStyle(theme)} />
-          </div>
-        ))}
-      </div>
+      <FloatingScrollArea className="h-full min-h-0" contentClassName="pr-1 pb-1" theme={theme}>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
+          {[0, 1, 2, 3].map((index) => (
+            <div
+              className="grid gap-3 rounded-[1.35rem] border border-white/65 bg-white/68 p-3 backdrop-blur-xl"
+              key={index}
+              style={buildSkeletonCardStyle(theme)}
+            >
+              <div className="mc-skeleton aspect-[4/4.2] rounded-[1rem]" style={buildSkeletonStyle(theme)} />
+              <div className="mc-skeleton h-3 rounded-full" style={buildSkeletonStyle(theme)} />
+              <div className="mc-skeleton h-3 w-2/3 rounded-full" style={buildSkeletonStyle(theme)} />
+            </div>
+          ))}
+        </div>
+      </FloatingScrollArea>
     </section>
   );
 }
@@ -1758,7 +1811,24 @@ function ChevronRightIcon() {
   );
 }
 
-function PostInfoModal({ copy, language, onClose, result, theme }) {
+function ChevronDownIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="m6 9 6 6 6-6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" />
+    </svg>
+  );
+}
+
+function PostInfoModal({
+  copy,
+  initialAssetIndex = 0,
+  language,
+  onClose,
+  onDownloadAll,
+  onDownloadAsset,
+  result,
+  theme,
+}) {
   const info = result.post_info ?? {};
   const metrics = info.metrics ?? result.metrics;
   const title = displayTitle(info);
@@ -1769,10 +1839,12 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
   const metricItems = createMetricItems(metrics, copy);
   const postChrome = getPostChrome(result.platform, theme);
   const assets = Array.isArray(result.assets) ? result.assets : [];
-  const [assetIndex, setAssetIndex] = useState(0);
+  const [assetIndex, setAssetIndex] = useState(() => clampAssetIndex(initialAssetIndex, assets.length));
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+  const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [toastId, setToastId] = useState(0);
+  const downloadMenuRef = useRef(null);
   const previewAsset = assets[assetIndex] ?? assets[0] ?? null;
   const hasMultipleAssets = assets.length > 1;
   const canOpenComments = canOpenPostComments(result);
@@ -1784,6 +1856,24 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
   const showNextAsset = useCallback(() => {
     setAssetIndex((current) => (assets.length ? (current + 1) % assets.length : 0));
   }, [assets.length]);
+
+  const downloadCurrentAsset = useCallback(() => {
+    if (!previewAsset) {
+      return;
+    }
+
+    setIsDownloadMenuOpen(false);
+    onDownloadAsset?.(previewAsset);
+  }, [onDownloadAsset, previewAsset]);
+
+  const downloadAllAssets = useCallback(() => {
+    if (!assets.length) {
+      return;
+    }
+
+    setIsDownloadMenuOpen(false);
+    onDownloadAll?.();
+  }, [assets.length, onDownloadAll]);
 
   const copyText = useCallback(async (text, successMessage, event) => {
     const value = String(text || "").trim();
@@ -1805,6 +1895,11 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
   useEffect(() => {
     function onKeyDown(event) {
       if (event.key === "Escape") {
+        if (isDownloadMenuOpen) {
+          setIsDownloadMenuOpen(false);
+          return;
+        }
+
         if (isCommentsOpen) {
           setIsCommentsOpen(false);
           return;
@@ -1815,11 +1910,13 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
 
       if (hasMultipleAssets && event.key === "ArrowLeft") {
         event.preventDefault();
+        setIsDownloadMenuOpen(false);
         showPreviousAsset();
       }
 
       if (hasMultipleAssets && event.key === "ArrowRight") {
         event.preventDefault();
+        setIsDownloadMenuOpen(false);
         showNextAsset();
       }
     }
@@ -1829,7 +1926,27 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [hasMultipleAssets, isCommentsOpen, onClose, showNextAsset, showPreviousAsset]);
+  }, [hasMultipleAssets, isCommentsOpen, isDownloadMenuOpen, onClose, showNextAsset, showPreviousAsset]);
+
+  useEffect(() => {
+    if (!isDownloadMenuOpen) {
+      return undefined;
+    }
+
+    function onPointerDown(event) {
+      if (downloadMenuRef.current?.contains(event.target)) {
+        return;
+      }
+
+      setIsDownloadMenuOpen(false);
+    }
+
+    window.addEventListener("mousedown", onPointerDown);
+
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [isDownloadMenuOpen]);
 
   useEffect(() => {
     if (!toast) {
@@ -1844,9 +1961,10 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
   }, [toast]);
 
   useEffect(() => {
-    setAssetIndex(0);
+    setAssetIndex(clampAssetIndex(initialAssetIndex, assets.length));
     setIsCommentsOpen(false);
-  }, [result.request_id]);
+    setIsDownloadMenuOpen(false);
+  }, [assets.length, initialAssetIndex, result.request_id]);
 
   return (
     <div
@@ -1889,15 +2007,27 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
                 </div>
               </div>
             </div>
-            <button
-              aria-label={copy.closeDetails}
-              className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border transition hover:scale-[1.03]"
-              onClick={onClose}
-              style={buildPostCloseButtonStyle(postChrome)}
-              type="button"
-            >
-              <ClearIcon />
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <PostDownloadSplitButton
+                chrome={postChrome}
+                copy={copy}
+                disabled={!previewAsset}
+                isOpen={isDownloadMenuOpen}
+                menuRef={downloadMenuRef}
+                onDownloadAll={downloadAllAssets}
+                onDownloadCurrent={downloadCurrentAsset}
+                onToggleMenu={() => setIsDownloadMenuOpen((current) => !current)}
+              />
+              <button
+                aria-label={copy.closeDetails}
+                className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border transition hover:scale-[1.03]"
+                onClick={onClose}
+                style={buildPostCloseButtonStyle(postChrome)}
+                type="button"
+              >
+                <ClearIcon />
+              </button>
+            </div>
           </div>
 
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4 px-5 py-5">
@@ -1995,6 +2125,62 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
           </div>
         ) : null}
       </section>
+    </div>
+  );
+}
+
+function PostDownloadSplitButton({
+  chrome,
+  copy,
+  disabled,
+  isOpen,
+  menuRef,
+  onDownloadAll,
+  onDownloadCurrent,
+  onToggleMenu,
+}) {
+  return (
+    <div className="relative flex shrink-0" ref={menuRef}>
+      <button
+        className="inline-flex h-10 cursor-pointer items-center justify-center rounded-l-full border border-r-0 px-4 text-sm font-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:hover:scale-100"
+        disabled={disabled}
+        onClick={onDownloadCurrent}
+        style={buildPostDownloadButtonStyle(chrome, disabled)}
+        type="button"
+      >
+        {copy.download}
+      </button>
+      <button
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        aria-label={copy.downloadAll}
+        className="grid h-10 w-10 cursor-pointer place-items-center rounded-r-full border text-sm font-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:hover:scale-100"
+        disabled={disabled}
+        onClick={onToggleMenu}
+        style={buildPostDownloadButtonStyle(chrome, disabled)}
+        type="button"
+      >
+        <ChevronDownIcon />
+      </button>
+
+      {isOpen ? (
+        <div
+          className="absolute right-0 top-[calc(100%+0.5rem)] z-50 min-w-36 overflow-hidden rounded-[0.85rem] border p-1 shadow-2xl"
+          role="menu"
+          style={buildPostDownloadMenuStyle(chrome)}
+        >
+          <button
+            className="flex h-10 w-full cursor-pointer items-center justify-between gap-3 rounded-[0.65rem] px-3 text-left text-sm font-bold transition hover:opacity-80"
+            onClick={onDownloadAll}
+            role="menuitem"
+            style={buildPostDownloadMenuItemStyle(chrome)}
+            type="button"
+          >
+            <span>{copy.downloadAll}</span>
+            <ChevronDownIcon />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2573,6 +2759,16 @@ function displayAuthorHandle(info, result) {
   return String(info.author_handle || result.creator_handle || "").trim().replace(/^@+/, "");
 }
 
+function clampAssetIndex(index, assetCount) {
+  const numericIndex = Number(index);
+
+  if (!assetCount || !Number.isFinite(numericIndex)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(assetCount - 1, Math.trunc(numericIndex)));
+}
+
 function canOpenPostComments(result) {
   return result?.platform === "xiaoyuzhou" && Boolean(result?.canonical_url);
 }
@@ -2865,6 +3061,33 @@ function buildPostCloseButtonStyle(chrome) {
     borderColor: chrome.divider,
     boxShadow: chrome.closeShadow,
     transition: themeTransition,
+  };
+}
+
+function buildPostDownloadButtonStyle(chrome, disabled) {
+  return {
+    color: disabled ? chrome.muted : chrome.pillText,
+    background: disabled ? hexToRgba(chrome.accent, 0.04) : chrome.pillBackground,
+    borderColor: chrome.divider,
+    boxShadow: disabled ? "none" : `0 10px 24px ${hexToRgba(chrome.accent, 0.12)}`,
+    opacity: disabled ? 0.56 : 1,
+    transition: themeTransition,
+  };
+}
+
+function buildPostDownloadMenuStyle(chrome) {
+  return {
+    color: chrome.text,
+    background: chrome.contentBackground,
+    borderColor: chrome.divider,
+    boxShadow: `0 22px 54px ${hexToRgba(chrome.accent, 0.18)}, 0 14px 34px rgba(4,10,20,0.18)`,
+  };
+}
+
+function buildPostDownloadMenuItemStyle(chrome) {
+  return {
+    color: chrome.text,
+    background: chrome.metricBackground,
   };
 }
 

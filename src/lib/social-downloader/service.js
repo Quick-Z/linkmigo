@@ -13,7 +13,7 @@ import { writeUserActionLog } from "../user-action-logger";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-const mediaCacheVersion = 18;
+const mediaCacheVersion = 20;
 
 export function getCacheStore() {
   const settings = getSocialDownloaderSettings();
@@ -387,13 +387,14 @@ function assetResponse(record, asset) {
 }
 
 function assetFilename(normalized, parsedAsset, index, extension) {
+  const fallbackName = `${normalized.platform}-${normalized.shortcode}-${index}${extension}`;
   const rawName =
     parsedAsset.filename_hint ||
-    `${normalized.platform}-${normalized.shortcode}-${index}${extension}`;
-  let safeName = rawName.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-._]+|[-._]+$/g, "");
+    fallbackName;
+  let safeName = sanitizeAssetFilename(rawName);
 
   if (!safeName) {
-    safeName = `${normalized.platform}-${normalized.shortcode}-${index}${extension}`;
+    safeName = fallbackName;
   }
 
   if (!path.extname(safeName)) {
@@ -401,6 +402,15 @@ function assetFilename(normalized, parsedAsset, index, extension) {
   }
 
   return safeName;
+}
+
+function sanitizeAssetFilename(value) {
+  return String(value || "")
+    .normalize("NFC")
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/-+/g, "-")
+    .replace(/^[\s._-]+|[\s._-]+$/g, "");
 }
 
 async function exists(filePath) {

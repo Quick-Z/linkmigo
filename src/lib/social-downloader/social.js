@@ -13,6 +13,7 @@ import { extractUrlCandidate, SUPPORTED_URL_MESSAGE } from "./shared";
 import { isTiktokHost, normalizeTiktokUrl, resolveTiktokPost } from "./tiktok";
 import { isTwitterHost, normalizeTwitterUrl, resolveTwitterPost } from "./twitter";
 import { isXiaohongshuHost, normalizeXiaohongshuUrl, resolveXiaohongshuPost } from "./xiaohongshu";
+import { isXiaoyuzhouHost, normalizeXiaoyuzhouUrl, resolveXiaoyuzhouPost } from "./xiaoyuzhou";
 import { isYoutubeHost, normalizeYoutubeUrl, resolveYoutubePost } from "./youtube";
 
 const PLATFORM_HANDLERS = [
@@ -34,6 +35,7 @@ const PLATFORM_HANDLERS = [
   { platform: "bilibili", isHost: isBilibiliHost, normalize: normalizeBilibiliUrl, resolve: resolveBilibiliPost },
   { platform: "facebook", isHost: isFacebookHost, normalize: normalizeFacebookUrl, resolve: resolveFacebookPost },
   { platform: "pinterest", isHost: isPinterestHost, normalize: normalizePinterestUrl, resolve: resolvePinterestPost },
+  { platform: "xiaoyuzhou", isHost: isXiaoyuzhouHost, normalize: normalizeXiaoyuzhouUrl, resolve: resolveXiaoyuzhouPost },
   { platform: "youtube", isHost: isYoutubeHost, normalize: normalizeYoutubeUrl, resolve: resolveYoutubePost },
   { platform: "pornhub", isHost: isPornhubHost, normalize: normalizePornhubUrl, resolve: resolvePornhubPost },
 ];

@@ -2,7 +2,7 @@
 
 LinkMigo「链密狗」是一款还算好看的资源下载工具。
 
-目前支持 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、YouTube 和 Pornhub 的公开视频资源解析。
+目前支持 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、小宇宙、YouTube 和 Pornhub 的公开资源解析。
 YouTube、Bilibili、AcFun 和 Pornhub 会优先选择公开页面可返回的高质量视频资源，并在需要时由服务端合并或转封装后返回可直接播放的单个视频文件。
 
 安装环境

@@ -23,6 +23,7 @@ const platformLabels = {
   bilibili: "Bilibili",
   facebook: "Facebook",
   pinterest: "Pinterest",
+  xiaoyuzhou: "Xiaoyuzhou",
   xiaohongshu: "Xiaohongshu",
   youtube: "YouTube",
   pornhub: "Pornhub",
@@ -50,17 +51,30 @@ const copyByLanguage = {
     author: "作者",
     body: "正文内容",
     closeDetails: "关闭信息",
+    commentsEnd: "已加载当前公开页面返回的评论",
+    commentsLoadFailed: "评论加载失败",
+    commentsPanel: "评论区",
+    commentsVisibleCount: (loaded, total) => `已显示 ${loaded} / ${total}`,
     copiedBody: "文案已复制",
+    copiedComment: "评论已复制",
     copiedTitle: "标题已复制",
     copyBody: "复制文案",
+    copyComment: "点击复制评论",
     copyFailed: "复制失败，请手动复制",
     copyTitle: "复制标题",
+    loadMoreComments: "加载更多评论",
+    loadingComments: "正在加载评论...",
+    loadingMoreComments: "正在加载更多...",
     noContent: "暂无正文内容",
+    noComments: "暂无评论",
     noTags: "暂无 tag",
+    openComments: "查看评论",
     openPostDetails: "查看文案和数据",
     postDetails: "帖子信息",
+    retry: "重试",
     tags: "Tag",
     title: "标题",
+    voiceComment: "语音评论",
     mediaTypeAudio: "音频",
     mediaTypeImage: "图片",
     mediaTypeVideo: "视频",
@@ -86,6 +100,7 @@ const copyByLanguage = {
       bilibili: "Bilibili",
       facebook: "Facebook",
       pinterest: "Pinterest",
+      xiaoyuzhou: "小宇宙",
       xiaohongshu: "小红书",
       youtube: "YouTube",
       pornhub: "Pornhub",
@@ -101,7 +116,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 ins、小红书、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
+    urlPlaceholder: "粘贴 ins、小红书、小宇宙、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -129,17 +144,30 @@ const copyByLanguage = {
     author: "Author",
     body: "Caption",
     closeDetails: "Close details",
+    commentsEnd: "Loaded comments from the public page.",
+    commentsLoadFailed: "Failed to load comments",
+    commentsPanel: "Comments",
+    commentsVisibleCount: (loaded, total) => `Showing ${loaded} / ${total}`,
     copiedBody: "Caption copied",
+    copiedComment: "Comment copied",
     copiedTitle: "Title copied",
     copyBody: "Copy caption",
+    copyComment: "Click to copy comment",
     copyFailed: "Copy failed. Please copy manually.",
     copyTitle: "Copy title",
+    loadMoreComments: "Load more comments",
+    loadingComments: "Loading comments...",
+    loadingMoreComments: "Loading more...",
     noContent: "No caption available",
+    noComments: "No comments",
     noTags: "No tags",
+    openComments: "View comments",
     openPostDetails: "View caption and data",
     postDetails: "Post Details",
+    retry: "Retry",
     tags: "Tags",
     title: "Title",
+    voiceComment: "Voice comment",
     mediaTypeAudio: "Audio",
     mediaTypeImage: "Image",
     mediaTypeVideo: "Video",
@@ -165,6 +193,7 @@ const copyByLanguage = {
       bilibili: "Bilibili",
       facebook: "Facebook",
       pinterest: "Pinterest",
+      xiaoyuzhou: "Xiaoyuzhou",
       xiaohongshu: "Xiaohongshu",
       youtube: "YouTube",
       pornhub: "Pornhub",
@@ -180,7 +209,7 @@ const copyByLanguage = {
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, Xiaohongshu, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
+    urlPlaceholder: "Paste Instagram, Xiaohongshu, Xiaoyuzhou, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -455,6 +484,22 @@ const darkPlatformThemeOverrides = {
     skeletonGradient: "linear-gradient(90deg, rgba(230,0,35,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(31,31,31,0.3) 100%)",
     previewGradient: "linear-gradient(135deg, rgba(230,0,35,0.36) 0%, rgba(255,255,255,0.08) 48%, rgba(31,31,31,0.44) 100%)",
   },
+  xiaoyuzhou: {
+    accent: "#22D6C8",
+    accentStrong: "#FFE45E",
+    accentText: "#BDFCF4",
+    accentMuted: "#8FE8DF",
+    buttonText: "#ECFFFD",
+    border: "rgba(34, 214, 200, 0.36)",
+    borderStrong: "rgba(255, 228, 94, 0.4)",
+    ring: "rgba(34, 214, 200, 0.22)",
+    panelShadow: "0 28px 70px rgba(34, 214, 200, 0.18), 0 14px 34px rgba(255, 228, 94, 0.1)",
+    buttonShadow: "0 18px 38px rgba(34, 214, 200, 0.24), 0 8px 20px rgba(255, 228, 94, 0.12)",
+    selectedShadow: "0 22px 42px rgba(34, 214, 200, 0.22)",
+    progressGradient: "linear-gradient(90deg, #22D6C8 0%, #BDFCF4 52%, #FFE45E 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(34,214,200,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(255,228,94,0.2) 100%)",
+    previewGradient: "linear-gradient(135deg, rgba(34,214,200,0.34) 0%, rgba(255,255,255,0.08) 48%, rgba(255,228,94,0.24) 100%)",
+  },
   xiaohongshu: {
     accent: "#FF5369",
     accentStrong: "#FF2442",
@@ -711,6 +756,26 @@ const buttonThemes = {
     skeletonGradient: "linear-gradient(90deg, rgba(24,119,242,0.18) 0%, rgba(255,255,255,0.96) 48%, rgba(59,89,152,0.16) 100%)",
     previewGradient: "linear-gradient(135deg, #D7E9FF 0%, #F6FAFF 52%, #CAD7EF 100%)",
     mediaTint: "rgba(244, 249, 255, 0.78)",
+  },
+  xiaoyuzhou: {
+    accent: "#00C7B7",
+    accentStrong: "#F4D84E",
+    accentText: "#08756E",
+    accentMuted: "#4D8E8A",
+    buttonText: "#075C57",
+    border: "rgba(0, 199, 183, 0.34)",
+    borderStrong: "rgba(244, 216, 78, 0.42)",
+    ring: "rgba(0, 199, 183, 0.18)",
+    panelShadow: "0 24px 60px rgba(0, 199, 183, 0.13), 0 12px 30px rgba(17, 24, 39, 0.08)",
+    buttonShadow: "0 18px 36px rgba(0, 199, 183, 0.16), 0 8px 18px rgba(244, 216, 78, 0.1)",
+    selectedShadow: "0 20px 38px rgba(0, 199, 183, 0.15)",
+    glassEnd: "rgba(240, 255, 253, 0.76)",
+    cardEnd: "rgba(247, 255, 253, 0.88)",
+    buttonGradient: "linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(237,255,253,0.93) 54%, rgba(255,250,228,0.96) 100%)",
+    progressGradient: "linear-gradient(90deg, #00C7B7 0%, #8AF3EA 56%, #F4D84E 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(0,199,183,0.2) 0%, rgba(255,255,255,0.96) 48%, rgba(244,216,78,0.16) 100%)",
+    previewGradient: "linear-gradient(135deg, #C9FAF5 0%, #FFFFFF 52%, #FFF3B8 100%)",
+    mediaTint: "rgba(240, 255, 253, 0.78)",
   },
   xiaohongshu: {
     accent: "#FF2442",
@@ -1275,7 +1340,7 @@ export function SocialDownloaderClient() {
                     </span>
                   </button>
                   {createMetricItems(result.metrics, copy).map((item) => (
-                    <StatPill key={item.label} label={item.label} language={language} theme={resultTheme} value={item.value} />
+                    <StatPill key={item.key} label={item.label} language={language} theme={resultTheme} value={item.value} />
                   ))}
                 </div>
 
@@ -1375,7 +1440,7 @@ function PreferenceControls({
   );
 }
 
-function FloatingScrollArea({ children, className = "", contentClassName = "px-3 py-3 sm:px-5", theme }) {
+function FloatingScrollArea({ children, className = "", contentClassName = "px-3 py-3 sm:px-5", onScroll, theme }) {
   const viewportRef = useRef(null);
   const [scrollbarState, setScrollbarState] = useState({
     hasOverflow: false,
@@ -1416,6 +1481,11 @@ function FloatingScrollArea({ children, className = "", contentClassName = "px-3
     });
   }, []);
 
+  const handleScroll = useCallback((event) => {
+    updateScrollbar();
+    onScroll?.(event);
+  }, [onScroll, updateScrollbar]);
+
   useEffect(() => {
     const viewport = viewportRef.current;
 
@@ -1442,7 +1512,7 @@ function FloatingScrollArea({ children, className = "", contentClassName = "px-3
     <div className={`group relative min-h-0 flex-1 ${className}`}>
       <div
         className={`lm-floating-scroll h-full min-h-0 overflow-y-auto ${contentClassName}`}
-        onScroll={updateScrollbar}
+        onScroll={handleScroll}
         ref={viewportRef}
       >
         {children}
@@ -1661,10 +1731,12 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
   const postChrome = getPostChrome(result.platform, theme);
   const assets = Array.isArray(result.assets) ? result.assets : [];
   const [assetIndex, setAssetIndex] = useState(0);
+  const [isCommentsOpen, setIsCommentsOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [toastId, setToastId] = useState(0);
   const previewAsset = assets[assetIndex] ?? assets[0] ?? null;
   const hasMultipleAssets = assets.length > 1;
+  const canOpenComments = canOpenPostComments(result);
 
   const showPreviousAsset = useCallback(() => {
     setAssetIndex((current) => (assets.length ? (current - 1 + assets.length) % assets.length : 0));
@@ -1694,6 +1766,11 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
   useEffect(() => {
     function onKeyDown(event) {
       if (event.key === "Escape") {
+        if (isCommentsOpen) {
+          setIsCommentsOpen(false);
+          return;
+        }
+
         onClose();
       }
 
@@ -1713,7 +1790,7 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [hasMultipleAssets, onClose, showNextAsset, showPreviousAsset]);
+  }, [hasMultipleAssets, isCommentsOpen, onClose, showNextAsset, showPreviousAsset]);
 
   useEffect(() => {
     if (!toast) {
@@ -1729,6 +1806,7 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
 
   useEffect(() => {
     setAssetIndex(0);
+    setIsCommentsOpen(false);
   }, [result.request_id]);
 
   return (
@@ -1847,14 +1925,31 @@ function PostInfoModal({ copy, language, onClose, result, theme }) {
           </div>
 
           <div className="border-t px-5 py-4" style={{ borderColor: postChrome.divider }}>
-            <PostMetricBar chrome={postChrome} copy={copy} items={metricItems} language={language} />
+            <PostMetricBar
+              chrome={postChrome}
+              copy={copy}
+              items={metricItems}
+              language={language}
+              onCommentsClick={canOpenComments ? () => setIsCommentsOpen(true) : null}
+            />
           </div>
         </div>
+
+        {isCommentsOpen ? (
+          <PostCommentsModal
+            chrome={postChrome}
+            copy={copy}
+            language={language}
+            onClose={() => setIsCommentsOpen(false)}
+            onCopyComment={copyText}
+            result={result}
+          />
+        ) : null}
 
         {toast ? (
           <div
             key={toastId}
-            className="lm-copy-toast pointer-events-none absolute left-1/2 top-4 z-30 rounded-full border px-4 py-2 text-sm font-bold shadow-[0_18px_42px_rgba(15,23,42,0.16)]"
+            className="lm-copy-toast pointer-events-none absolute left-1/2 top-4 z-50 rounded-full border px-4 py-2 text-sm font-bold shadow-[0_18px_42px_rgba(15,23,42,0.16)]"
             style={buildPostToastStyle(postChrome)}
           >
             {toast.message}
@@ -1937,11 +2032,24 @@ function PostAssetPreview({ asset, chrome, title }) {
   }
 
   if (asset.media_type === "audio") {
+    const label = title || asset.filename || "Audio";
+
     return (
-      <div className="grid h-full w-full place-items-center" style={{ background: chrome.audioBackground }}>
-        <div className="grid size-28 place-items-center rounded-full border text-5xl font-black" style={buildPostAudioIconStyle(chrome)}>
-          ♪
+      <div className="grid h-full w-full grid-rows-[minmax(0,1fr)_auto] gap-6 p-6 sm:p-7" style={{ background: chrome.audioBackground }}>
+        <div className="flex min-h-0 flex-col items-center justify-center gap-4 text-center">
+          <div className="grid size-28 shrink-0 place-items-center rounded-full border text-5xl font-black" style={buildPostAudioIconStyle(chrome)}>
+            ♪
+          </div>
+          <div className="grid max-w-full gap-2">
+            <div className="max-h-32 overflow-hidden break-words text-xl font-black leading-snug" style={{ color: chrome.mediaText }} title={label}>
+              {label}
+            </div>
+            <div className="truncate text-xs font-semibold" style={{ color: chrome.muted }} title={asset.filename}>
+              {asset.filename}
+            </div>
+          </div>
         </div>
+        <audio aria-label={label} className="w-full" controls preload="metadata" src={previewUrl} />
       </div>
     );
   }
@@ -1969,22 +2077,365 @@ function PlatformAvatar({ chrome, handle }) {
   );
 }
 
-function PostMetricBar({ chrome, copy, items, language }) {
+function PostMetricBar({ chrome, copy, items, language, onCommentsClick }) {
   return (
     <div className="grid grid-cols-5 gap-2">
-      {items.map((item) => (
-        <div className="grid min-w-0 gap-2 rounded-[0.85rem] px-2.5 py-2" key={item.label} style={buildPostMetricStyle(chrome)}>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="grid size-7 shrink-0 place-items-center rounded-full" style={buildPostMetricIconStyle(chrome)}>
-              <MetricIcon label={item.label} copy={copy} />
-            </span>
-            <div className="truncate text-[11px] font-bold" style={{ color: chrome.muted }}>{item.label}</div>
+      {items.map((item) => {
+        const isComments = item.key === "comments";
+        const isInteractive = isComments && typeof onCommentsClick === "function";
+        const content = (
+          <>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="grid size-7 shrink-0 place-items-center rounded-full" style={buildPostMetricIconStyle(chrome)}>
+                <MetricIcon label={item.label} copy={copy} />
+              </span>
+              <div className="truncate text-[11px] font-bold" style={{ color: chrome.muted }}>{item.label}</div>
+            </div>
+            <div className="min-w-0 overflow-hidden">
+              <MetricValue chrome={chrome} language={language} value={item.value} />
+            </div>
+          </>
+        );
+
+        if (isInteractive) {
+          return (
+            <button
+              aria-label={copy.openComments}
+              className="grid min-w-0 cursor-pointer gap-2 rounded-[0.85rem] px-2.5 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(15,23,42,0.12)]"
+              key={item.key}
+              onClick={onCommentsClick}
+              style={buildPostMetricButtonStyle(chrome)}
+              type="button"
+            >
+              {content}
+            </button>
+          );
+        }
+
+        return (
+          <div className="grid min-w-0 gap-2 rounded-[0.85rem] px-2.5 py-2" key={item.key} style={buildPostMetricStyle(chrome)}>
+            {content}
           </div>
-          <div className="min-w-0 overflow-hidden">
-            <MetricValue chrome={chrome} language={language} value={item.value} />
+        );
+      })}
+    </div>
+  );
+}
+
+function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, result }) {
+  const [comments, setComments] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [error, setError] = useState(null);
+  const [totalCount, setTotalCount] = useState(null);
+  const [publicCount, setPublicCount] = useState(null);
+
+  const fetchComments = useCallback(async (cursorValue) => {
+    const response = await fetch("/api/v1/instagram/comments", {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        url: result.canonical_url,
+        cursor: cursorValue,
+        limit: 12,
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw payload;
+    }
+
+    return payload;
+  }, [result.canonical_url]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    setComments([]);
+    setCursor(null);
+    setHasMore(false);
+    setIsLoading(true);
+    setIsLoadingMore(false);
+    setError(null);
+    setTotalCount(null);
+    setPublicCount(null);
+
+    fetchComments(null)
+      .then((payload) => {
+        if (!isActive) {
+          return;
+        }
+
+        setComments(normalizeCommentList(payload.comments));
+        setCursor(payload.next_cursor ?? null);
+        setHasMore(Boolean(payload.has_more));
+        setTotalCount(numberOrNull(payload.total_count));
+        setPublicCount(numberOrNull(payload.public_count));
+      })
+      .catch((caught) => {
+        if (!isActive) {
+          return;
+        }
+
+        setError(getApiError(caught));
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [fetchComments]);
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || isLoading || isLoadingMore) {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    setError(null);
+
+    try {
+      const payload = await fetchComments(cursor);
+
+      setComments((current) => mergeComments(current, normalizeCommentList(payload.comments)));
+      setCursor(payload.next_cursor ?? null);
+      setHasMore(Boolean(payload.has_more));
+      setTotalCount(numberOrNull(payload.total_count));
+      setPublicCount(numberOrNull(payload.public_count));
+    } catch (caught) {
+      setError(getApiError(caught));
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [cursor, fetchComments, hasMore, isLoading, isLoadingMore]);
+
+  const onScroll = useCallback((event) => {
+    const viewport = event.currentTarget;
+    const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+
+    if (remaining < 120) {
+      loadMore();
+    }
+  }, [loadMore]);
+
+  const visibleTotal = publicCount ?? totalCount ?? comments.length;
+  const statusText = comments.length > 0
+    ? copy.commentsVisibleCount(comments.length, visibleTotal)
+    : "";
+  const footerStatusText = isLoading ? copy.loadingComments : statusText || copy.commentsEnd;
+
+  return (
+    <div
+      className="absolute inset-0 z-40 grid place-items-center bg-[rgba(4,10,20,0.34)] px-5 py-5 backdrop-blur-[12px]"
+      onMouseDown={onClose}
+      role="presentation"
+    >
+      <section
+        aria-label={copy.commentsPanel}
+        aria-modal="true"
+        className="grid h-[min(74vh,38rem)] w-[min(86vw,36rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[1.15rem] border shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        style={buildPostCommentsShellStyle(chrome)}
+      >
+        <div className="flex items-center justify-between gap-3 border-b px-5 py-4" style={buildPostCommentsHeaderStyle(chrome)}>
+          <div className="min-w-0">
+            <h3 className="truncate text-lg font-black" style={{ color: chrome.text }}>
+              {copy.commentsPanel}
+            </h3>
+            <div className="truncate text-xs font-semibold" style={{ color: chrome.muted }}>
+              {statusText || getPlatformLabel(result.platform, copy)}
+            </div>
+          </div>
+          <button
+            aria-label={copy.closeDetails}
+            className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border transition hover:scale-[1.03]"
+            onClick={onClose}
+            style={buildPostCloseButtonStyle(chrome)}
+            type="button"
+          >
+            <ClearIcon />
+          </button>
+        </div>
+
+        <FloatingScrollArea
+          className="min-h-0"
+          contentClassName="px-4 py-4"
+          onScroll={onScroll}
+          theme={{ accent: chrome.accent }}
+        >
+          <div className="grid gap-3">
+            {isLoading ? (
+              <PostCommentsState chrome={chrome} text={copy.loadingComments} />
+            ) : null}
+
+            {!isLoading && error ? (
+              <PostCommentsError chrome={chrome} copy={copy} error={error} onRetry={() => fetchComments(null)
+                .then((payload) => {
+                  setComments(normalizeCommentList(payload.comments));
+                  setCursor(payload.next_cursor ?? null);
+                  setHasMore(Boolean(payload.has_more));
+                  setTotalCount(numberOrNull(payload.total_count));
+                  setPublicCount(numberOrNull(payload.public_count));
+                  setError(null);
+                })
+                .catch((caught) => setError(getApiError(caught)))} />
+            ) : null}
+
+            {!isLoading && !error && comments.length === 0 ? (
+              <PostCommentsState chrome={chrome} text={copy.noComments} />
+            ) : null}
+
+            {comments.map((comment) => (
+              <PostCommentCard
+                chrome={chrome}
+                comment={comment}
+                copy={copy}
+                key={comment.id}
+                language={language}
+                onCopyComment={onCopyComment}
+              />
+            ))}
+
+            {isLoadingMore ? (
+              <PostCommentsState chrome={chrome} compact text={copy.loadingMoreComments} />
+            ) : null}
+          </div>
+        </FloatingScrollArea>
+
+        <div className="flex items-center justify-between gap-3 border-t px-5 py-3 text-xs font-semibold" style={buildPostCommentsHeaderStyle(chrome)}>
+          <span className="min-w-0 truncate" style={{ color: chrome.muted }}>
+            {footerStatusText}
+          </span>
+          {hasMore ? (
+            <button
+              className="shrink-0 cursor-pointer rounded-full border px-3 py-1.5 text-xs font-bold transition hover:scale-[1.03]"
+              disabled={isLoadingMore}
+              onClick={loadMore}
+              style={buildPostCommentsActionStyle(chrome)}
+              type="button"
+            >
+              {isLoadingMore ? copy.loadingMoreComments : copy.loadMoreComments}
+            </button>
+          ) : (
+            <span className="shrink-0" style={{ color: chrome.muted }}>
+              {isLoading ? "" : copy.commentsEnd}
+            </span>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PostCommentCard({ chrome, comment, copy, language, onCopyComment }) {
+  const text = comment.text || (comment.has_voice ? copy.voiceComment : "");
+  const copyable = Boolean(text.trim());
+
+  return (
+    <div className="grid gap-2 rounded-[0.95rem] border px-4 py-3" style={buildPostCommentCardStyle(chrome, copyable)}>
+      <button
+        className={`grid w-full gap-3 text-left transition ${copyable ? "cursor-pointer hover:-translate-y-0.5" : "cursor-default"}`}
+        disabled={!copyable}
+        onClick={(event) => onCopyComment(text, copy.copiedComment, event)}
+        title={copyable ? copy.copyComment : undefined}
+        type="button"
+      >
+        <div className="flex min-w-0 items-start gap-3">
+          <CommentAvatar chrome={chrome} comment={comment} />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-black" style={{ color: chrome.text }}>
+                {comment.author_name}
+              </span>
+              <span className="shrink-0 text-[11px] font-semibold" style={{ color: chrome.muted }}>
+                {formatCommentTime(comment.created_at, language)}
+              </span>
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] font-semibold" style={{ color: chrome.muted }}>
+              {comment.ip_loc ? <span className="truncate">{comment.ip_loc}</span> : null}
+              <span className="shrink-0">{formatCompactNumber(comment.like_count, language)} {copy.likes}</span>
+            </div>
           </div>
         </div>
-      ))}
+
+        <div className="whitespace-pre-wrap break-words text-[14px] font-medium leading-6" style={{ color: chrome.text }}>
+          {text || copy.noContent}
+        </div>
+      </button>
+
+      {comment.replies.length > 0 ? (
+        <div className="grid gap-2 rounded-[0.75rem] px-3 py-2" style={buildPostCommentRepliesStyle(chrome)}>
+          {comment.replies.map((reply) => (
+            <button
+              className="grid cursor-pointer gap-1 text-left text-xs leading-5 transition hover:opacity-75"
+              key={reply.id}
+              onClick={(event) => onCopyComment(reply.text || copy.voiceComment, copy.copiedComment, event)}
+              title={copy.copyComment}
+              type="button"
+            >
+              <span className="font-bold" style={{ color: chrome.text }}>{reply.author_name}</span>
+              <span className="break-words" style={{ color: chrome.muted }}>{reply.text || copy.voiceComment}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CommentAvatar({ chrome, comment }) {
+  if (comment.avatar_url) {
+    return (
+      /* eslint-disable-next-line @next/next/no-img-element */
+      <img
+        alt=""
+        className="size-10 shrink-0 rounded-full border object-cover"
+        draggable={false}
+        src={comment.avatar_url}
+        style={{ borderColor: chrome.divider }}
+      />
+    );
+  }
+
+  return (
+    <div className="grid size-10 shrink-0 place-items-center rounded-full border text-xs font-black" style={buildPostMetricIconStyle(chrome)}>
+      {String(comment.author_name || "?").trim()[0]?.toUpperCase() || "?"}
+    </div>
+  );
+}
+
+function PostCommentsState({ chrome, compact = false, text }) {
+  return (
+    <div className={`grid place-items-center rounded-[0.95rem] border px-5 text-center font-bold ${compact ? "py-3 text-xs" : "py-10 text-sm"}`} style={buildPostCommentCardStyle(chrome, false)}>
+      <span style={{ color: chrome.muted }}>{text}</span>
+    </div>
+  );
+}
+
+function PostCommentsError({ chrome, copy, error, onRetry }) {
+  return (
+    <div className="grid gap-3 rounded-[0.95rem] border px-5 py-5 text-sm font-bold" style={buildPostCommentCardStyle(chrome, false)}>
+      <div style={{ color: chrome.text }}>{copy.commentsLoadFailed}</div>
+      <div className="font-semibold" style={{ color: chrome.muted }}>{error.message}</div>
+      <button
+        className="justify-self-start rounded-full border px-3 py-1.5 text-xs font-bold"
+        onClick={onRetry}
+        style={buildPostCommentsActionStyle(chrome)}
+        type="button"
+      >
+        {copy.retry}
+      </button>
     </div>
   );
 }
@@ -2083,6 +2534,57 @@ function displayAuthorHandle(info, result) {
   return String(info.author_handle || result.creator_handle || "").trim().replace(/^@+/, "");
 }
 
+function canOpenPostComments(result) {
+  return result?.platform === "xiaoyuzhou" && Boolean(result?.canonical_url);
+}
+
+function normalizeCommentList(value) {
+  return Array.isArray(value)
+    ? value.filter((comment) => comment && typeof comment === "object")
+    : [];
+}
+
+function mergeComments(current, next) {
+  const seen = new Set(current.map((comment) => comment.id));
+  const merged = [...current];
+
+  for (const comment of next) {
+    if (!comment.id || seen.has(comment.id)) {
+      continue;
+    }
+
+    seen.add(comment.id);
+    merged.push(comment);
+  }
+
+  return merged;
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function formatCommentTime(value, language = "zh") {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString(language === "zh" ? "zh-CN" : "en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function StatPill({ label, language, theme, value }) {
   return (
     <div
@@ -2099,11 +2601,11 @@ function StatPill({ label, language, theme, value }) {
 
 function createMetricItems(metrics, copy) {
   return [
-    { label: copy.likes, value: metrics?.like_count },
-    { label: copy.comments, value: metrics?.comment_count },
-    { label: copy.views, value: metrics?.view_count },
-    { label: copy.shares, value: metrics?.share_count },
-    { label: copy.favorites, value: metrics?.save_count },
+    { key: "likes", label: copy.likes, value: metrics?.like_count },
+    { key: "comments", label: copy.comments, value: metrics?.comment_count },
+    { key: "views", label: copy.views, value: metrics?.view_count },
+    { key: "shares", label: copy.shares, value: metrics?.share_count },
+    { key: "favorites", label: copy.favorites, value: metrics?.save_count },
   ];
 }
 
@@ -2382,6 +2884,13 @@ function buildPostMetricStyle(chrome) {
   };
 }
 
+function buildPostMetricButtonStyle(chrome) {
+  return {
+    ...buildPostMetricStyle(chrome),
+    color: chrome.text,
+  };
+}
+
 function buildPostMetricIconStyle(chrome) {
   return {
     color: chrome.accent,
@@ -2405,6 +2914,45 @@ function buildPostToastStyle(chrome) {
     boxShadow: `0 18px 42px ${hexToRgba(chrome.accent, 0.16)}, inset 0 1px 0 rgba(255,255,255,0.78)`,
     WebkitBackdropFilter: "blur(22px) saturate(1.35)",
     backdropFilter: "blur(22px) saturate(1.35)",
+  };
+}
+
+function buildPostCommentsShellStyle(chrome) {
+  return {
+    background: chrome.contentBackground,
+    borderColor: chrome.divider,
+    boxShadow: `0 26px 70px ${hexToRgba(chrome.accent, 0.18)}, 0 18px 42px rgba(4,10,20,0.22)`,
+    color: chrome.text,
+  };
+}
+
+function buildPostCommentsHeaderStyle(chrome) {
+  return {
+    background: hexToRgba(chrome.accent, 0.06),
+    borderColor: chrome.divider,
+  };
+}
+
+function buildPostCommentCardStyle(chrome, isCopyable) {
+  return {
+    color: chrome.text,
+    background: isCopyable ? chrome.metricBackground : hexToRgba(chrome.accent, 0.04),
+    borderColor: chrome.metricBorder,
+  };
+}
+
+function buildPostCommentRepliesStyle(chrome) {
+  return {
+    background: hexToRgba(chrome.accent, 0.07),
+    border: `1px solid ${chrome.metricBorder}`,
+  };
+}
+
+function buildPostCommentsActionStyle(chrome) {
+  return {
+    color: chrome.text,
+    background: chrome.metricIconBackground,
+    borderColor: chrome.metricBorder,
   };
 }
 
@@ -2502,6 +3050,10 @@ function getPlatformLabel(platform, copy = copyByLanguage.zh) {
 }
 
 function platformMediaLabel(platform, copy = copyByLanguage.zh) {
+  if (platform === "xiaoyuzhou") {
+    return copy.audio;
+  }
+
   if (["youtube", "tiktok", "douyin", "kuaishou", "acfun", "bilibili", "facebook", "pinterest", "pornhub"].includes(platform)) {
     return copy.video;
   }
@@ -2758,6 +3310,20 @@ function getPostChrome(platform, theme) {
       tagText: "#c1122c",
       metricIconBackground: "rgba(230,0,35,0.1)",
     },
+    xiaoyuzhou: {
+      mediaBackground: "linear-gradient(135deg, #e7fffc 0%, #ffffff 50%, #fff6cf 100%)",
+      mediaLabel: "Xiaoyuzhou",
+      surfaceLabel: "Episode",
+      accent: "#00c7b7",
+      avatarRing: "linear-gradient(135deg, #00c7b7, #f4d84e)",
+      pillBackground: "rgba(0,199,183,0.1)",
+      pillText: "#08756e",
+      tagBackground: "rgba(0,199,183,0.08)",
+      tagBorder: "rgba(0,199,183,0.14)",
+      tagText: "#08756e",
+      metricIconBackground: "rgba(0,199,183,0.1)",
+      audioBackground: "linear-gradient(135deg, rgba(0,199,183,0.18), rgba(244,216,78,0.18))",
+    },
     pornhub: {
       shellBackground: "#111111",
       shellBorder: "rgba(247,151,30,0.28)",
@@ -2858,6 +3424,10 @@ function detectPlatform(value) {
 
     if (hostname === "pinterest.com" || hostname.endsWith(".pinterest.com") || hostname === "pin.it") {
       return "pinterest";
+    }
+
+    if (hostname === "xiaoyuzhoufm.com" || hostname.endsWith(".xiaoyuzhoufm.com")) {
+      return "xiaoyuzhou";
     }
 
     if (hostname === "xiaohongshu.com" || hostname.endsWith(".xiaohongshu.com") || hostname === "xhslink.com" || hostname.endsWith(".xhslink.com") || hostname === "xhs.cn" || hostname.endsWith(".xhs.cn") || hostname === "rednote.com" || hostname.endsWith(".rednote.com")) {

@@ -1,41 +1,90 @@
 ## LinkMigo
 
-LinkMigo「链密狗」是一款还算好看的资源下载工具。
+LinkMigo「链密狗」是一款社媒公开资源解析下载工具。你可以粘贴公开视频、图文、音频或帖子链接，服务端会解析公开页面、缓存可下载资源，并在前端提供预览、选择下载、打包下载和帖子信息查看。
 
-目前支持 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、小宇宙、YouTube 和 Pornhub 的公开资源解析。
+![index](docs/images/index.png)
+
+![instagram](docs/images/02.png)
+
+![xiaoyuzhou](docs/images/xiaoyuzhou.png)
+
+## 🦸‍♂️ 支持平台
+
+目前支持解析这些平台的公开链接：
+
+| 平台 | 支持内容 |
+| --- | --- |
+| Instagram | 公开图片、视频、图集资源 |
+| TikTok | 公开视频资源 |
+| 抖音 | 公开视频资源 |
+| 小红书 | 公开图文、视频资源 |
+| 快手 | 公开视频资源 |
+| AcFun | 公开视频资源 |
+| Twitter/X | 公开媒体资源 |
+| Bilibili | 公开视频资源 |
+| Pinterest | 公开图片、视频资源 |
+| 小宇宙 | 公开单集音频、单集信息、公开页面评论快照 |
+| YouTube | 公开视频资源 |
+| Pornhub | 公开视频资源 |
+
 YouTube、Bilibili、AcFun 和 Pornhub 会优先选择公开页面可返回的高质量视频资源，并在需要时由服务端合并或转封装后返回可直接播放的单个视频文件。
 
-安装环境
+## 📋 功能概览
+
+- 自动识别平台：粘贴链接后自动匹配平台主题。
+- 服务端解析和缓存：媒体资源会先缓存到本地，方便预览和下载。
+- 资源预览：支持图片、视频和音频预览。
+- 批量操作：支持全选、反选、下载选中项和打包下载。
+- 帖子信息弹窗：展示标题、正文、作者、标签、播放、评论、点赞等公开数据。
+- 小宇宙增强：支持单集音频播放、音频文件按「单集标题@主播名」命名、评论弹窗和点击复制评论。其他平台的评论区内容正在适配……
+- 代理配置：可使用系统代理，也可通过环境变量手动指定代理。
+
+![xiaoyuzhou-comment](docs/images/xiaoyuzhou-comment.png)
+
+## 🚗 快速开始
+
+安装依赖：
 
 ```bash
 npm install
 ```
 
-启动项目（开发环境）
+启动开发环境：
 
 ```bash
 npm run dev
 ```
 
-开发服务会监听所有本机网卡，既可以用 `http://localhost:3000` 访问，也可以在同一局域网用 `http://<本机 IP>:3000` 访问。
+开发服务会监听所有本机网卡。你可以用下面的地址访问：
 
-打包项目并运行
+```text
+http://localhost:3000
+```
+
+同一局域网设备也可以通过本机 IP 访问：
+
+```text
+http://<本机 IP>:3000
+```
+
+生产构建并启动：
 
 ```bash
 npm run build
 npm run start
 ```
 
+## 🧙‍♀️ 法师
 
-服务端会优先使用电脑当前网络环境直接访问外网。如果 VPN 是全局路由 / TUN 模式，通常不需要额外配置；如果 VPN 客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP / HTTPS / SOCKS5 代理。
+服务端会优先使用当前网络环境直接访问外网。如果「魔法」是全局路由或 TUN 模式，通常不需要额外配置；如果「魔法」客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP、HTTPS 或 SOCKS5 代理。
 
-如果服务端访问 Instagram / TikTok / 抖音 / 小红书 / 快手 / AcFun / Pinterest / YouTube / Pornhub 等平台报“上游访问受限”，可以创建 `.env.local` 手动指定代理，这会覆盖系统代理探测结果：
+如果服务端访问 Instagram、TikTok、抖音、小红书、快手、AcFun、Pinterest、YouTube、Pornhub 等平台时提示“上游访问受限”，可以创建 `.env.local` 手动指定代理：
 
 ```bash
 SOCIAL_PROXY_URL=http://127.0.0.1:7890
 ```
 
-也可以使用：
+也可以使用这些兼容变量：
 
 ```bash
 IG_PROXY_URL=http://127.0.0.1:7890
@@ -50,7 +99,9 @@ ALL_PROXY=http://127.0.0.1:7890
 SOCIAL_AUTO_SYSTEM_PROXY=0
 ```
 
-如果 VPN 使用 PAC 自动代理脚本，而不是明确的系统 HTTP / HTTPS / SOCKS5 代理端口，Node 服务端可能无法解析 PAC，仍建议手动配置 `SOCIAL_PROXY_URL`。
+如果 VPN 使用 PAC 自动代理脚本，而不是明确的系统 HTTP、HTTPS 或 SOCKS5 代理端口，Node 服务端可能无法解析 PAC，建议手动配置 `SOCIAL_PROXY_URL`。
+
+## ⏬ 缓存和下载限制
 
 资源下载后会先保存在本地缓存目录。默认保存路径是：
 
@@ -76,14 +127,24 @@ SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS=300
 SOCIAL_MEDIA_TIMEOUT_SECONDS=600
 ```
 
-单个资源默认最多下载 512 MB。抖音、快手、AcFun 长视频可能比 Instagram/TikTok/抖音 短视频更大，如果需要调整，可以配置字节数：
+单个资源默认最多下载 512 MB。部分长视频平台资源可能更大，如果需要调整，可以配置字节数：
 
 ```bash
 SOCIAL_MAX_ASSET_BYTES=536870912
 ```
 
-改完环境变量后重启 dev server：
+改完环境变量后重启开发服务：
 
 ```bash
 npm run dev
 ```
+
+## 💁 推荐阅读
+
+也欢迎关注我的两个公众号：
+
+【德育处主任】：聊 AI，聊 NAS，聊古法编程
+![德育处主任](docs/images/qrcode_for_dyczr.jpg)
+
+【雷猴世界】：聊游戏、聊动漫，正在编写《任天堂物语》
+![雷猴世界](docs/images/qrcode_for_lhsj.jpg)

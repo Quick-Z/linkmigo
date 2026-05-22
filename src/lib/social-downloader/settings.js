@@ -58,9 +58,22 @@ export function getSocialDownloaderSettings() {
       "SOCIAL_MAX_ASSET_BYTES",
       intEnv("IG_MAX_ASSET_BYTES", 512 * 1024 * 1024),
     ),
+    redditClientId: stringEnv("SOCIAL_REDDIT_CLIENT_ID", stringEnv("REDDIT_CLIENT_ID", "")),
+    redditClientSecret: stringEnv("SOCIAL_REDDIT_CLIENT_SECRET", stringEnv("REDDIT_CLIENT_SECRET", "")),
+    redditRefreshToken: stringEnv("SOCIAL_REDDIT_REFRESH_TOKEN", stringEnv("REDDIT_REFRESH_TOKEN", "")),
+    redditUserAgent: stringEnv(
+      "SOCIAL_REDDIT_USER_AGENT",
+      stringEnv("REDDIT_USER_AGENT", "web:linkmigo:0.1.0 (by /u/linkmigo_user)"),
+    ),
   };
 }
 
 function positiveIntEnv(name, fallback) {
   return Math.max(1, intEnv(name, fallback));
+}
+
+function stringEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+
+  return raw || fallback;
 }

@@ -50,13 +50,27 @@ const CONTENT_TYPE_EXTENSIONS = {
 
 export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, onProgress }) {
   if (hasCompanionAudio(asset)) {
-    return await downloadMergedMedia({
-      asset,
-      destination,
-      maxBytes,
-      timeoutMs,
-      onProgress,
-    });
+    try {
+      return await downloadMergedMedia({
+        asset,
+        destination,
+        maxBytes,
+        timeoutMs,
+        onProgress,
+      });
+    } catch (error) {
+      if (!asset.optional_audio) {
+        throw error;
+      }
+
+      return await downloadMedia({
+        asset: videoOnlyAsset(asset),
+        destination,
+        maxBytes,
+        timeoutMs,
+        onProgress,
+      });
+    }
   }
 
   const urls = mediaUrlsForAsset(asset);
@@ -843,6 +857,19 @@ function hasCompanionAudio(asset) {
   return typeof asset?.audio_source_url === "string" && asset.audio_source_url.startsWith("http");
 }
 
+function videoOnlyAsset(asset) {
+  const {
+    audio_source_url,
+    audio_fallback_urls,
+    audio_filename_hint,
+    audio_request_headers,
+    optional_audio,
+    ...videoAsset
+  } = asset;
+
+  return videoAsset;
+}
+
 function resolveFfmpegPath() {
   const binaryName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
   const candidates = [
@@ -972,6 +999,14 @@ function contentTypeMatches(mediaType, contentType, sourceUrl) {
     }
 
     if (mediaType === "audio" && contentType.startsWith("audio/")) {
+      return true;
+    }
+
+    if (
+      mediaType === "audio" &&
+      contentType === "video/mp4" &&
+      /(?:dash_audio|audio|\.m4a|\.m4s)(?:[/?#._-]|$)/i.test(sourceUrl)
+    ) {
       return true;
     }
 

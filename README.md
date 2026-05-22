@@ -25,6 +25,7 @@ LinkMigo「链密狗」是一款社媒公开资源解析下载工具。你可以
 | Twitter/X | 公开图片、视频 |
 | Bilibili | 公开视频资源 |
 | Pinterest | 公开图片、视频 |
+| Reddit | 公开帖子图片、图集、视频 |
 | 小宇宙 | 公开单集音频、单集Show Notes、公开页面评论快照 |
 | YouTube | 公开视频 |
 | Pornhub | 公开视频 |
@@ -82,7 +83,7 @@ npm run start
 
 服务端会优先使用当前网络环境直接访问外网。如果「魔法」是全局路由或 TUN 模式，通常不需要额外配置；如果「魔法」客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP、HTTPS 或 SOCKS5 代理。
 
-如果服务端访问 Instagram、TikTok、抖音、小红书、快手、AcFun、Pinterest、YouTube、Pornhub 等平台时提示“上游访问受限”，可以创建 `.env.local` 手动指定代理：
+如果服务端访问 Instagram、TikTok、抖音、小红书、快手、AcFun、Pinterest、Reddit、YouTube、Pornhub 等平台时提示“上游访问受限”，可以创建 `.env.local` 手动指定代理：
 
 ```bash
 SOCIAL_PROXY_URL=http://127.0.0.1:7890
@@ -104,6 +105,28 @@ SOCIAL_AUTO_SYSTEM_PROXY=0
 ```
 
 如果 VPN 使用 PAC 自动代理脚本，而不是明确的系统 HTTP、HTTPS 或 SOCKS5 代理端口，Node 服务端可能无法解析 PAC，建议手动配置 `SOCIAL_PROXY_URL`。
+
+Reddit 现在经常拒绝未授权的 `.json` 公开请求。建议创建一个 Reddit app，并在 `.env.local` 配置 OAuth client id 和唯一 User-Agent：
+
+1. 打开 https://www.reddit.com/prefs/apps 并登录 Reddit。
+2. 点击页面底部的 `are you a developer? create an app...`。
+3. 类型选择 `script`。
+4. `name` 可填 `linkmigo`，`redirect uri` 可填 `http://localhost:8080`。
+5. 创建后回到 app 列表：
+   - `SOCIAL_REDDIT_CLIENT_ID`：app 名字下面、`personal use script` 附近那串短 ID。
+   - `SOCIAL_REDDIT_CLIENT_SECRET`：`secret` 后面那串。
+   - `SOCIAL_REDDIT_USER_AGENT`：自己定义一个唯一标识，建议包含项目名和 Reddit 用户名。
+
+```bash
+SOCIAL_REDDIT_CLIENT_ID=你的_reddit_client_id
+SOCIAL_REDDIT_USER_AGENT=web:linkmigo:0.1.0 (by /u/你的reddit用户名)
+```
+
+如果创建的是带 secret 的脚本应用，可以同时配置：
+
+```bash
+SOCIAL_REDDIT_CLIENT_SECRET=你的_reddit_client_secret
+```
 
 
 

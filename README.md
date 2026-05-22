@@ -4,9 +4,11 @@ LinkMigo「链密狗」是一款社媒公开资源解析下载工具。你可以
 
 ![index](docs/images/index.png)
 
-![instagram](docs/images/02.png)
+![instagram](docs/images/instagram.png)
 
 ![xiaoyuzhou](docs/images/xiaoyuzhou.png)
+
+
 
 ## 🦸‍♂️ 支持平台
 
@@ -14,20 +16,20 @@ LinkMigo「链密狗」是一款社媒公开资源解析下载工具。你可以
 
 | 平台 | 支持内容 |
 | --- | --- |
-| Instagram | 公开图片、视频、图集资源 |
-| TikTok | 公开视频资源 |
-| 抖音 | 公开视频资源 |
-| 小红书 | 公开图文、视频资源 |
-| 快手 | 公开视频资源 |
-| AcFun | 公开视频资源 |
-| Twitter/X | 公开媒体资源 |
+| Instagram | 公开图片、视频 |
+| TikTok | 公开视频 |
+| 抖音 | 公开视频 |
+| 小红书 | 公开图文、视频 |
+| 快手 | 公开视频 |
+| AcFun | 公开视频 |
+| Twitter/X | 公开图片、视频 |
 | Bilibili | 公开视频资源 |
-| Pinterest | 公开图片、视频资源 |
-| 小宇宙 | 公开单集音频、单集信息、公开页面评论快照 |
-| YouTube | 公开视频资源 |
-| Pornhub | 公开视频资源 |
+| Pinterest | 公开图片、视频 |
+| 小宇宙 | 公开单集音频、单集Show Notes、公开页面评论快照 |
+| YouTube | 公开视频 |
+| Pornhub | 公开视频 |
 
-YouTube、Bilibili、AcFun 和 Pornhub 会优先选择公开页面可返回的高质量视频资源，并在需要时由服务端合并或转封装后返回可直接播放的单个视频文件。
+
 
 ## 📋 功能概览
 
@@ -74,6 +76,8 @@ npm run build
 npm run start
 ```
 
+
+
 ## 🧙‍♀️ 法师
 
 服务端会优先使用当前网络环境直接访问外网。如果「魔法」是全局路由或 TUN 模式，通常不需要额外配置；如果「魔法」客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP、HTTPS 或 SOCKS5 代理。
@@ -100,6 +104,8 @@ SOCIAL_AUTO_SYSTEM_PROXY=0
 ```
 
 如果 VPN 使用 PAC 自动代理脚本，而不是明确的系统 HTTP、HTTPS 或 SOCKS5 代理端口，Node 服务端可能无法解析 PAC，建议手动配置 `SOCIAL_PROXY_URL`。
+
+
 
 ## ⏬ 缓存和下载限制
 
@@ -139,12 +145,16 @@ SOCIAL_MAX_ASSET_BYTES=536870912
 npm run dev
 ```
 
+
+
 ## 💁 推荐阅读
 
 也欢迎关注我的两个公众号：
 
 【德育处主任】：聊 AI，聊 NAS，聊古法编程
+
 ![德育处主任](docs/images/qrcode_for_dyczr.jpg)
 
 【雷猴世界】：聊游戏、聊动漫，正在编写《任天堂物语》
+
 ![雷猴世界](docs/images/qrcode_for_lhsj.jpg)

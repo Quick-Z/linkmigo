@@ -29,9 +29,18 @@ const YOUTUBE_HOSTS = new Set([
   "youtube-nocookie.com",
   "www.youtube-nocookie.com",
 ]);
+const INNERTUBE_CLIENTS = ["ANDROID_VR", "IOS", "ANDROID", "WEB", "WEB_EMBEDDED", "TV", "MWEB"];
+const YTDL_PLAYER_CLIENTS = ["WEB_EMBEDDED", "IOS", "ANDROID", "TV", "WEB"];
+const YOUTUBE_COOKIE_ENV_NAMES = [
+  "SOCIAL_YOUTUBE_COOKIE",
+  "SOCIAL_YOUTUBE_COOKIES",
+  "YOUTUBE_COOKIE",
+  "YOUTUBE_COOKIES",
+];
 
 let cachedYtdlAgent = null;
 let cachedYtdlAgentProxyUrl = "";
+let cachedYtdlAgentCookieHeader = "";
 let cachedInnertubeClientPromise = null;
 let cachedInnertubeProxyUrl = "";
 let cachedInnertubeTimeoutMs = 0;
@@ -76,7 +85,13 @@ export async function resolveYoutubePost(normalized, settings) {
 
     try {
       return await resolveYoutubePostWithYtdl(normalized, settings);
-    } catch {
+    } catch (fallbackError) {
+      const secondaryError = toYoutubeAppError(fallbackError);
+
+      if (primaryError.code === ErrorCode.NO_MEDIA_FOUND && secondaryError.code !== ErrorCode.NO_MEDIA_FOUND) {
+        throw secondaryError;
+      }
+
       throw primaryError;
     }
   }
@@ -84,61 +99,109 @@ export async function resolveYoutubePost(normalized, settings) {
 
 async function resolveYoutubePostWithInnertube(normalized, settings) {
   const client = await getInnertubeClient(settings);
-  const info = await client.getBasicInfo(normalized.shortcode, { client: "ANDROID_VR" });
-  const details = info?.basic_info && typeof info.basic_info === "object" ? info.basic_info : {};
+  let lastInfoError = null;
+  let lastFormatError = null;
+  let lastPlayabilityError = null;
+  let foundInfo = false;
 
-  if (details.is_private) {
-    throw new AppError(ErrorCode.LOGIN_REQUIRED, "这个 YouTube 视频是私密内容，需要登录或授权。", 403);
+  for (const innertubeClient of INNERTUBE_CLIENTS) {
+    let info;
+
+    try {
+      info = await client.getBasicInfo(normalized.shortcode, { client: innertubeClient });
+    } catch (error) {
+      if (isYoutubeNetworkFailure(error)) {
+        throw error;
+      }
+
+      lastInfoError = error;
+      continue;
+    }
+
+    foundInfo = true;
+    const details = info?.basic_info && typeof info.basic_info === "object" ? info.basic_info : {};
+    const playabilityError = youtubePlayabilityAppError(info?.playability_status);
+
+    if (details.is_private) {
+      throw new AppError(ErrorCode.LOGIN_REQUIRED, "这个 YouTube 视频是私密内容，需要登录或授权。", 403);
+    }
+
+    if (details.is_live || details.is_live_content || details.is_post_live_dvr) {
+      throw new AppError(ErrorCode.NO_MEDIA_FOUND, "暂不支持下载 YouTube 直播内容。", 404);
+    }
+
+    if (playabilityError) {
+      lastPlayabilityError = playabilityError;
+      continue;
+    }
+
+    let formats;
+
+    try {
+      formats = await getInnertubeDownloadFormats(client, info);
+    } catch (error) {
+      lastFormatError = error;
+      continue;
+    }
+
+    const format = formats?.video;
+
+    if (!format?.url) {
+      continue;
+    }
+
+    const headers = youtubeMediaHeaders(normalized.canonical_url);
+    const qualityLabel = safeFilenamePart(format.quality_label || (format.height ? `${format.height}p` : "video"));
+    const filenameBase = `youtube_${safeFilenamePart(details.id || normalized.shortcode)}_${qualityLabel}`;
+    const asset = {
+      source_url: format.url,
+      media_type: "video",
+      width: optionalInt(format.width),
+      height: optionalInt(format.height),
+      filename_hint: `${filenameBase}.mp4`,
+      request_headers: headers,
+    };
+
+    if (formats.audio?.url) {
+      asset.audio_source_url = formats.audio.url;
+      asset.audio_filename_hint = `${filenameBase}_audio${innertubeAudioFormatExtension(formats.audio)}`;
+      asset.audio_request_headers = headers;
+      asset.filename_hint = `${filenameBase}${innertubeFormatExtension(format)}`;
+    } else {
+      asset.filename_hint = `${filenameBase}${innertubeFormatExtension(format)}`;
+    }
+
+    const metrics = {
+      like_count: null,
+      comment_count: null,
+      view_count: optionalInt(details.view_count),
+      save_count: null,
+      share_count: null,
+      source: "youtubei_best_effort",
+    };
+    const creatorHandle = youtubeInnertubeCreatorHandle(details);
+
+    return {
+      assets: [asset],
+      metrics,
+      creator_handle: creatorHandle,
+      post_info: postInfoFromInnertube(details, metrics, creatorHandle),
+    };
   }
 
-  if (details.is_live || details.is_live_content || details.is_post_live_dvr) {
-    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "暂不支持下载 YouTube 直播内容。", 404);
+  if (!foundInfo && lastInfoError) {
+    throw lastInfoError;
   }
 
-  const formats = await getInnertubeDownloadFormats(client, info);
-  const format = formats?.video;
-
-  if (!format?.url) {
-    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "YouTube 页面中没有发现可下载的视频资源。", 404);
+  if (lastFormatError && !isInnertubeFormatSelectionError(lastFormatError)) {
+    throw lastFormatError;
   }
 
-  const headers = youtubeMediaHeaders(normalized.canonical_url);
-  const qualityLabel = safeFilenamePart(format.quality_label || (format.height ? `${format.height}p` : "video"));
-  const filenameBase = `youtube_${safeFilenamePart(details.id || normalized.shortcode)}_${qualityLabel}`;
-  const asset = {
-    source_url: format.url,
-    media_type: "video",
-    width: optionalInt(format.width),
-    height: optionalInt(format.height),
-    filename_hint: `${filenameBase}.mp4`,
-    request_headers: headers,
-  };
-
-  if (formats.audio?.url) {
-    asset.audio_source_url = formats.audio.url;
-    asset.audio_filename_hint = `${filenameBase}_audio${innertubeAudioFormatExtension(formats.audio)}`;
-    asset.audio_request_headers = headers;
-    asset.filename_hint = `${filenameBase}${innertubeFormatExtension(format)}`;
-  } else {
-    asset.filename_hint = `${filenameBase}${innertubeFormatExtension(format)}`;
+  if (lastPlayabilityError) {
+    throw lastPlayabilityError;
   }
 
-  const metrics = {
-    like_count: null,
-    comment_count: null,
-    view_count: optionalInt(details.view_count),
-    save_count: null,
-    share_count: null,
-    source: "youtubei_best_effort",
-  };
-  const creatorHandle = youtubeInnertubeCreatorHandle(details);
-
-  return {
-    assets: [asset],
-    metrics,
-    creator_handle: creatorHandle,
-    post_info: postInfoFromInnertube(details, metrics, creatorHandle),
-  };
+  throw new AppError(ErrorCode.NO_MEDIA_FOUND, "YouTube 页面中没有发现可下载的视频资源。", 404);
 }
 
 async function getInnertubeDownloadFormats(client, info) {
@@ -146,10 +209,13 @@ async function getInnertubeDownloadFormats(client, info) {
     { type: "video", quality: "best", format: "any" },
     { type: "video", quality: "best", format: "mp4" },
   ]);
-  const audio = await getInnertubeFormat(client, info, innertubeAudioOptionsForVideo(video));
 
-  if (video?.url && audio?.url) {
-    return { video, audio };
+  if (video?.url) {
+    const audio = await getInnertubeFormat(client, info, innertubeAudioOptionsForVideo(video));
+
+    if (audio?.url) {
+      return { video, audio };
+    }
   }
 
   const progressive = await getInnertubeFormat(client, info, [
@@ -157,7 +223,15 @@ async function getInnertubeDownloadFormats(client, info) {
     { type: "video+audio", quality: "best", format: "mp4" },
   ]);
 
-  return progressive?.url ? { video: progressive, audio: null } : null;
+  if (progressive?.url) {
+    return { video: progressive, audio: null };
+  }
+
+  if (video?.url) {
+    return { video, audio: null };
+  }
+
+  return await getInnertubeStreamingDataFormats(client, info);
 }
 
 async function getInnertubeFormat(client, info, optionsList) {
@@ -223,25 +297,34 @@ function normalizeYoutubeFetchInput(input, init) {
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
   }
 
+  const target = isRequest ? input.url : input;
+  addYoutubeCookieHeader(headers, target);
+
   const fetchInit = {
     redirect: "follow",
     ...(isRequest
       ? {
           method: input.method,
-          body: input.body,
           signal: input.signal,
         }
       : {}),
     ...init,
     headers,
   };
+  const method = String(fetchInit.method || "GET").toUpperCase();
+
+  if (method !== "GET" && method !== "HEAD") {
+    fetchInit.body ??= isRequest ? input.body : undefined;
+  } else {
+    delete fetchInit.body;
+  }
 
   if (fetchInit.body && !fetchInit.duplex) {
     fetchInit.duplex = "half";
   }
 
   return {
-    target: isRequest ? input.url : input,
+    target,
     fetchInit,
   };
 }
@@ -294,10 +377,173 @@ function innertubeAudioFormatExtension(format) {
   return mimeType.includes("webm") ? ".webm" : ".m4a";
 }
 
+async function getInnertubeStreamingDataFormats(client, info) {
+  const formats = innertubeStreamingFormats(info);
+  const videoFormats = formats
+    .filter((format) => isUsableInnertubeVideoFormat(format) && !format.has_audio)
+    .sort(compareInnertubeVideoFormats);
+  const progressiveFormats = formats
+    .filter((format) => isUsableInnertubeVideoFormat(format) && format.has_audio)
+    .sort(compareInnertubeVideoFormats);
+
+  for (const video of videoFormats) {
+    const videoWithUrl = await decipherInnertubeFormat(client, video);
+
+    if (!videoWithUrl?.url) {
+      continue;
+    }
+
+    const audio = await firstDecipheredInnertubeFormat(
+      client,
+      formats
+        .filter((format) => isUsableInnertubeAudioFormat(format))
+        .sort(compareInnertubeAudioFormats),
+    );
+
+    return { video: videoWithUrl, audio };
+  }
+
+  const progressive = await firstDecipheredInnertubeFormat(client, progressiveFormats);
+
+  return progressive?.url ? { video: progressive, audio: null } : null;
+}
+
+function innertubeStreamingFormats(info) {
+  const streamingData = info?.streaming_data && typeof info.streaming_data === "object"
+    ? info.streaming_data
+    : {};
+
+  return [
+    ...(Array.isArray(streamingData.formats) ? streamingData.formats : []),
+    ...(Array.isArray(streamingData.adaptive_formats) ? streamingData.adaptive_formats : []),
+  ];
+}
+
+function isUsableInnertubeVideoFormat(format) {
+  return (
+    format &&
+    typeof format === "object" &&
+    format.has_video &&
+    !format.is_type_otf &&
+    !format.drm_families &&
+    ["mp4", "webm"].includes(innertubeFormatContainer(format))
+  );
+}
+
+function isUsableInnertubeAudioFormat(format) {
+  const container = innertubeFormatContainer(format);
+
+  return (
+    format &&
+    typeof format === "object" &&
+    format.has_audio &&
+    !format.has_video &&
+    !format.has_text &&
+    !format.is_type_otf &&
+    !format.drm_families &&
+    ["mp4", "webm"].includes(container)
+  );
+}
+
+async function firstDecipheredInnertubeFormat(client, formats) {
+  for (const format of formats) {
+    const deciphered = await decipherInnertubeFormat(client, format);
+
+    if (deciphered?.url) {
+      return deciphered;
+    }
+  }
+
+  return null;
+}
+
+async function decipherInnertubeFormat(client, format) {
+  if (!format) {
+    return null;
+  }
+
+  if (!format.url) {
+    format.url = await format.decipher(client.session.player);
+  }
+
+  return /^https?:\/\//i.test(format.url) ? format : null;
+}
+
+function innertubeFormatContainer(format) {
+  const mimeType = String(format?.mime_type || "").toLowerCase();
+
+  if (mimeType.includes("webm")) {
+    return "webm";
+  }
+
+  if (mimeType.includes("mp4")) {
+    return "mp4";
+  }
+
+  return "";
+}
+
+function compareInnertubeVideoFormats(left, right) {
+  const leftScore = innertubeVideoFormatScore(left);
+  const rightScore = innertubeVideoFormatScore(right);
+
+  for (let index = 0; index < leftScore.length; index += 1) {
+    if (leftScore[index] !== rightScore[index]) {
+      return rightScore[index] - leftScore[index];
+    }
+  }
+
+  return 0;
+}
+
+function compareInnertubeAudioFormats(left, right) {
+  const leftScore = innertubeAudioFormatScore(left);
+  const rightScore = innertubeAudioFormatScore(right);
+
+  for (let index = 0; index < leftScore.length; index += 1) {
+    if (leftScore[index] !== rightScore[index]) {
+      return rightScore[index] - leftScore[index];
+    }
+  }
+
+  return 0;
+}
+
+function innertubeVideoFormatScore(format) {
+  return [
+    optionalInt(format.height) || 0,
+    optionalInt(format.width) || 0,
+    optionalInt(format.fps) || 0,
+    firstPresentInt(format.bitrate, format.average_bitrate) || 0,
+    innertubeFormatContainer(format) === "mp4" ? 1 : 0,
+  ];
+}
+
+function innertubeAudioFormatScore(format) {
+  return [
+    innertubeFormatContainer(format) === "mp4" ? 1 : 0,
+    firstPresentInt(format.bitrate, format.average_bitrate) || 0,
+  ];
+}
+
 function isInnertubeFormatSelectionError(error) {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error || "").toLowerCase();
 
   return message.includes("no matching formats") || message.includes("streaming data not available");
+}
+
+function isYoutubeNetworkFailure(error) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error || "").toLowerCase();
+  const code = String(error?.code || error?.cause?.code || "").toLowerCase();
+
+  return (
+    error?.name === "AbortError" ||
+    message.includes("aborted") ||
+    message.includes("timeout") ||
+    message.includes("fetch failed") ||
+    message.includes("connect") ||
+    ["econnrefused", "econnreset", "etimedout", "enotfound", "und_err_connect_timeout"].includes(code)
+  );
 }
 
 function youtubeInnertubeCreatorHandle(details) {
@@ -392,40 +638,91 @@ async function resolveYoutubePostWithYtdl(normalized, settings) {
 async function getYtdlInfo(url, settings) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), settings.httpTimeoutMs);
+  const cookieHeader = getYoutubeCookieHeader();
+  const requestOptions = {
+    signal: controller.signal,
+  };
+
+  if (cookieHeader) {
+    requestOptions.headers = {
+      cookie: cookieHeader,
+    };
+  }
 
   try {
     return await ytdl.getInfo(url, {
-      agent: getYtdlAgent(),
-      requestOptions: {
-        signal: controller.signal,
-      },
+      agent: getYtdlAgent(cookieHeader),
+      fetch: createYtdlFetch(settings),
+      playerClients: YTDL_PLAYER_CLIENTS,
+      requestOptions,
     });
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function getYtdlAgent() {
-  const proxyUrl = getProxyUrl();
+function createYtdlFetch(settings) {
+  return async function ytdlFetch(target, requestOptions = {}) {
+    const headers = new Headers(requestOptions.headers);
+    addYoutubeCookieHeader(headers, target);
 
-  if (!proxyUrl) {
+    const fetchInit = {
+      method: requestOptions.method,
+      headers,
+      signal: requestOptions.signal,
+    };
+    const method = String(fetchInit.method || "GET").toUpperCase();
+
+    if (method !== "GET" && method !== "HEAD") {
+      fetchInit.body = requestOptions.body;
+    }
+
+    if (fetchInit.body && !fetchInit.duplex) {
+      fetchInit.duplex = "half";
+    }
+
+    return await fetchWithTimeout(target, fetchInit, settings.httpTimeoutMs);
+  };
+}
+
+function getYtdlAgent(cookieHeader = "") {
+  const proxyUrl = getProxyUrl();
+  const cookies = parseYoutubeCookieHeader(cookieHeader);
+
+  if (!proxyUrl && cookies.length === 0) {
     cachedYtdlAgent = null;
     cachedYtdlAgentProxyUrl = "";
+    cachedYtdlAgentCookieHeader = "";
     return undefined;
   }
 
   if (isSocksProxyUrl(proxyUrl)) {
-    cachedYtdlAgent = null;
-    cachedYtdlAgentProxyUrl = "";
-    return undefined;
-  }
+    if (cookies.length === 0) {
+      cachedYtdlAgent = null;
+      cachedYtdlAgentProxyUrl = "";
+      cachedYtdlAgentCookieHeader = "";
+      return undefined;
+    }
 
-  if (cachedYtdlAgent && cachedYtdlAgentProxyUrl === proxyUrl) {
+    if (cachedYtdlAgent && cachedYtdlAgentProxyUrl === "" && cachedYtdlAgentCookieHeader === cookieHeader) {
+      return cachedYtdlAgent;
+    }
+
+    cachedYtdlAgent = ytdl.createAgent(cookies);
+    cachedYtdlAgentProxyUrl = "";
+    cachedYtdlAgentCookieHeader = cookieHeader;
     return cachedYtdlAgent;
   }
 
-  cachedYtdlAgent = ytdl.createProxyAgent({ uri: proxyUrl });
+  if (cachedYtdlAgent && cachedYtdlAgentProxyUrl === proxyUrl && cachedYtdlAgentCookieHeader === cookieHeader) {
+    return cachedYtdlAgent;
+  }
+
+  cachedYtdlAgent = proxyUrl
+    ? ytdl.createProxyAgent({ uri: proxyUrl }, cookies)
+    : ytdl.createAgent(cookies);
   cachedYtdlAgentProxyUrl = proxyUrl;
+  cachedYtdlAgentCookieHeader = cookieHeader;
 
   return cachedYtdlAgent;
 }
@@ -523,10 +820,17 @@ function ytdlAudioFormatScore(format) {
 }
 
 function youtubeMediaHeaders(pageUrl) {
-  return {
+  const headers = {
     Referer: pageUrl,
     Origin: "https://www.youtube.com",
   };
+  const cookieHeader = getYoutubeCookieHeader();
+
+  if (cookieHeader) {
+    headers.Cookie = cookieHeader;
+  }
+
+  return headers;
 }
 
 function ytdlCreatorHandle(details) {
@@ -592,6 +896,91 @@ function toYoutubeAppError(error) {
       hint: "请确认服务器网络或系统代理可访问 YouTube；也可以在 .env.local 配置 SOCIAL_PROXY_URL，例如 http://127.0.0.1:7890。",
     },
   );
+}
+
+function youtubePlayabilityAppError(playabilityStatus) {
+  if (!playabilityStatus || typeof playabilityStatus !== "object") {
+    return null;
+  }
+
+  const status = String(playabilityStatus.status || "").toUpperCase();
+  const reason = pickText(playabilityStatus.reason?.text, playabilityStatus.reason);
+  const lowerReason = String(reason || "").toLowerCase();
+
+  if (status === "LOGIN_REQUIRED" || lowerReason.includes("sign in") || lowerReason.includes("not a bot")) {
+    return new AppError(
+      ErrorCode.LOGIN_REQUIRED,
+      "YouTube 要求登录或真人验证后才能访问这个视频。",
+      403,
+      {
+        hint: "当前出口 IP 被 YouTube 要求登录验证。可以换可用代理，或在环境变量 SOCIAL_YOUTUBE_COOKIE / YOUTUBE_COOKIE 中配置登录后的 YouTube Cookie。",
+      },
+    );
+  }
+
+  if (status === "UNPLAYABLE" || status === "ERROR") {
+    return new AppError(ErrorCode.NO_MEDIA_FOUND, reason || "没有找到这个 YouTube 视频。", 404);
+  }
+
+  return null;
+}
+
+function getYoutubeCookieHeader() {
+  for (const name of YOUTUBE_COOKIE_ENV_NAMES) {
+    const value = process.env[name]?.trim();
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function addYoutubeCookieHeader(headers, target) {
+  const cookieHeader = getYoutubeCookieHeader();
+
+  if (!cookieHeader || !isYoutubeCookieTarget(target) || headers.has("cookie")) {
+    return;
+  }
+
+  headers.set("cookie", cookieHeader);
+}
+
+function isYoutubeCookieTarget(target) {
+  try {
+    const host = new URL(String(target)).hostname.toLowerCase();
+
+    return host === "youtubei.googleapis.com" || host === "www.youtube.com" || host.endsWith(".youtube.com");
+  } catch {
+    return false;
+  }
+}
+
+function parseYoutubeCookieHeader(cookieHeader) {
+  return String(cookieHeader || "")
+    .split(";")
+    .map((part) => {
+      const trimmed = part.trim();
+      const separatorIndex = trimmed.indexOf("=");
+
+      if (separatorIndex <= 0) {
+        return null;
+      }
+
+      return {
+        domain: ".youtube.com",
+        hostOnly: false,
+        httpOnly: false,
+        name: trimmed.slice(0, separatorIndex).trim(),
+        path: "/",
+        sameSite: "no_restriction",
+        secure: true,
+        session: true,
+        value: trimmed.slice(separatorIndex + 1),
+      };
+    })
+    .filter((cookie) => cookie?.name && cookie.value);
 }
 
 function safeFilenamePart(value) {

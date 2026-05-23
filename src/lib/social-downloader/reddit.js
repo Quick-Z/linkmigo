@@ -114,6 +114,14 @@ export async function resolveRedditPost(normalized, settings) {
       throw new AppError(ErrorCode.LOGIN_REQUIRED, "这个 Reddit 帖子需要登录或年龄验证。", 403);
     }
 
+    const textAsset = await redditTextAssetFromPost(post, normalized, settings);
+
+    if (textAsset) {
+      assets = [textAsset];
+    }
+  }
+
+  if (assets.length === 0) {
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "Reddit 帖子中没有发现可下载媒体。", 404);
   }
 
@@ -126,6 +134,64 @@ export async function resolveRedditPost(normalized, settings) {
     creator_handle: creatorHandle,
     post_info: postInfoFromReddit(post, metrics, creatorHandle),
   };
+}
+
+async function redditTextAssetFromPost(post, normalized, settings) {
+  const title = pickSingleLineText(post?.title);
+  const body = pickText(post?.selftext_html, post?.selftext);
+
+  if (!title && !body) {
+    return null;
+  }
+
+  const commentsPayload = await resolveRedditComments(normalized, { limit: 30 }, settings).catch(() => null);
+  const text = redditDiscussionText({
+    body,
+    comments: commentsPayload?.comments ?? [],
+    post,
+    title,
+  });
+
+  return {
+    source_url: `text://reddit/${post?.id || normalized.shortcode}`,
+    media_type: "text",
+    filename_hint: `reddit_${post?.id || normalized.shortcode}_discussion.txt`,
+    text_content: text,
+  };
+}
+
+function redditDiscussionText({ body, comments, post, title }) {
+  const lines = [
+    title,
+    "",
+    `URL: ${new URL(post?.permalink || `/comments/${post?.id || ""}/`, "https://www.reddit.com").toString()}`,
+    post?.subreddit_name_prefixed ? `Subreddit: ${post.subreddit_name_prefixed}` : "",
+    post?.author ? `Author: u/${post.author}` : "",
+    Number.isFinite(post?.score) ? `Score: ${post.score}` : "",
+    Number.isFinite(post?.num_comments) ? `Comments: ${post.num_comments}` : "",
+    "",
+    "Post",
+    "----",
+    body || "(no body)",
+  ].filter((line) => line != null);
+
+  if (comments.length > 0) {
+    lines.push("", "Top comments", "------------");
+
+    comments.forEach((comment, index) => {
+      lines.push(
+        "",
+        `${index + 1}. ${comment.author_name || "Reddit user"}${comment.like_count != null ? ` (${comment.like_count} upvotes)` : ""}`,
+        comment.text || "",
+      );
+
+      for (const reply of comment.replies || []) {
+        lines.push("", `   - ${reply.author_name || "Reddit user"}: ${reply.text || ""}`);
+      }
+    });
+  }
+
+  return `${lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trim()}\n`;
 }
 
 export async function resolveRedditComments(normalized, options = {}, settings = {}) {

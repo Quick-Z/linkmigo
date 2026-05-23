@@ -49,6 +49,7 @@ const labelsByLanguage = {
     playVideo: "播放视频",
     previous: "上一张",
     progress: "播放进度",
+    text: "文本",
     video: "视频",
     volume: "音量",
   },
@@ -63,6 +64,7 @@ const labelsByLanguage = {
     playVideo: "Play video",
     previous: "Previous",
     progress: "Playback progress",
+    text: "Text",
     video: "Video",
     volume: "Volume",
   },
@@ -105,7 +107,9 @@ export function AssetPreviewGrid({
           ? copy.video
           : asset.media_type === "audio"
             ? copy.audio
-            : copy.image;
+            : asset.media_type === "text"
+              ? copy.text
+              : copy.image;
 
         return (
           <article
@@ -155,7 +159,7 @@ export function AssetPreviewGrid({
 
             <div
               className={`relative aspect-[4/3.15] overflow-hidden rounded-[0.9rem] border outline-none focus:outline-none focus-visible:outline-none ${
-                asset.media_type === "audio" ? "cursor-pointer" : "cursor-zoom-in"
+                asset.media_type === "audio" || asset.media_type === "text" ? "cursor-pointer" : "cursor-zoom-in"
               }`}
               onClick={(event) => {
                 event.stopPropagation();
@@ -221,6 +225,23 @@ export function AssetPreviewGrid({
                   </span>
                   <span className="text-xs font-semibold" style={{ color: theme.mutedText }}>{copy.audio}</span>
                 </div>
+              ) : asset.media_type === "text" ? (
+                <div
+                  className="flex h-full w-full flex-col items-center justify-center gap-3 p-4 text-center"
+                  style={{ backgroundImage: theme.previewGradient }}
+                >
+                  <span
+                    className="grid size-16 place-items-center rounded-[1.25rem] border text-3xl shadow-[0_14px_28px_rgba(120,150,190,0.12)]"
+                    style={{
+                      backgroundColor: theme.iconBackground,
+                      borderColor: theme.panelBorder,
+                      color: theme.accentText,
+                    }}
+                  >
+                    <TextIcon />
+                  </span>
+                  <span className="max-w-full truncate text-xs font-semibold" style={{ color: theme.mutedText }}>{copy.text}</span>
+                </div>
               ) : (
                 /* eslint-disable-next-line @next/next/no-img-element */
                 <img
@@ -272,7 +293,21 @@ function MediaTypeIcon({ type }) {
     return <AudioIcon />;
   }
 
+  if (type === "text") {
+    return <TextIcon />;
+  }
+
   return <ImageIcon />;
+}
+
+function TextIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="M7 3h7l4 4v14H7V3Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      <path d="M14 3v5h4" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      <path d="M9.5 12h5M9.5 15h5M9.5 18h3" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+    </svg>
+  );
 }
 
 function ImageIcon() {

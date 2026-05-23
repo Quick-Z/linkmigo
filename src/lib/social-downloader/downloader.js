@@ -33,6 +33,7 @@ const EXTENSION_CONTENT_TYPES = {
   ".mp4": "video/mp4",
   ".ogg": "audio/ogg",
   ".png": "image/png",
+  ".txt": "text/plain; charset=utf-8",
   ".wav": "audio/wav",
   ".webm": "video/webm",
   ".webp": "image/webp",
@@ -52,12 +53,17 @@ const CONTENT_TYPE_EXTENSIONS = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
+  "text/plain": ".txt",
   "video/mp4": ".mp4",
   "video/quicktime": ".mov",
   "video/webm": ".webm",
 };
 
 export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, onProgress }) {
+  if (asset.media_type === "text" && typeof asset.text_content === "string") {
+    return await writeTextAsset({ asset, destination, maxBytes, onProgress });
+  }
+
   if (hasCompanionAudio(asset)) {
     try {
       return await downloadMergedMedia({
@@ -118,7 +124,55 @@ export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, o
   throw lastError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载失败。", 502);
 }
 
+async function writeTextAsset({ asset, destination, maxBytes, onProgress }) {
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+
+  const text = asset.text_content;
+  const buffer = Buffer.from(text, "utf8");
+
+  if (buffer.length > maxBytes) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "文本资源超过单文件大小限制。", 413);
+  }
+
+  onProgress?.({
+    type: "stream_start",
+    part_id: "text",
+    content_length: buffer.length,
+    downloaded_bytes: 0,
+  });
+
+  await fs.writeFile(destination, buffer);
+
+  onProgress?.({
+    type: "stream_progress",
+    part_id: "text",
+    content_length: buffer.length,
+    downloaded_bytes: buffer.length,
+  });
+
+  return {
+    path: destination,
+    sourceUrl: asset.source_url || "",
+    contentType: "text/plain; charset=utf-8",
+    sizeBytes: buffer.length,
+  };
+}
+
 export async function estimateMediaDownloadSize({ asset, maxBytes, timeoutMs }) {
+  if (asset.media_type === "text" && typeof asset.text_content === "string") {
+    const size = Buffer.byteLength(asset.text_content, "utf8");
+
+    if (size > maxBytes) {
+      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "文本资源超过单文件大小限制。", 413);
+    }
+
+    return {
+      totalBytes: size,
+      knownParts: 1,
+      partCount: 1,
+    };
+  }
+
   const parts = hasCompanionAudio(asset)
     ? [
         {
@@ -951,6 +1005,7 @@ export function extensionForAsset(asset, contentType = "") {
     ".wav",
     ".ogg",
     ".flac",
+    ".txt",
   ]) {
     if (pathname.endsWith(extension)) {
       return extension;
@@ -959,6 +1014,10 @@ export function extensionForAsset(asset, contentType = "") {
 
   if (asset.media_type === "audio") {
     return ".m4a";
+  }
+
+  if (asset.media_type === "text") {
+    return ".txt";
   }
 
   return asset.media_type === "video" ? ".mp4" : ".jpg";
@@ -1015,6 +1074,10 @@ function contentTypeMatches(mediaType, contentType, sourceUrl) {
       return true;
     }
 
+    if (mediaType === "text" && contentType.startsWith("text/")) {
+      return true;
+    }
+
     if (
       mediaType === "audio" &&
       contentType === "video/mp4" &&
@@ -1042,6 +1105,10 @@ function guessContentType(filePathOrUrl, mediaType) {
 
   if (mediaType === "audio") {
     return "audio/mp4";
+  }
+
+  if (mediaType === "text") {
+    return "text/plain; charset=utf-8";
   }
 
   return mediaType === "video" ? "video/mp4" : "image/jpeg";

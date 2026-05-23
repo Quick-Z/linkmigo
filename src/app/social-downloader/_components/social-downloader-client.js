@@ -76,6 +76,7 @@ const copyByLanguage = {
     postDetails: "帖子信息",
     retry: "重试",
     tags: "Tag",
+    text: "文本",
     title: "标题",
     voiceComment: "语音评论",
     mediaTypeAudio: "音频",
@@ -172,6 +173,7 @@ const copyByLanguage = {
     postDetails: "Post Details",
     retry: "Retry",
     tags: "Tags",
+    text: "Text",
     title: "Title",
     voiceComment: "Voice comment",
     mediaTypeAudio: "Audio",
@@ -1868,7 +1870,21 @@ function MediaTypeIcon({ type }) {
     return <AudioIcon />;
   }
 
+  if (type === "text") {
+    return <TextIcon />;
+  }
+
   return <ImageIcon />;
+}
+
+function TextIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="M7 3h7l4 4v14H7V3Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      <path d="M14 3v5h4" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      <path d="M9.5 12h5M9.5 15h5M9.5 18h3" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+    </svg>
+  );
 }
 
 function ImageIcon() {
@@ -2439,6 +2455,16 @@ function PostAssetPreview({ asset, chrome, title }) {
     );
   }
 
+  if (asset.media_type === "text") {
+    return (
+      <iframe
+        className="h-full w-full border-0 bg-white"
+        src={previewUrl}
+        title={asset.filename || title || "Text"}
+      />
+    );
+  }
+
   return (
     /* eslint-disable-next-line @next/next/no-img-element */
     <img
@@ -2559,6 +2585,13 @@ function ResourcePreviewModal({ asset, chrome, copy, hasMultipleAssets, onClose,
                 </div>
                 <audio className="w-full" controls preload="metadata" src={previewUrl} />
               </div>
+            ) : asset.media_type === "text" ? (
+              <iframe
+                className="block h-full w-full rounded-[1.1rem] border bg-white shadow-[0_24px_70px_rgba(4,15,32,0.28)]"
+                src={previewUrl}
+                style={{ borderColor: chrome.mediaBorder }}
+                title={asset.filename}
+              />
             ) : (
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
@@ -3780,6 +3813,10 @@ function assetMediaLabel(asset, copy = copyByLanguage.zh) {
 
   if (asset?.media_type === "audio") {
     return copy.audio;
+  }
+
+  if (asset?.media_type === "text") {
+    return copy.text;
   }
 
   return copy.image;

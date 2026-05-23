@@ -157,10 +157,10 @@ SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS=300
 SOCIAL_MEDIA_TIMEOUT_SECONDS=600
 ```
 
-单个资源默认最多下载 512 MB。部分长视频平台资源可能更大，如果需要调整，可以配置字节数：
+单个资源默认最多下载 10 GB。部分长视频平台资源可能更大，如果需要调整，可以配置字节数：
 
 ```bash
-SOCIAL_MAX_ASSET_BYTES=536870912
+SOCIAL_MAX_ASSET_BYTES=10737418240
 ```
 
 改完环境变量后重启开发服务：

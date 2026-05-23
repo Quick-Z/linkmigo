@@ -1,6 +1,7 @@
 import path from "node:path";
 
 const DEFAULT_CACHE_TTL_SECONDS = 2 * 60 * 60;
+const DEFAULT_MAX_ASSET_BYTES = 10 * 1024 * 1024 * 1024;
 
 function intEnv(name, fallback) {
   const raw = process.env[name]?.trim();
@@ -56,7 +57,7 @@ export function getSocialDownloaderSettings() {
     ) * 1000,
     maxAssetBytes: intEnv(
       "SOCIAL_MAX_ASSET_BYTES",
-      intEnv("IG_MAX_ASSET_BYTES", 512 * 1024 * 1024),
+      intEnv("IG_MAX_ASSET_BYTES", DEFAULT_MAX_ASSET_BYTES),
     ),
     redditClientId: stringEnv("SOCIAL_REDDIT_CLIENT_ID", stringEnv("REDDIT_CLIENT_ID", "")),
     redditClientSecret: stringEnv("SOCIAL_REDDIT_CLIENT_SECRET", stringEnv("REDDIT_CLIENT_SECRET", "")),

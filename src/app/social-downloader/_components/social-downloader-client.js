@@ -122,7 +122,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 ins、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
+    urlPlaceholder: "支持 Instagram、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",

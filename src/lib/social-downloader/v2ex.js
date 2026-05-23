@@ -349,6 +349,21 @@ function responseFromV2exApi(normalized, apiPost) {
   }
 
   if (assets.length === 0) {
+    const textAsset = v2exTextAssetFromApi({
+      assetEntries: normalized.reply_number && selectedEntries.length ? selectedEntries : allEntries,
+      normalized,
+      pageUrl,
+      replies,
+      topic,
+    });
+
+    if (textAsset) {
+      assets = [textAsset];
+      assetEntries = normalized.reply_number && selectedEntries.length ? selectedEntries : allEntries;
+    }
+  }
+
+  if (assets.length === 0) {
     const target = normalized.reply_number && selectedEntries.length ? `第 ${normalized.reply_number} 楼回复` : "主题和公开回复";
 
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, `V2EX ${target}中没有发现可下载媒体。`, 404);
@@ -450,6 +465,74 @@ function assetsFromV2exEntry(entry, topicId, pageUrl) {
     [entry.contentRendered, entry.content].filter(Boolean).join("\n"),
     { pageUrl, filenameBase },
   );
+}
+
+function v2exTextAssetFromApi({ assetEntries, normalized, pageUrl, replies, topic }) {
+  const text = v2exDiscussionText({
+    entries: assetEntries,
+    normalized,
+    pageUrl,
+    replies,
+    topic,
+  });
+
+  if (!text.trim()) {
+    return null;
+  }
+
+  return {
+    source_url: `text://v2ex/${normalized.shortcode}${normalized.reply_number ? `/reply/${normalized.reply_number}` : ""}`,
+    media_type: "text",
+    filename_hint: `v2ex_${normalized.shortcode}${normalized.reply_number ? `_reply${normalized.reply_number}` : ""}_discussion.txt`,
+    text_content: text,
+  };
+}
+
+function v2exDiscussionText({ entries, normalized, pageUrl, replies, topic }) {
+  const topicTitle = pickSingleLineText(topic?.title);
+  const topicAuthor = displayNameFromV2exMember(topic?.member);
+  const nodeTitle = pickSingleLineText(topic?.node?.title, topic?.node?.name);
+  const lines = [
+    normalized.reply_number && topicTitle ? `${topicTitle} #${normalized.reply_number}` : topicTitle,
+    "",
+    `URL: ${pageUrl}`,
+    nodeTitle ? `Node: ${nodeTitle}` : "",
+    topicAuthor ? `Author: ${topicAuthor}` : "",
+    optionalInt(topic?.replies) != null ? `Replies: ${optionalInt(topic.replies)}` : "",
+    "",
+  ].filter((line) => line != null);
+
+  const topicBody = pickText(topic?.content_rendered, topic?.content);
+
+  if (!normalized.reply_number) {
+    lines.push("Topic", "-----", topicBody || "(no content)");
+  }
+
+  const replyEntries = entries
+    .filter((entry) => entry.kind === "reply")
+    .slice(0, normalized.reply_number ? entries.length : 80);
+
+  if (replyEntries.length > 0) {
+    lines.push("", normalized.reply_number ? "Selected reply" : "Public replies", normalized.reply_number ? "--------------" : "--------------");
+
+    for (const entry of replyEntries) {
+      const replyText = pickText(entry.contentRendered, entry.content);
+
+      lines.push(
+        "",
+        `#${entry.ordinal || "?"} ${entry.author || "V2EX 用户"}`,
+        replyText || "(no content)",
+      );
+    }
+  } else if (normalized.reply_number) {
+    const selected = selectedReplyEntries(replies, normalized.reply_number);
+
+    for (const entry of selected) {
+      lines.push("", `#${entry.ordinal || normalized.reply_number} ${entry.author || "V2EX 用户"}`, pickText(entry.contentRendered, entry.content));
+    }
+  }
+
+  return `${lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trim()}\n`;
 }
 
 function selectedReplyEntries(replies, replyNumber) {

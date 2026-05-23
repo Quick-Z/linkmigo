@@ -110,7 +110,7 @@ export function AssetPreviewGrid({
         return (
           <article
             aria-pressed={isSelected}
-            className="group grid min-w-0 cursor-pointer content-start gap-2 rounded-[1.15rem] border p-2.5 backdrop-blur-xl transition duration-300"
+            className="group grid min-w-0 cursor-pointer content-start gap-2 rounded-[1.15rem] border p-2.5 outline-none backdrop-blur-xl transition duration-300 focus:outline-none focus-visible:outline-none"
             key={asset.id}
             onClick={() => onToggleAsset(asset.id)}
             onKeyDown={(event) => {
@@ -154,12 +154,15 @@ export function AssetPreviewGrid({
             </div>
 
             <div
-              className={`relative aspect-[4/3.15] overflow-hidden rounded-[0.9rem] border ${
+              className={`relative aspect-[4/3.15] overflow-hidden rounded-[0.9rem] border outline-none focus:outline-none focus-visible:outline-none ${
                 asset.media_type === "audio" ? "cursor-pointer" : "cursor-zoom-in"
               }`}
               onClick={(event) => {
                 event.stopPropagation();
                 openPreview(index);
+              }}
+              onMouseDown={(event) => {
+                event.preventDefault();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {

@@ -574,6 +574,7 @@ const themeTransition =
   "background-color 640ms cubic-bezier(0.22,1,0.36,1), border-color 640ms cubic-bezier(0.22,1,0.36,1), box-shadow 640ms cubic-bezier(0.22,1,0.36,1), color 640ms cubic-bezier(0.22,1,0.36,1), transform 180ms ease";
 const floatingScrollbarInsetPx = 12;
 const shareUrlPattern = /https?:\/\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/i;
+const bareV2exUrlPattern = /(?:www\.)?v2ex\.com\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/i;
 const trailingUrlPunctuationPattern = /[)"'.。,;:!?，；：！？、】》」』”’]+$/u;
 
 const buttonThemes = {
@@ -1858,6 +1859,48 @@ function ChevronDownIcon() {
   );
 }
 
+function MediaTypeIcon({ type }) {
+  if (type === "video") {
+    return <VideoIcon />;
+  }
+
+  if (type === "audio") {
+    return <AudioIcon />;
+  }
+
+  return <ImageIcon />;
+}
+
+function ImageIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <rect height="15" rx="3" stroke="currentColor" strokeWidth="2" width="18" x="3" y="5" />
+      <path d="M7 16l3.2-3.2a1.2 1.2 0 0 1 1.7 0L15 16l1.2-1.2a1.2 1.2 0 0 1 1.7 0L21 18" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <circle cx="8.5" cy="9.5" fill="currentColor" r="1.2" />
+    </svg>
+  );
+}
+
+function VideoIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <rect height="14" rx="3" stroke="currentColor" strokeWidth="2" width="16" x="3" y="5" />
+      <path d="M16 10.5l4-2.4v7.8l-4-2.4v-3z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
+      <path d="M8.5 9.2v5.6l4.4-2.8-4.4-2.8z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function AudioIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="M10 18V6l8-2v12" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <circle cx="7" cy="18" r="3" stroke="currentColor" strokeWidth="2" />
+      <circle cx="15" cy="16" r="3" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
 function PostInfoModal({
   copy,
   initialAssetIndex = 0,
@@ -1879,6 +1922,7 @@ function PostInfoModal({
   const postChrome = getPostChrome(result.platform, theme);
   const assets = Array.isArray(result.assets) ? result.assets : [];
   const [assetIndex, setAssetIndex] = useState(() => clampAssetIndex(initialAssetIndex, assets.length));
+  const [isAssetPreviewOpen, setIsAssetPreviewOpen] = useState(false);
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -1887,6 +1931,26 @@ function PostInfoModal({
   const previewAsset = assets[assetIndex] ?? assets[0] ?? null;
   const hasMultipleAssets = assets.length > 1;
   const canOpenComments = canOpenPostComments(result);
+
+  const openAssetPreview = useCallback((nextIndex) => {
+    const clampedIndex = clampAssetIndex(nextIndex, assets.length);
+    const asset = assets[clampedIndex];
+
+    if (!asset) {
+      return;
+    }
+
+    setAssetIndex(clampedIndex);
+    setIsAssetPreviewOpen(true);
+    setIsDownloadMenuOpen(false);
+
+    logClientAction("post_modal_asset_preview_clicked", {
+      asset_id: asset.id,
+      filename: asset.filename,
+      media_type: asset.media_type,
+      preview_url: asset.preview_url,
+    });
+  }, [assets]);
 
   const showPreviousAsset = useCallback(() => {
     setAssetIndex((current) => (assets.length ? (current - 1 + assets.length) % assets.length : 0));
@@ -1934,6 +1998,11 @@ function PostInfoModal({
   useEffect(() => {
     function onKeyDown(event) {
       if (event.key === "Escape") {
+        if (isAssetPreviewOpen) {
+          setIsAssetPreviewOpen(false);
+          return;
+        }
+
         if (isDownloadMenuOpen) {
           setIsDownloadMenuOpen(false);
           return;
@@ -1965,7 +2034,7 @@ function PostInfoModal({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [hasMultipleAssets, isCommentsOpen, isDownloadMenuOpen, onClose, showNextAsset, showPreviousAsset]);
+  }, [hasMultipleAssets, isAssetPreviewOpen, isCommentsOpen, isDownloadMenuOpen, onClose, showNextAsset, showPreviousAsset]);
 
   useEffect(() => {
     if (!isDownloadMenuOpen) {
@@ -2001,6 +2070,7 @@ function PostInfoModal({
 
   useEffect(() => {
     setAssetIndex(clampAssetIndex(initialAssetIndex, assets.length));
+    setIsAssetPreviewOpen(false);
     setIsCommentsOpen(false);
     setIsDownloadMenuOpen(false);
   }, [assets.length, initialAssetIndex, result.request_id]);
@@ -2028,6 +2098,7 @@ function PostInfoModal({
           copy={copy}
           hasMultipleAssets={hasMultipleAssets}
           onNext={showNextAsset}
+          onOpenAsset={openAssetPreview}
           onPrevious={showPreviousAsset}
           platform={result.platform}
           title={title || body || result.shortcode}
@@ -2154,6 +2225,20 @@ function PostInfoModal({
           />
         ) : null}
 
+        {isAssetPreviewOpen && previewAsset ? (
+          <ResourcePreviewModal
+            asset={previewAsset}
+            chrome={postChrome}
+            copy={copy}
+            hasMultipleAssets={hasMultipleAssets}
+            onClose={() => setIsAssetPreviewOpen(false)}
+            onDownloadAsset={downloadCurrentAsset}
+            onNext={showNextAsset}
+            onPrevious={showPreviousAsset}
+            title={title || body || result.shortcode}
+          />
+        ) : null}
+
         {toast ? (
           <div
             key={toastId}
@@ -2224,7 +2309,30 @@ function PostDownloadSplitButton({
   );
 }
 
-function SocialPostMediaPane({ asset, assetCount, assetIndex, chrome, copy, hasMultipleAssets, onNext, onPrevious, platform, title }) {
+function SocialPostMediaPane({
+  asset,
+  assetCount,
+  assetIndex,
+  chrome,
+  copy,
+  hasMultipleAssets,
+  onNext,
+  onOpenAsset,
+  onPrevious,
+  platform,
+  title,
+}) {
+  function openCurrentAsset() {
+    onOpenAsset?.(assetIndex);
+  }
+
+  function onPreviewKeyDown(event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openCurrentAsset();
+    }
+  }
+
   return (
     <div className="relative min-h-0 overflow-hidden" style={{ background: chrome.mediaBackground }}>
       <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between px-5 py-4">
@@ -2237,7 +2345,19 @@ function SocialPostMediaPane({ asset, assetCount, assetIndex, chrome, copy, hasM
       </div>
 
       <div className="grid h-full place-items-center px-8 py-14">
-        <div className="relative flex aspect-[4/5] max-h-full w-full max-w-[29rem] items-center justify-center overflow-hidden rounded-[1.15rem] border" style={buildPostMediaFrameStyle(chrome)}>
+        <div
+          aria-label={asset?.filename || title}
+          className={`relative flex aspect-[4/5] max-h-full w-full max-w-[29rem] items-center justify-center overflow-hidden rounded-[1.15rem] border outline-none transition hover:scale-[1.01] focus:outline-none focus-visible:outline-none ${
+            asset ? "cursor-zoom-in" : ""
+          }`}
+          onClick={asset ? openCurrentAsset : undefined}
+          onKeyDown={asset ? onPreviewKeyDown : undefined}
+          onMouseDown={asset ? (event) => event.preventDefault() : undefined}
+          role={asset ? "button" : undefined}
+          style={buildPostMediaFrameStyle(chrome)}
+          tabIndex={asset ? 0 : undefined}
+          title={asset?.filename || title}
+        >
           <PostAssetPreview asset={asset} chrome={chrome} title={title} />
         </div>
       </div>
@@ -2288,6 +2408,7 @@ function PostAssetPreview({ asset, chrome, title }) {
         className="h-full w-full object-cover"
         controls
         muted
+        onClick={(event) => event.stopPropagation()}
         playsInline
         preload="metadata"
         src={previewUrl}
@@ -2313,7 +2434,7 @@ function PostAssetPreview({ asset, chrome, title }) {
             </div>
           </div>
         </div>
-        <audio aria-label={label} className="w-full" controls preload="metadata" src={previewUrl} />
+        <audio aria-label={label} className="w-full" controls onClick={(event) => event.stopPropagation()} preload="metadata" src={previewUrl} />
       </div>
     );
   }
@@ -2326,6 +2447,149 @@ function PostAssetPreview({ asset, chrome, title }) {
       draggable={false}
       src={previewUrl}
     />
+  );
+}
+
+function ResourcePreviewModal({ asset, chrome, copy, hasMultipleAssets, onClose, onDownloadAsset, onNext, onPrevious, title }) {
+  const previewUrl = apiUrl(asset.preview_url);
+
+  return (
+    <div
+      aria-label={asset.filename}
+      aria-modal="true"
+      className="fixed inset-0 z-[80] grid place-items-center overflow-hidden p-3 sm:p-5"
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        onClose();
+      }}
+      role="dialog"
+    >
+      <ResourcePreviewBackdrop asset={asset} chrome={chrome} previewUrl={previewUrl} />
+
+      <div
+        className="relative z-10 flex h-[calc(100svh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-7xl flex-col overflow-hidden rounded-[1.45rem] border shadow-[0_34px_90px_rgba(4,15,32,0.34)] backdrop-blur-[34px] sm:h-[calc(100svh-2.5rem)] sm:w-[calc(100vw-2.5rem)]"
+        onMouseDown={(event) => event.stopPropagation()}
+        style={buildResourcePreviewShellStyle(chrome)}
+      >
+        <div className="flex shrink-0 items-center gap-2 border-b px-3 py-3 backdrop-blur-[26px] sm:px-4" style={buildResourcePreviewHeaderStyle(chrome)}>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="grid size-9 shrink-0 place-items-center rounded-full border" style={buildPostResourceIconStyle(chrome, true)}>
+              <MediaTypeIcon type={asset.media_type} />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black" style={{ color: chrome.mediaText }} title={asset.filename}>
+                {asset.filename}
+              </p>
+              <p className="truncate text-xs font-semibold" style={{ color: chrome.muted }}>
+                {assetMediaLabel(asset, copy)} · {formatBytes(asset.size_bytes)}
+              </p>
+            </div>
+          </div>
+
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <button
+              className="inline-flex h-10 cursor-pointer items-center justify-center rounded-full border px-4 text-sm font-semibold shadow-[0_12px_28px_rgba(4,15,32,0.18)] backdrop-blur-xl transition"
+              onClick={onDownloadAsset}
+              style={buildResourcePreviewButtonStyle(chrome)}
+              type="button"
+            >
+              {copy.download}
+            </button>
+            <button
+              aria-label={copy.closePreview}
+              className="grid size-10 cursor-pointer place-items-center rounded-full border text-xl leading-none shadow-[0_12px_28px_rgba(4,15,32,0.18)] backdrop-blur-xl transition"
+              onClick={onClose}
+              style={buildResourcePreviewButtonStyle(chrome)}
+              type="button"
+            >
+              <ClearIcon />
+            </button>
+          </div>
+        </div>
+
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+          {hasMultipleAssets ? (
+            <>
+              <button
+                aria-label={copy.previous}
+                className="absolute left-3 top-1/2 z-20 hidden h-12 -translate-y-1/2 cursor-pointer items-center rounded-full border px-4 text-sm font-semibold shadow-[0_14px_34px_rgba(4,15,32,0.2)] backdrop-blur-xl transition sm:inline-flex"
+                onClick={onPrevious}
+                style={buildResourcePreviewButtonStyle(chrome)}
+                type="button"
+              >
+                {copy.previous}
+              </button>
+              <button
+                aria-label={copy.next}
+                className="absolute right-3 top-1/2 z-20 hidden h-12 -translate-y-1/2 cursor-pointer items-center rounded-full border px-4 text-sm font-semibold shadow-[0_14px_34px_rgba(4,15,32,0.2)] backdrop-blur-xl transition sm:inline-flex"
+                onClick={onNext}
+                style={buildResourcePreviewButtonStyle(chrome)}
+                type="button"
+              >
+                {copy.next}
+              </button>
+              <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 gap-2 sm:hidden">
+                <button className="h-10 cursor-pointer rounded-full border px-4 text-sm font-semibold backdrop-blur-xl" onClick={onPrevious} style={buildResourcePreviewButtonStyle(chrome)} type="button">
+                  {copy.previous}
+                </button>
+                <button className="h-10 cursor-pointer rounded-full border px-4 text-sm font-semibold backdrop-blur-xl" onClick={onNext} style={buildResourcePreviewButtonStyle(chrome)} type="button">
+                  {copy.next}
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          <div className="absolute inset-3 grid min-h-0 min-w-0 place-items-center sm:inset-5">
+            {asset.media_type === "video" ? (
+              <video
+                className="block h-auto max-h-full w-auto max-w-full rounded-[1.1rem] object-contain shadow-[0_24px_70px_rgba(4,15,32,0.28)]"
+                controls
+                playsInline
+                preload="metadata"
+                src={previewUrl}
+                style={{ height: "auto", maxHeight: "calc(100svh - 9rem)", maxWidth: "100%", objectFit: "contain", width: "auto" }}
+              />
+            ) : asset.media_type === "audio" ? (
+              <div className="grid w-full max-w-xl gap-5 rounded-[1.2rem] border p-6 text-center backdrop-blur-2xl" style={buildResourceAudioStyle(chrome)}>
+                <span className="mx-auto grid size-20 place-items-center rounded-[1.2rem] border text-4xl" style={buildPostAudioIconStyle(chrome)}>
+                  ♪
+                </span>
+                <div className="break-words text-lg font-black" style={{ color: chrome.text }}>
+                  {title || asset.filename}
+                </div>
+                <audio className="w-full" controls preload="metadata" src={previewUrl} />
+              </div>
+            ) : (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                alt={asset.filename}
+                className="block h-auto max-h-full w-auto max-w-full rounded-[1.1rem] object-contain shadow-[0_24px_70px_rgba(4,15,32,0.28)]"
+                draggable={false}
+                src={previewUrl}
+                style={{ height: "auto", maxHeight: "calc(100svh - 9rem)", maxWidth: "100%", objectFit: "contain", objectPosition: "center", width: "auto" }}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResourcePreviewBackdrop({ asset, chrome, previewUrl }) {
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      {asset.media_type === "video" ? (
+        <video className="absolute inset-0 h-full w-full scale-110 object-cover opacity-55 blur-[46px]" autoPlay loop muted playsInline src={previewUrl} />
+      ) : asset.media_type === "image" ? (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-62 blur-[48px]" src={previewUrl} />
+      ) : (
+        <div className="absolute inset-0" style={{ background: chrome.audioBackground }} />
+      )}
+      <div className="absolute inset-0 backdrop-blur-[18px]" style={{ background: "radial-gradient(circle at center, rgba(255,255,255,0.16), rgba(4,10,20,0.68) 74%)" }} />
+      <div className="absolute inset-0" style={{ background: `linear-gradient(135deg, ${hexToRgba(chrome.accent, 0.22)} 0%, transparent 36%, rgba(4,10,20,0.46) 100%)` }} />
+    </div>
   );
 }
 
@@ -3178,6 +3442,44 @@ function buildPostMediaCounterStyle(chrome) {
   };
 }
 
+function buildPostResourceIconStyle(chrome, isActive) {
+  return {
+    color: isActive ? chrome.mediaText : chrome.accent,
+    background: isActive ? hexToRgba(chrome.accent, 0.22) : chrome.metricIconBackground,
+    borderColor: isActive ? hexToRgba(chrome.accent, 0.38) : chrome.mediaBorder,
+  };
+}
+
+function buildResourcePreviewShellStyle(chrome) {
+  return {
+    background: chrome.modalPanelBackground ?? chrome.contentBackground,
+    borderColor: chrome.mediaBorder,
+    color: chrome.text,
+  };
+}
+
+function buildResourcePreviewHeaderStyle(chrome) {
+  return {
+    background: chrome.mediaBadgeBackground,
+    borderColor: chrome.mediaBorder,
+  };
+}
+
+function buildResourcePreviewButtonStyle(chrome) {
+  return {
+    color: chrome.mediaText,
+    background: chrome.mediaBadgeBackground,
+    borderColor: chrome.mediaBorder,
+  };
+}
+
+function buildResourceAudioStyle(chrome) {
+  return {
+    background: chrome.contentBackground,
+    borderColor: chrome.mediaBorder,
+  };
+}
+
 function buildPostMetricStyle(chrome) {
   return {
     background: chrome.metricBackground,
@@ -3357,6 +3659,18 @@ function platformMediaLabel(platform, copy = copyByLanguage.zh) {
 
   if (["youtube", "tiktok", "douyin", "kuaishou", "acfun", "bilibili", "facebook", "pinterest", "pornhub"].includes(platform)) {
     return copy.video;
+  }
+
+  return copy.image;
+}
+
+function assetMediaLabel(asset, copy = copyByLanguage.zh) {
+  if (asset?.media_type === "video") {
+    return copy.video;
+  }
+
+  if (asset?.media_type === "audio") {
+    return copy.audio;
   }
 
   return copy.image;
@@ -3707,7 +4021,7 @@ function getButtonTheme(platform, colorMode = "light") {
 
 function detectPlatform(value) {
   try {
-    const hostname = new URL(extractUrlCandidate(value)).hostname.toLowerCase().replace(/^www\./, "");
+    const hostname = new URL(urlCandidateWithProtocol(value)).hostname.toLowerCase().replace(/^www\./, "");
 
     if (hostname === "instagram.com" || hostname.endsWith(".instagram.com") || hostname.endsWith("ddinstagram.com")) {
       return "instagram";
@@ -3777,7 +4091,7 @@ function detectPlatform(value) {
 
 function isValidHttpUrl(value) {
   try {
-    const parsed = new URL(extractUrlCandidate(value));
+    const parsed = new URL(urlCandidateWithProtocol(value));
 
     return ["http:", "https:"].includes(parsed.protocol) && Boolean(parsed.hostname);
   } catch {
@@ -3785,9 +4099,23 @@ function isValidHttpUrl(value) {
   }
 }
 
+function urlCandidateWithProtocol(value) {
+  const candidate = extractUrlCandidate(value);
+
+  if (!candidate || candidate.includes("://")) {
+    return candidate;
+  }
+
+  if (/^(?:www\.)?v2ex\.com(?:[/?#:]|$)/i.test(candidate)) {
+    return `https://${candidate}`;
+  }
+
+  return candidate;
+}
+
 function extractUrlCandidate(value) {
   const trimmed = String(value || "").trim();
-  const match = trimmed.match(shareUrlPattern);
+  const match = trimmed.match(shareUrlPattern) ?? trimmed.match(bareV2exUrlPattern);
   const candidate = match ? match[0] : trimmed;
 
   return candidate.replace(trailingUrlPunctuationPattern, "");

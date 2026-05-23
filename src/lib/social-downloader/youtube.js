@@ -31,6 +31,7 @@ const YOUTUBE_HOSTS = new Set([
 ]);
 const INNERTUBE_CLIENTS = ["ANDROID_VR", "IOS", "ANDROID", "WEB", "WEB_EMBEDDED", "TV", "MWEB"];
 const YTDL_PLAYER_CLIENTS = ["WEB_EMBEDDED", "IOS", "ANDROID", "TV", "WEB"];
+const YOUTUBE_COMMENT_SORT = "TOP_COMMENTS";
 const YOUTUBE_COOKIE_ENV_NAMES = [
   "SOCIAL_YOUTUBE_COOKIE",
   "SOCIAL_YOUTUBE_COOKIES",
@@ -75,6 +76,55 @@ export function normalizeYoutubeUrl(parsed) {
 
 export function isYoutubeHost(host) {
   return YOUTUBE_HOSTS.has(host);
+}
+
+export async function resolveYoutubeComments(normalized, options = {}, settings = {}) {
+  const client = await getInnertubeClient(settings);
+  const targetBatchIndex = normalizeYoutubeCommentBatchIndex(options.cursor);
+  let commentsPage;
+  let loadedBefore = 0;
+
+  try {
+    commentsPage = await client.getComments(normalized.shortcode, YOUTUBE_COMMENT_SORT);
+
+    for (let index = 0; index < targetBatchIndex; index += 1) {
+      loadedBefore += youtubeCommentThreads(commentsPage).length;
+
+      if (!commentsPage.has_continuation) {
+        commentsPage = null;
+        break;
+      }
+
+      commentsPage = await commentsPage.getContinuation();
+    }
+  } catch (error) {
+    throw toYoutubeAppError(error);
+  }
+
+  const comments = commentsPage
+    ? youtubeCommentThreads(commentsPage)
+      .map((thread) => normalizeYoutubeCommentThread(thread))
+      .filter((comment) => comment.id && (comment.text || comment.author_name))
+    : [];
+  const totalCount = youtubeCommentsTotalCount(commentsPage) ?? (loadedBefore + comments.length || null);
+  const hasMore = Boolean(commentsPage?.has_continuation);
+  const publicCount = Math.min(
+    totalCount ?? loadedBefore + comments.length,
+    loadedBefore + comments.length,
+  );
+
+  return {
+    platform: "youtube",
+    shortcode: normalized.shortcode,
+    canonical_url: normalized.canonical_url,
+    comments,
+    next_cursor: hasMore ? String(targetBatchIndex + 1) : null,
+    has_more: hasMore,
+    total_count: totalCount,
+    public_count: publicCount,
+    is_partial_public_snapshot: Boolean(totalCount == null || publicCount < totalCount),
+    source: "youtubei_public_comments",
+  };
 }
 
 export async function resolveYoutubePost(normalized, settings) {
@@ -171,9 +221,10 @@ async function resolveYoutubePostWithInnertube(normalized, settings) {
       asset.filename_hint = `${filenameBase}${innertubeFormatExtension(format)}`;
     }
 
+    const publicMetrics = await getYoutubePublicMetrics(client, normalized).catch(() => ({}));
     const metrics = {
-      like_count: null,
-      comment_count: null,
+      like_count: publicMetrics.like_count ?? null,
+      comment_count: publicMetrics.comment_count ?? null,
       view_count: optionalInt(details.view_count),
       save_count: null,
       share_count: null,
@@ -526,6 +577,175 @@ function innertubeAudioFormatScore(format) {
   ];
 }
 
+async function getYoutubePublicMetrics(client, normalized) {
+  const info = await client.getInfo(normalized.shortcode, { client: "WEB" });
+  const details = info?.basic_info && typeof info.basic_info === "object" ? info.basic_info : {};
+  const commentCount = youtubeInfoCommentCount(info) ?? await getYoutubeCommentCount(client, normalized).catch(() => null);
+
+  return {
+    like_count: parseYoutubeCount(details.like_count),
+    comment_count: commentCount,
+  };
+}
+
+async function getYoutubeCommentCount(client, normalized) {
+  const commentsPage = await client.getComments(normalized.shortcode, YOUTUBE_COMMENT_SORT);
+
+  return youtubeCommentsTotalCount(commentsPage);
+}
+
+function youtubeInfoCommentCount(info) {
+  return parseYoutubeCount(
+    info?.comments_entry_point_header?.comment_count?.text,
+    info?.comments_entry_point_header?.content_renderer?.comment_count?.text,
+  );
+}
+
+function youtubeCommentThreads(commentsPage) {
+  return Array.isArray(commentsPage?.contents) ? commentsPage.contents : [];
+}
+
+function youtubeCommentsTotalCount(commentsPage) {
+  return parseYoutubeCount(
+    commentsPage?.header?.comments_count?.text,
+    commentsPage?.header?.count?.text,
+    commentsPage?.header?.title?.text,
+  );
+}
+
+function normalizeYoutubeCommentBatchIndex(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return Math.min(parsed, 200);
+}
+
+function normalizeYoutubeCommentThread(thread) {
+  const comment = thread?.comment && typeof thread.comment === "object" ? thread.comment : {};
+  const author = comment.author && typeof comment.author === "object" ? comment.author : {};
+  const authorHandle = youtubeAuthorHandle(author);
+
+  return {
+    id: pickSingleLineText(comment.comment_id) ||
+      `youtube-comment-${hashYoutubeComment([authorHandle, author.name, comment.published_time, comment.content?.text].join("|"))}`,
+    text: pickText(comment.content?.text),
+    author_name: pickSingleLineText(author.name, authorHandle, "YouTube 用户"),
+    author_handle: authorHandle,
+    avatar_url: youtubeAuthorAvatarUrl(author),
+    created_at: youtubeRelativeTimestamp(comment.published_time),
+    like_count: parseYoutubeCount(comment.like_count, comment.like_count_a11y),
+    reply_count: parseYoutubeCount(comment.reply_count, comment.reply_count_a11y),
+    ip_loc: pickSingleLineText(comment.published_time),
+    has_voice: Boolean(comment.voice_reply_container),
+    replies: [],
+  };
+}
+
+function youtubeAuthorHandle(author) {
+  const url = pickSingleLineText(author.url);
+
+  try {
+    const parsed = new URL(url, "https://www.youtube.com");
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const handle = parts.find((part) => part.startsWith("@"));
+
+    return pickSingleLineText(handle, author.id === "N/A" ? "" : author.id);
+  } catch {
+    return pickSingleLineText(author.id === "N/A" ? "" : author.id);
+  }
+}
+
+function youtubeAuthorAvatarUrl(author) {
+  const thumbnail = author?.best_thumbnail ?? author?.thumbnails?.[0];
+  const url = pickSingleLineText(thumbnail?.url);
+
+  if (!url) {
+    return "";
+  }
+
+  try {
+    return new URL(url, "https://www.youtube.com").toString();
+  } catch {
+    return "";
+  }
+}
+
+function youtubeRelativeTimestamp(value) {
+  const text = pickSingleLineText(value);
+
+  if (!text) {
+    return null;
+  }
+
+  const normalized = text.toLowerCase();
+  const match = /(\d+(?:[.,]\d+)?)\s*(second|minute|hour|day|week|month|year)s?\s+ago/.exec(normalized);
+
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number.parseFloat(match[1].replace(",", "."));
+  const unit = match[2];
+  const unitMs = {
+    second: 1000,
+    minute: 60 * 1000,
+    hour: 60 * 60 * 1000,
+    day: 24 * 60 * 60 * 1000,
+    week: 7 * 24 * 60 * 60 * 1000,
+    month: 30 * 24 * 60 * 60 * 1000,
+    year: 365 * 24 * 60 * 60 * 1000,
+  }[unit];
+
+  if (!Number.isFinite(amount) || !unitMs) {
+    return null;
+  }
+
+  return new Date(Date.now() - amount * unitMs).toISOString();
+}
+
+function parseYoutubeCount(...values) {
+  for (const value of values) {
+    const text = pickSingleLineText(value);
+
+    if (!text) {
+      continue;
+    }
+
+    const match = text.replace(/,/g, "").match(/(\d+(?:\.\d+)?)\s*([KMB])?/i);
+
+    if (!match) {
+      continue;
+    }
+
+    const amount = Number.parseFloat(match[1]);
+    const multiplier = {
+      K: 1_000,
+      M: 1_000_000,
+      B: 1_000_000_000,
+    }[String(match[2] || "").toUpperCase()] || 1;
+
+    if (Number.isFinite(amount)) {
+      return Math.round(amount * multiplier);
+    }
+  }
+
+  return null;
+}
+
+function hashYoutubeComment(value) {
+  let hash = 0;
+  const text = String(value || "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36);
+}
+
 function isInnertubeFormatSelectionError(error) {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error || "").toLowerCase();
 
@@ -618,7 +838,7 @@ async function resolveYoutubePostWithYtdl(normalized, settings) {
   }
 
   const metrics = {
-    like_count: optionalInt(details.likes),
+    like_count: parseYoutubeCount(details.likes),
     comment_count: null,
     view_count: optionalInt(details.viewCount),
     save_count: null,

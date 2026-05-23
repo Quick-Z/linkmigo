@@ -2620,8 +2620,8 @@ function ResourcePreviewBackdrop({ asset, chrome, previewUrl }) {
       ) : (
         <div className="absolute inset-0" style={{ background: chrome.audioBackground }} />
       )}
-      <div className="absolute inset-0 backdrop-blur-[18px]" style={{ background: "radial-gradient(circle at center, rgba(255,255,255,0.16), rgba(4,10,20,0.68) 74%)" }} />
-      <div className="absolute inset-0" style={{ background: `linear-gradient(135deg, ${hexToRgba(chrome.accent, 0.22)} 0%, transparent 36%, rgba(4,10,20,0.46) 100%)` }} />
+      <div className="absolute inset-0 backdrop-blur-[18px]" style={{ background: chrome.previewBackdropOverlay ?? "radial-gradient(circle at center, rgba(255,255,255,0.16), rgba(4,10,20,0.68) 74%)" }} />
+      <div className="absolute inset-0" style={{ background: chrome.previewBackdropVeil ?? `linear-gradient(135deg, ${hexToRgba(chrome.accent, 0.22)} 0%, transparent 36%, rgba(4,10,20,0.46) 100%)` }} />
     </div>
   );
 }
@@ -2797,9 +2797,10 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
 
   return (
     <div
-      className="absolute inset-0 z-40 grid place-items-center bg-[rgba(4,10,20,0.34)] px-5 py-5 backdrop-blur-[12px]"
+      className="absolute inset-0 z-40 grid place-items-center px-5 py-5 backdrop-blur-[12px]"
       onMouseDown={onClose}
       role="presentation"
+      style={buildPostCommentsBackdropStyle(chrome)}
     >
       <section
         aria-label={copy.commentsPanel}
@@ -3481,10 +3482,12 @@ function buildResultShellStyle(theme) {
 }
 
 function buildPostModalBackdropStyle(theme) {
+  const accent = theme.accent ?? "#7b8aa1";
+
   return {
     background: theme.colorMode === "dark"
-      ? "rgba(3, 8, 17, 0.58)"
-      : "rgba(219, 233, 252, 0.46)",
+      ? `radial-gradient(circle at center, ${hexToRgba(accent, 0.14)}, rgba(3, 8, 17, 0.64) 72%)`
+      : `radial-gradient(circle at center, ${hexToRgba(accent, 0.08)}, rgba(219, 233, 252, 0.46) 72%)`,
     transition: themeTransition,
   };
 }
@@ -3652,11 +3655,15 @@ function buildPostAudioIconStyle(chrome) {
 }
 
 function buildPostToastStyle(chrome) {
+  const isDark = chrome.colorMode === "dark";
+
   return {
     color: chrome.text,
-    background: "rgba(255,255,255,0.58)",
-    borderColor: "rgba(255,255,255,0.72)",
-    boxShadow: `0 18px 42px ${hexToRgba(chrome.accent, 0.16)}, inset 0 1px 0 rgba(255,255,255,0.78)`,
+    background: isDark ? hexToRgba(chrome.accent, 0.14) : "rgba(255,255,255,0.58)",
+    borderColor: isDark ? chrome.divider : "rgba(255,255,255,0.72)",
+    boxShadow: isDark
+      ? `0 18px 42px ${hexToRgba(chrome.accent, 0.2)}, inset 0 1px 0 rgba(255,255,255,0.08)`
+      : `0 18px 42px ${hexToRgba(chrome.accent, 0.16)}, inset 0 1px 0 rgba(255,255,255,0.78)`,
     WebkitBackdropFilter: "blur(22px) saturate(1.35)",
     backdropFilter: "blur(22px) saturate(1.35)",
   };
@@ -3668,6 +3675,14 @@ function buildPostCommentsShellStyle(chrome) {
     borderColor: chrome.divider,
     boxShadow: `0 26px 70px ${hexToRgba(chrome.accent, 0.18)}, 0 18px 42px rgba(4,10,20,0.22)`,
     color: chrome.text,
+  };
+}
+
+function buildPostCommentsBackdropStyle(chrome) {
+  return {
+    background: chrome.colorMode === "dark"
+      ? `radial-gradient(circle at center, ${hexToRgba(chrome.accent, 0.14)}, rgba(4,10,20,0.54) 72%)`
+      : `radial-gradient(circle at center, ${hexToRgba(chrome.accent, 0.08)}, rgba(4,10,20,0.26) 72%)`,
   };
 }
 
@@ -3823,40 +3838,84 @@ function assetMediaLabel(asset, copy = copyByLanguage.zh) {
 }
 
 function getPostChrome(platform, theme) {
-  const base = {
-    shellBackground: "#ffffff",
-    shellBorder: "rgba(15, 23, 42, 0.12)",
-    shellShadow: "0 30px 80px rgba(15, 23, 42, 0.22)",
-    contentBackground: "#ffffff",
-    mediaBackground: "linear-gradient(135deg, #f4f6f9 0%, #eef1f7 100%)",
-    mediaFrameBackground: "#f8fafc",
-    mediaBadgeBackground: "rgba(255,255,255,0.78)",
-    mediaBorder: "rgba(15, 23, 42, 0.1)",
-    mediaShadow: "0 22px 48px rgba(15, 23, 42, 0.18)",
-    mediaText: "#223049",
-    mediaLabel: "post preview",
-    contentLabel: "post",
-    surfaceLabel: "Public post",
-    text: "#182235",
-    muted: "#718096",
-    divider: "rgba(15, 23, 42, 0.1)",
-    accent: theme.accent,
-    avatarRing: `linear-gradient(135deg, ${theme.accent} 0%, ${theme.accentStrong} 100%)`,
-    avatarFill: "#ffffff",
-    avatarText: theme.accentText,
-    pillBackground: hexToRgba(theme.accent, 0.08),
-    pillText: theme.accentText,
-    tagBackground: hexToRgba(theme.accent, 0.08),
-    tagBorder: hexToRgba(theme.accent, 0.16),
-    tagText: theme.accentText,
-    metricBackground: "rgba(248, 250, 252, 0.86)",
-    metricBorder: "rgba(15, 23, 42, 0.06)",
-    metricIconBackground: hexToRgba(theme.accent, 0.1),
-    closeBackground: "rgba(255,255,255,0.82)",
-    closeText: theme.accentText,
-    closeShadow: "0 10px 24px rgba(15,23,42,0.1)",
-    audioBackground: `linear-gradient(135deg, ${hexToRgba(theme.accent, 0.16)} 0%, rgba(255,255,255,0.9) 100%)`,
-  };
+  const isDark = theme.colorMode === "dark";
+  const accent = theme.accent ?? "#7b8aa1";
+  const accentStrong = theme.accentStrong ?? accent;
+  const accentText = theme.accentText ?? (isDark ? "#f0f6ff" : "#334155");
+  const base = isDark
+    ? {
+        colorMode: "dark",
+        shellBackground: `linear-gradient(135deg, ${hexToRgba(accent, 0.12)} 0%, rgba(13,24,42,0.96) 46%, rgba(7,13,24,0.98) 100%)`,
+        shellBorder: theme.borderStrong ?? theme.border ?? "rgba(180,207,240,0.22)",
+        shellShadow: theme.panelShadow ?? `0 30px 80px ${hexToRgba(accent, 0.18)}, 0 18px 44px rgba(0,0,0,0.36)`,
+        contentBackground: "linear-gradient(135deg, rgba(18,31,52,0.94) 0%, rgba(8,15,28,0.96) 100%)",
+        modalPanelBackground: "linear-gradient(135deg, rgba(16,28,48,0.92) 0%, rgba(7,14,27,0.9) 100%)",
+        mediaBackground: `linear-gradient(135deg, ${hexToRgba(accent, 0.17)} 0%, rgba(12,22,39,0.96) 46%, rgba(5,10,20,0.98) 100%)`,
+        mediaFrameBackground: "rgba(4,8,16,0.96)",
+        mediaBadgeBackground: hexToRgba(accent, 0.14),
+        mediaBorder: theme.borderStrong ?? theme.border ?? "rgba(180,207,240,0.22)",
+        mediaShadow: `0 24px 58px rgba(0,0,0,0.36), 0 14px 32px ${hexToRgba(accent, 0.14)}`,
+        mediaText: theme.titleText ?? "#f4f8ff",
+        mediaLabel: "post preview",
+        contentLabel: "post",
+        surfaceLabel: "Public post",
+        text: theme.bodyText ?? "#eaf1fb",
+        muted: theme.mutedText ?? "#a6b4c8",
+        divider: theme.panelBorder ?? "rgba(180,207,240,0.22)",
+        accent,
+        avatarRing: `linear-gradient(135deg, ${accent} 0%, ${accentStrong} 100%)`,
+        avatarFill: "rgba(7,14,27,0.96)",
+        avatarText: accentText,
+        pillBackground: hexToRgba(accent, 0.14),
+        pillText: accentText,
+        tagBackground: hexToRgba(accent, 0.1),
+        tagBorder: hexToRgba(accent, 0.22),
+        tagText: accentText,
+        metricBackground: hexToRgba(accent, 0.075),
+        metricBorder: theme.border ?? "rgba(180,207,240,0.18)",
+        metricIconBackground: hexToRgba(accent, 0.14),
+        closeBackground: theme.modalButtonBackground ?? "rgba(31,47,73,0.78)",
+        closeText: theme.modalButtonText ?? "#f0f6ff",
+        closeShadow: "none",
+        audioBackground: `linear-gradient(135deg, ${hexToRgba(accent, 0.18)} 0%, rgba(8,15,28,0.92) 100%)`,
+        previewBackdropOverlay: `radial-gradient(circle at center, ${hexToRgba(accent, 0.18)}, rgba(4,10,20,0.74) 72%)`,
+        previewBackdropVeil: `linear-gradient(135deg, ${hexToRgba(accent, 0.24)} 0%, rgba(7,14,27,0.34) 46%, rgba(3,8,17,0.78) 100%)`,
+      }
+    : {
+        colorMode: "light",
+        shellBackground: "#ffffff",
+        shellBorder: "rgba(15, 23, 42, 0.12)",
+        shellShadow: "0 30px 80px rgba(15, 23, 42, 0.22)",
+        contentBackground: "#ffffff",
+        mediaBackground: "linear-gradient(135deg, #f4f6f9 0%, #eef1f7 100%)",
+        mediaFrameBackground: "#f8fafc",
+        mediaBadgeBackground: "rgba(255,255,255,0.78)",
+        mediaBorder: "rgba(15, 23, 42, 0.1)",
+        mediaShadow: "0 22px 48px rgba(15, 23, 42, 0.18)",
+        mediaText: "#223049",
+        mediaLabel: "post preview",
+        contentLabel: "post",
+        surfaceLabel: "Public post",
+        text: "#182235",
+        muted: "#718096",
+        divider: "rgba(15, 23, 42, 0.1)",
+        accent,
+        avatarRing: `linear-gradient(135deg, ${accent} 0%, ${accentStrong} 100%)`,
+        avatarFill: "#ffffff",
+        avatarText: accentText,
+        pillBackground: hexToRgba(accent, 0.08),
+        pillText: accentText,
+        tagBackground: hexToRgba(accent, 0.08),
+        tagBorder: hexToRgba(accent, 0.16),
+        tagText: accentText,
+        metricBackground: "rgba(248, 250, 252, 0.86)",
+        metricBorder: "rgba(15, 23, 42, 0.06)",
+        metricIconBackground: hexToRgba(accent, 0.1),
+        closeBackground: "rgba(255,255,255,0.82)",
+        closeText: accentText,
+        closeShadow: "0 10px 24px rgba(15,23,42,0.1)",
+        audioBackground: `linear-gradient(135deg, ${hexToRgba(accent, 0.16)} 0%, rgba(255,255,255,0.9) 100%)`,
+      };
 
   const platformChrome = {
     instagram: {
@@ -3964,34 +4023,39 @@ function getPostChrome(platform, theme) {
       closeShadow: "none",
     },
     youtube: {
-      shellBackground: "#0f0f0f",
-      shellBorder: "rgba(255,255,255,0.12)",
-      contentBackground: "#181818",
-      mediaBackground: "#050505",
-      mediaFrameBackground: "#000000",
-      mediaBadgeBackground: "rgba(255,0,0,0.16)",
-      mediaBorder: "rgba(255,255,255,0.14)",
-      mediaText: "#ffffff",
+      shellBackground: "#ffffff",
+      shellBorder: "rgba(15,23,42,0.1)",
+      shellShadow: "0 30px 80px rgba(15,23,42,0.2), 0 16px 38px rgba(255,0,0,0.1)",
+      contentBackground: "#ffffff",
+      modalPanelBackground: "rgba(255,255,255,0.9)",
+      mediaBackground: "linear-gradient(135deg, #fff1f3 0%, #ffffff 48%, #f7f7f7 100%)",
+      mediaFrameBackground: "#0f0f0f",
+      mediaBadgeBackground: "rgba(255,255,255,0.86)",
+      mediaBorder: "rgba(15,23,42,0.1)",
+      mediaText: "#0f0f0f",
       mediaLabel: "YouTube",
       surfaceLabel: "Watch",
-      text: "#ffffff",
-      muted: "#aaa",
-      divider: "rgba(255,255,255,0.11)",
-      accent: "#ff0033",
-      avatarRing: "linear-gradient(135deg, #ff0033, #ff7b7b)",
-      avatarFill: "#272727",
-      avatarText: "#fff",
-      pillBackground: "rgba(255,255,255,0.08)",
-      pillText: "#ffffff",
+      text: "#0f0f0f",
+      muted: "#606060",
+      divider: "rgba(15,23,42,0.1)",
+      accent: "#ff0000",
+      avatarRing: "linear-gradient(135deg, #ff0000, #ff6b6b)",
+      avatarFill: "#ffffff",
+      avatarText: "#cc0000",
+      pillBackground: "rgba(255,0,0,0.08)",
+      pillText: "#cc0000",
       tagBackground: "rgba(62,166,255,0.14)",
       tagBorder: "rgba(62,166,255,0.22)",
-      tagText: "#3ea6ff",
-      metricBackground: "rgba(255,255,255,0.07)",
-      metricBorder: "rgba(255,255,255,0.08)",
-      metricIconBackground: "rgba(255,0,51,0.14)",
-      closeBackground: "rgba(255,255,255,0.08)",
-      closeText: "#ffffff",
-      closeShadow: "none",
+      tagText: "#065fd4",
+      metricBackground: "rgba(247,247,247,0.92)",
+      metricBorder: "rgba(15,23,42,0.06)",
+      metricIconBackground: "rgba(255,0,0,0.09)",
+      closeBackground: "rgba(242,242,242,0.9)",
+      closeText: "#0f0f0f",
+      closeShadow: "0 10px 24px rgba(15,23,42,0.08)",
+      audioBackground: "linear-gradient(135deg, rgba(255,0,0,0.12), rgba(255,255,255,0.92))",
+      previewBackdropOverlay: "radial-gradient(circle at center, rgba(255,255,255,0.86), rgba(255,244,246,0.78) 52%, rgba(248,249,250,0.92) 100%)",
+      previewBackdropVeil: "linear-gradient(135deg, rgba(255,0,0,0.08) 0%, rgba(255,255,255,0.42) 46%, rgba(15,23,42,0.08) 100%)",
     },
     xiaohongshu: {
       mediaBackground: "linear-gradient(135deg, #fff5f7 0%, #ffffff 48%, #f5f5f5 100%)",
@@ -4145,8 +4209,53 @@ function getPostChrome(platform, theme) {
 
   return {
     ...base,
-    ...(platformChrome[platform] ?? {}),
+    ...(isDark
+      ? buildDarkPlatformPostChrome(platform, theme, platformChrome[platform] ?? {})
+      : (platformChrome[platform] ?? {})),
   };
+}
+
+function buildDarkPlatformPostChrome(platform, theme, platformChrome) {
+  const accent = theme.accent ?? "#7b8aa1";
+  const accentStrong = theme.accentStrong ?? accent;
+  const accentText = theme.accentText ?? "#f0f6ff";
+  const chrome = {
+    accent,
+    avatarRing: darkPostAvatarRing(platform, accent, accentStrong),
+    avatarText: accentText,
+    pillBackground: hexToRgba(accent, 0.14),
+    pillText: accentText,
+    tagBackground: hexToRgba(accent, 0.1),
+    tagBorder: hexToRgba(accent, 0.22),
+    tagText: accentText,
+    metricIconBackground: hexToRgba(accent, 0.14),
+  };
+
+  if (platformChrome.mediaLabel) {
+    chrome.mediaLabel = platformChrome.mediaLabel;
+  }
+
+  if (platformChrome.contentLabel) {
+    chrome.contentLabel = platformChrome.contentLabel;
+  }
+
+  if (platformChrome.surfaceLabel) {
+    chrome.surfaceLabel = platformChrome.surfaceLabel;
+  }
+
+  return chrome;
+}
+
+function darkPostAvatarRing(platform, accent, accentStrong) {
+  if (platform === "instagram") {
+    return "conic-gradient(from 210deg, #feda75, #fa7e1e, #d62976, #962fbf, #4f5bd5, #feda75)";
+  }
+
+  if (platform === "tiktok" || platform === "douyin") {
+    return `linear-gradient(135deg, ${accent} 0%, rgba(255,255,255,0.86) 50%, ${accentStrong} 100%)`;
+  }
+
+  return `linear-gradient(135deg, ${accent} 0%, ${accentStrong} 100%)`;
 }
 
 function getButtonTheme(platform, colorMode = "light") {

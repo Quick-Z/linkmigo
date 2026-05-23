@@ -3,6 +3,7 @@ import { resolveInstagramComments } from "./instagram";
 import { resolveRedditComments } from "./reddit";
 import { resolveV2exComments } from "./v2ex";
 import { resolveXiaoyuzhouComments } from "./xiaoyuzhou";
+import { resolveYoutubeComments } from "./youtube";
 
 const COMMENT_RESOLVERS = {
   bilibili: resolveBilibiliComments,
@@ -10,6 +11,7 @@ const COMMENT_RESOLVERS = {
   reddit: resolveRedditComments,
   v2ex: resolveV2exComments,
   xiaoyuzhou: resolveXiaoyuzhouComments,
+  youtube: resolveYoutubeComments,
 };
 
 export async function resolveSocialComments(normalized, options = {}, settings = {}) {

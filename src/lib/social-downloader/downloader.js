@@ -20,6 +20,8 @@ const MEDIA_HEADERS = {
 
 const EXTENSION_CONTENT_TYPES = {
   ".aac": "audio/aac",
+  ".avif": "image/avif",
+  ".flac": "audio/flac",
   ".gif": "image/gif",
   ".heic": "image/heic",
   ".jpg": "image/jpeg",
@@ -29,15 +31,22 @@ const EXTENSION_CONTENT_TYPES = {
   ".mov": "video/quicktime",
   ".mp3": "audio/mpeg",
   ".mp4": "video/mp4",
+  ".ogg": "audio/ogg",
   ".png": "image/png",
+  ".wav": "audio/wav",
   ".webm": "video/webm",
   ".webp": "image/webp",
 };
 
 const CONTENT_TYPE_EXTENSIONS = {
   "audio/aac": ".aac",
+  "audio/flac": ".flac",
   "audio/mp4": ".m4a",
   "audio/mpeg": ".mp3",
+  "audio/ogg": ".ogg",
+  "audio/wav": ".wav",
+  "audio/x-wav": ".wav",
+  "image/avif": ".avif",
   "image/gif": ".gif",
   "image/heic": ".heic",
   "image/jpeg": ".jpg",
@@ -938,6 +947,10 @@ export function extensionForAsset(asset, contentType = "") {
     ".m4a",
     ".mp3",
     ".aac",
+    ".avif",
+    ".wav",
+    ".ogg",
+    ".flac",
   ]) {
     if (pathname.endsWith(extension)) {
       return extension;

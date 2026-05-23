@@ -24,6 +24,7 @@ const platformLabels = {
   facebook: "Facebook",
   pinterest: "Pinterest",
   reddit: "Reddit",
+  v2ex: "V2EX",
   xiaoyuzhou: "Xiaoyuzhou",
   xiaohongshu: "Xiaohongshu",
   youtube: "YouTube",
@@ -103,6 +104,7 @@ const copyByLanguage = {
       facebook: "Facebook",
       pinterest: "Pinterest",
       reddit: "Reddit",
+      v2ex: "V2EX",
       xiaoyuzhou: "小宇宙",
       xiaohongshu: "小红书",
       youtube: "YouTube",
@@ -119,7 +121,7 @@ const copyByLanguage = {
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "粘贴 ins、小红书、小宇宙、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
+    urlPlaceholder: "粘贴 ins、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -198,6 +200,7 @@ const copyByLanguage = {
       facebook: "Facebook",
       pinterest: "Pinterest",
       reddit: "Reddit",
+      v2ex: "V2EX",
       xiaoyuzhou: "Xiaoyuzhou",
       xiaohongshu: "Xiaohongshu",
       youtube: "YouTube",
@@ -214,7 +217,7 @@ const copyByLanguage = {
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, Xiaohongshu, Xiaoyuzhou, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
+    urlPlaceholder: "Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -505,6 +508,22 @@ const darkPlatformThemeOverrides = {
     skeletonGradient: "linear-gradient(90deg, rgba(255,69,0,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(31,31,31,0.34) 100%)",
     previewGradient: "linear-gradient(135deg, rgba(255,69,0,0.36) 0%, rgba(255,255,255,0.08) 48%, rgba(31,31,31,0.46) 100%)",
   },
+  v2ex: {
+    accent: "#5E8FDB",
+    accentStrong: "#AFC6E8",
+    accentText: "#D9E7FA",
+    accentMuted: "#AFC8EA",
+    buttonText: "#F0F6FF",
+    border: "rgba(94, 143, 219, 0.36)",
+    borderStrong: "rgba(175, 198, 232, 0.34)",
+    ring: "rgba(94, 143, 219, 0.22)",
+    panelShadow: "0 28px 70px rgba(94, 143, 219, 0.18), 0 14px 34px rgba(0, 0, 0, 0.18)",
+    buttonShadow: "0 18px 38px rgba(94, 143, 219, 0.24), 0 8px 20px rgba(175, 198, 232, 0.1)",
+    selectedShadow: "0 22px 42px rgba(94, 143, 219, 0.22)",
+    progressGradient: "linear-gradient(90deg, #5E8FDB 0%, #AFC6E8 56%, #FFFFFF 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(94,143,219,0.24) 0%, rgba(255,255,255,0.1) 48%, rgba(175,198,232,0.18) 100%)",
+    previewGradient: "linear-gradient(135deg, rgba(94,143,219,0.34) 0%, rgba(255,255,255,0.08) 48%, rgba(30,41,59,0.36) 100%)",
+  },
   xiaoyuzhou: {
     accent: "#22D6C8",
     accentStrong: "#FFE45E",
@@ -737,6 +756,26 @@ const buttonThemes = {
     skeletonGradient: "linear-gradient(90deg, rgba(255,69,0,0.18) 0%, rgba(255,255,255,0.96) 48%, rgba(26,26,27,0.12) 100%)",
     previewGradient: "linear-gradient(135deg, #FFD9C9 0%, #FFFFFF 52%, #E5E7EB 100%)",
     mediaTint: "rgba(255, 247, 242, 0.78)",
+  },
+  v2ex: {
+    accent: "#5E8FDB",
+    accentStrong: "#3E5F99",
+    accentText: "#29476F",
+    accentMuted: "#6E819E",
+    buttonText: "#233C5F",
+    border: "rgba(94, 143, 219, 0.32)",
+    borderStrong: "rgba(62, 95, 153, 0.32)",
+    ring: "rgba(94, 143, 219, 0.17)",
+    panelShadow: "0 24px 60px rgba(94, 143, 219, 0.12), 0 12px 30px rgba(15, 23, 42, 0.08)",
+    buttonShadow: "0 18px 36px rgba(94, 143, 219, 0.14), 0 8px 18px rgba(15, 23, 42, 0.08)",
+    selectedShadow: "0 20px 38px rgba(94, 143, 219, 0.14)",
+    glassEnd: "rgba(245, 249, 255, 0.76)",
+    cardEnd: "rgba(248, 251, 255, 0.88)",
+    buttonGradient: "linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(243,248,255,0.93) 54%, rgba(247,249,252,0.98) 100%)",
+    progressGradient: "linear-gradient(90deg, #5E8FDB 0%, #AFC6E8 58%, #3E5F99 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(94,143,219,0.18) 0%, rgba(255,255,255,0.96) 48%, rgba(62,95,153,0.12) 100%)",
+    previewGradient: "linear-gradient(135deg, #DDEBFF 0%, #FFFFFF 52%, #E4E9F0 100%)",
+    mediaTint: "rgba(245, 249, 255, 0.78)",
   },
   bilibili: {
     accent: "#00A1D6",
@@ -3585,6 +3624,19 @@ function getPostChrome(platform, theme) {
       tagText: "#c43b00",
       metricIconBackground: "rgba(255,69,0,0.1)",
     },
+    v2ex: {
+      mediaBackground: "linear-gradient(135deg, #f2f7ff 0%, #ffffff 52%, #eef2f8 100%)",
+      mediaLabel: "V2EX",
+      surfaceLabel: "Topic",
+      accent: "#5e8fdb",
+      avatarRing: "linear-gradient(135deg, #5e8fdb, #afc6e8)",
+      pillBackground: "rgba(94,143,219,0.1)",
+      pillText: "#365d96",
+      tagBackground: "rgba(94,143,219,0.08)",
+      tagBorder: "rgba(94,143,219,0.14)",
+      tagText: "#365d96",
+      metricIconBackground: "rgba(94,143,219,0.1)",
+    },
     xiaoyuzhou: {
       mediaBackground: "linear-gradient(135deg, #e7fffc 0%, #ffffff 50%, #fff6cf 100%)",
       mediaLabel: "Xiaoyuzhou",
@@ -3703,6 +3755,10 @@ function detectPlatform(value) {
 
     if (hostname === "reddit.com" || hostname.endsWith(".reddit.com") || hostname === "redd.it" || hostname.endsWith(".redd.it")) {
       return "reddit";
+    }
+
+    if (hostname === "v2ex.com" || hostname.endsWith(".v2ex.com")) {
+      return "v2ex";
     }
 
     if (hostname === "xiaoyuzhoufm.com" || hostname.endsWith(".xiaoyuzhoufm.com")) {

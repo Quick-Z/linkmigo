@@ -65,6 +65,7 @@ export function getSocialDownloaderSettings() {
       "SOCIAL_REDDIT_USER_AGENT",
       stringEnv("REDDIT_USER_AGENT", "web:linkmigo:0.1.0 (by /u/linkmigo_user)"),
     ),
+    v2exToken: stringEnv("SOCIAL_V2EX_TOKEN", stringEnv("V2EX_TOKEN", "")),
   };
 }
 

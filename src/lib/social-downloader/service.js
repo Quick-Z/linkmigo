@@ -50,9 +50,11 @@ export async function resolveUrl(rawUrl, options = {}) {
     asset_count: null,
   });
 
-  const cached = await cache.findByCanonical(normalized.canonical_url);
+  let cached = await cache.findByCanonical(normalized.canonical_url);
 
   if (cached && isUsableCachedRecord(cached, normalized)) {
+    cached = await cache.touchRecord(cached);
+
     onProgress?.({
       phase: "completed",
       downloaded_bytes: cached.assets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0),

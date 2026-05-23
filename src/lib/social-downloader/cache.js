@@ -41,7 +41,7 @@ export class CacheStore {
   }
 
   async findByCanonical(canonicalUrl) {
-    await this.cleanup();
+    let matchedRecord = null;
 
     for (const metadataPath of await this.metadataPaths()) {
       let record;
@@ -52,16 +52,24 @@ export class CacheStore {
         continue;
       }
 
-      if (isExpired(record)) {
-        continue;
-      }
-
       if (record.canonical_url === canonicalUrl) {
-        return record;
+        matchedRecord = fresherRecord(matchedRecord, record);
       }
     }
 
-    return null;
+    return matchedRecord;
+  }
+
+  async touchRecord(record) {
+    const now = new Date();
+    const touched = {
+      ...record,
+      expires_at: new Date(now.getTime() + this.ttlSeconds * 1000).toISOString(),
+    };
+
+    await this.saveRecord(touched);
+
+    return touched;
   }
 
   async saveRecord(record) {
@@ -252,6 +260,24 @@ export class CacheStore {
 
 export function isExpired(record) {
   return Date.now() >= new Date(record.expires_at).getTime();
+}
+
+function fresherRecord(left, right) {
+  if (!left) {
+    return right;
+  }
+
+  const leftTime = recordFreshnessTime(left);
+  const rightTime = recordFreshnessTime(right);
+
+  return rightTime > leftTime ? right : left;
+}
+
+function recordFreshnessTime(record) {
+  return Math.max(
+    Date.parse(record.expires_at) || 0,
+    Date.parse(record.created_at) || 0,
+  );
 }
 
 async function exists(filePath) {

@@ -123,27 +123,59 @@ export async function resolveBilibiliPost(normalized, settings) {
   };
 }
 
+export async function resolveBilibiliComments(normalized, options = {}, settings = {}) {
+  let active = normalized;
+
+  if (active.kind === "short") {
+    const redirected = await resolveRedirect(active.canonical_url, settings);
+
+    if (redirected) {
+      active = normalizeBilibiliUrl(new URL(redirected));
+    }
+  }
+
+  const viewData = await requestBilibiliViewData(active, settings);
+
+  if (!viewData?.aid) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有找到这个 Bilibili 视频。", 404);
+  }
+
+  const limit = normalizeBilibiliCommentLimit(options.limit);
+  const page = normalizeBilibiliCommentPage(options.cursor);
+  const payload = await requestBilibiliReplyPage({
+    oid: viewData.aid,
+    page,
+    pageSize: limit,
+    referer: active.canonical_url,
+    settings,
+  });
+  const replies = Array.isArray(payload?.replies) ? payload.replies : [];
+  const totalCount = optionalInt(payload?.page?.count) ?? optionalInt(viewData?.stat?.reply) ?? replies.length;
+  const comments = replies
+    .map((reply) => normalizeBilibiliComment(reply))
+    .filter((comment) => comment.id);
+  const nextCursor = page * limit < totalCount && comments.length > 0 ? String(page + 1) : null;
+
+  return {
+    platform: "bilibili",
+    shortcode: active.shortcode,
+    canonical_url: active.canonical_url,
+    comments,
+    next_cursor: nextCursor,
+    has_more: Boolean(nextCursor),
+    total_count: totalCount,
+    public_count: Math.min(totalCount, (page - 1) * limit + comments.length),
+    is_partial_public_snapshot: totalCount > comments.length,
+    source: "bilibili_public_reply_api",
+  };
+}
+
 async function requestBilibiliPlayurl(normalized, settings) {
   const videoId = normalized.shortcode;
-  const params = videoId.toUpperCase().startsWith("BV")
-    ? { bvid: videoId }
-    : { aid: videoId.replace(/^av/i, "") };
+  const params = bilibiliVideoParams(videoId);
 
   try {
-    const viewUrl = new URL("https://api.bilibili.com/x/web-interface/view");
-
-    Object.entries(params).forEach(([key, value]) => viewUrl.searchParams.set(key, value));
-
-    const viewResponse = await fetchWithTimeout(
-      viewUrl,
-      {
-        cache: "no-store",
-        headers: { ...PAGE_HEADERS, Referer: normalized.canonical_url },
-      },
-      settings.httpTimeoutMs,
-    );
-    const view = await responseJson(viewResponse);
-    const viewData = view?.data && typeof view.data === "object" ? view.data : null;
+    const viewData = await requestBilibiliViewData(normalized, settings);
     const cid = viewData?.cid;
 
     if (!cid) {
@@ -163,6 +195,120 @@ async function requestBilibiliPlayurl(normalized, settings) {
     return play && typeof play === "object" ? { view: viewData, play } : null;
   } catch {
     return null;
+  }
+}
+
+function bilibiliVideoParams(videoId) {
+  return videoId.toUpperCase().startsWith("BV")
+    ? { bvid: videoId }
+    : { aid: videoId.replace(/^av/i, "") };
+}
+
+async function requestBilibiliViewData(normalized, settings) {
+  const viewUrl = new URL("https://api.bilibili.com/x/web-interface/view");
+
+  Object.entries(bilibiliVideoParams(normalized.shortcode)).forEach(([key, value]) => viewUrl.searchParams.set(key, value));
+
+  const viewResponse = await fetchWithTimeout(
+    viewUrl,
+    {
+      cache: "no-store",
+      headers: { ...PAGE_HEADERS, Referer: normalized.canonical_url },
+    },
+    settings.httpTimeoutMs,
+  );
+  const view = await responseJson(viewResponse);
+
+  return view?.data && typeof view.data === "object" ? view.data : null;
+}
+
+async function requestBilibiliReplyPage({ oid, page, pageSize, referer, settings }) {
+  const url = new URL("https://api.bilibili.com/x/v2/reply");
+
+  url.searchParams.set("type", "1");
+  url.searchParams.set("oid", String(oid));
+  url.searchParams.set("sort", "2");
+  url.searchParams.set("pn", String(page));
+  url.searchParams.set("ps", String(pageSize));
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      cache: "no-store",
+      headers: { ...PAGE_HEADERS, Referer: referer },
+    },
+    settings.httpTimeoutMs,
+  );
+  const payload = await responseJson(response);
+
+  return payload?.data && typeof payload.data === "object" ? payload.data : null;
+}
+
+function normalizeBilibiliCommentLimit(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 12;
+  }
+
+  return Math.max(1, Math.min(30, parsed));
+}
+
+function normalizeBilibiliCommentPage(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 1;
+  }
+
+  return parsed;
+}
+
+function normalizeBilibiliComment(reply) {
+  const member = reply?.member && typeof reply.member === "object" ? reply.member : {};
+  const replies = Array.isArray(reply?.replies) ? reply.replies : [];
+
+  return {
+    id: String(reply?.rpid || reply?.rpid_str || ""),
+    text: pickText(reply?.content?.message),
+    author_name: pickSingleLineText(member.uname, member.name, member.mid, "Bilibili 用户"),
+    author_handle: pickSingleLineText(member.mid),
+    avatar_url: bilibiliAvatarUrl(member.avatar),
+    created_at: bilibiliTimestamp(reply?.ctime),
+    like_count: optionalInt(reply?.like),
+    reply_count: optionalInt(reply?.rcount) ?? replies.length,
+    ip_loc: pickSingleLineText(reply?.reply_control?.location),
+    has_voice: false,
+    replies: replies
+      .slice(0, 3)
+      .map((item) => normalizeBilibiliComment(item))
+      .filter((comment) => comment.id),
+  };
+}
+
+function bilibiliTimestamp(value) {
+  const timestamp = optionalInt(value);
+
+  if (timestamp == null) {
+    return null;
+  }
+
+  const date = new Date(timestamp * 1000);
+
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function bilibiliAvatarUrl(value) {
+  const url = pickSingleLineText(value);
+
+  if (!url) {
+    return "";
+  }
+
+  try {
+    return new URL(htmlUnescape(url), "https://www.bilibili.com").toString();
+  } catch {
+    return "";
   }
 }
 

@@ -128,6 +128,37 @@ export async function resolveRedditPost(normalized, settings) {
   };
 }
 
+export async function resolveRedditComments(normalized, options = {}, settings = {}) {
+  const data = await requestRedditJson(
+    `https://api.reddit.com/comments/${encodeURIComponent(normalized.shortcode)}.json?raw_json=1&limit=500&depth=3`,
+    settings,
+  );
+  const post = extractRedditPost(data?.[0], normalized.shortcode) || extractRedditPost(data, normalized.shortcode);
+  const publicComments = redditTopLevelComments(data?.[1]);
+  const limit = normalizeRedditCommentLimit(options.limit);
+  const offset = normalizeRedditCommentCursor(options.cursor);
+  const endOffset = offset + limit;
+  const comments = publicComments
+    .slice(offset, endOffset)
+    .map((comment) => normalizeRedditComment(comment))
+    .filter((comment) => comment.id);
+  const totalCount = optionalInt(post?.num_comments) ?? publicComments.length;
+  const nextCursor = endOffset < publicComments.length ? String(endOffset) : null;
+
+  return {
+    platform: "reddit",
+    shortcode: normalized.shortcode,
+    canonical_url: normalized.canonical_url,
+    comments,
+    next_cursor: nextCursor,
+    has_more: Boolean(nextCursor),
+    total_count: totalCount,
+    public_count: publicComments.length,
+    is_partial_public_snapshot: totalCount > publicComments.length,
+    source: "reddit_public_json_comments",
+  };
+}
+
 async function requestRedditPost(normalized, settings) {
   const jsonUrls = redditJsonUrls(normalized, settings);
   const errors = [];
@@ -163,6 +194,67 @@ async function requestRedditPost(normalized, settings) {
   }
 
   throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有找到这个 Reddit 帖子。", 404);
+}
+
+function normalizeRedditCommentLimit(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 12;
+  }
+
+  return Math.max(1, Math.min(30, parsed));
+}
+
+function normalizeRedditCommentCursor(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return parsed;
+}
+
+function redditTopLevelComments(listing) {
+  const children = Array.isArray(listing?.data?.children) ? listing.data.children : [];
+
+  return children
+    .filter((child) => child?.kind === "t1" && child?.data)
+    .map((child) => child.data);
+}
+
+function normalizeRedditComment(comment) {
+  const replies = redditTopLevelComments(comment?.replies)
+    .slice(0, 3)
+    .map((reply) => normalizeRedditComment(reply))
+    .filter((reply) => reply.id);
+
+  return {
+    id: String(comment?.id || comment?.name || ""),
+    text: pickText(comment?.body_html, comment?.body),
+    author_name: pickSingleLineText(comment?.author) || "Reddit user",
+    author_handle: pickSingleLineText(comment?.author),
+    avatar_url: "",
+    created_at: redditTimestamp(comment?.created_utc ?? comment?.created),
+    like_count: optionalInt(comment?.ups) ?? optionalInt(comment?.score),
+    reply_count: optionalInt(comment?.num_comments) ?? replies.length,
+    ip_loc: pickSingleLineText(comment?.subreddit_name_prefixed),
+    has_voice: false,
+    replies,
+  };
+}
+
+function redditTimestamp(value) {
+  const timestamp = Number(value);
+
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  const date = new Date(timestamp * 1000);
+
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function redditJsonUrls(normalized, settings) {

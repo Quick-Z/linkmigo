@@ -88,6 +88,38 @@ export async function resolveV2exPost(normalized, settings) {
   }
 }
 
+export async function resolveV2exComments(normalized, options = {}, settings = {}) {
+  const { topic, replies } = await requestV2exApiPost(
+    {
+      ...normalized,
+      reply_number: null,
+    },
+    settings,
+  );
+  const limit = normalizeV2exCommentLimit(options.limit);
+  const offset = normalizeV2exCommentCursor(options.cursor);
+  const endOffset = offset + limit;
+  const comments = replies
+    .slice(offset, endOffset)
+    .map((reply, index) => normalizeV2exComment(reply, offset + index + 1))
+    .filter((comment) => comment.id);
+  const totalCount = optionalInt(topic?.replies) ?? replies.length;
+  const nextCursor = endOffset < replies.length ? String(endOffset) : null;
+
+  return {
+    platform: "v2ex",
+    shortcode: normalized.shortcode,
+    canonical_url: normalized.canonical_url,
+    comments,
+    next_cursor: nextCursor,
+    has_more: Boolean(nextCursor),
+    total_count: totalCount,
+    public_count: replies.length,
+    is_partial_public_snapshot: totalCount > replies.length,
+    source: "v2ex_public_api_replies",
+  };
+}
+
 export function extractV2exMediaAssetsFromContent(content, options = {}) {
   const pageUrl = options.pageUrl || "https://www.v2ex.com/";
   const filenameBase = safeFilenamePart(options.filenameBase || "v2ex_media");
@@ -105,6 +137,74 @@ export function extractV2exMediaAssetsFromContent(content, options = {}) {
       height: candidate.height,
     };
   });
+}
+
+function normalizeV2exCommentLimit(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 12;
+  }
+
+  return Math.max(1, Math.min(30, parsed));
+}
+
+function normalizeV2exCommentCursor(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return parsed;
+}
+
+function normalizeV2exComment(reply, ordinal) {
+  const member = reply?.member && typeof reply.member === "object" ? reply.member : {};
+
+  return {
+    id: String(reply?.id || `v2ex-${ordinal}`),
+    text: pickText(reply?.content_rendered, reply?.content),
+    author_name: displayNameFromV2exMember(member) || "V2EX 用户",
+    author_handle: creatorHandleFromV2exMember(member),
+    avatar_url: v2exAvatarUrl(member),
+    created_at: v2exTimestamp(reply?.created),
+    like_count: optionalInt(reply?.thanks),
+    reply_count: 0,
+    ip_loc: ordinal ? `#${ordinal}` : "",
+    has_voice: false,
+    replies: [],
+  };
+}
+
+function v2exAvatarUrl(member) {
+  const value = pickSingleLineText(
+    member?.avatar_normal,
+    member?.avatar_large,
+    member?.avatar_mini,
+  );
+
+  if (!value) {
+    return "";
+  }
+
+  try {
+    return new URL(htmlUnescape(value), "https://www.v2ex.com").toString();
+  } catch {
+    return "";
+  }
+}
+
+function v2exTimestamp(value) {
+  const timestamp = optionalInt(value);
+
+  if (timestamp == null) {
+    return null;
+  }
+
+  const date = new Date(timestamp * 1000);
+
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 async function requestV2exApiPost(normalized, settings) {

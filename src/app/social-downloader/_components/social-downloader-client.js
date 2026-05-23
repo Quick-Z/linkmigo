@@ -2756,7 +2756,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
     }
   }, [loadMore]);
 
-  const visibleTotal = publicCount ?? totalCount ?? comments.length;
+  const visibleTotal = Math.max(publicCount ?? totalCount ?? comments.length, comments.length);
   const statusText = comments.length > 0
     ? copy.commentsVisibleCount(comments.length, visibleTotal)
     : "";
@@ -2804,7 +2804,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
         >
           <div className="grid gap-3">
             {isLoading ? (
-              <PostCommentsState chrome={chrome} text={copy.loadingComments} />
+              <PostCommentsState chrome={chrome} isLoading text={copy.loadingComments} />
             ) : null}
 
             {!isLoading && error ? (
@@ -2836,7 +2836,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
             ))}
 
             {isLoadingMore ? (
-              <PostCommentsState chrome={chrome} compact text={copy.loadingMoreComments} />
+              <PostCommentsState chrome={chrome} compact isLoading text={copy.loadingMoreComments} />
             ) : null}
           </div>
         </FloatingScrollArea>
@@ -2853,7 +2853,12 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
               style={buildPostCommentsActionStyle(chrome)}
               type="button"
             >
-              {isLoadingMore ? copy.loadingMoreComments : copy.loadMoreComments}
+              {isLoadingMore ? (
+                <span className="inline-flex items-center gap-2">
+                  <span className="block size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  {copy.loadingMoreComments}
+                </span>
+              ) : copy.loadMoreComments}
             </button>
           ) : (
             <span className="shrink-0" style={{ color: chrome.muted }}>
@@ -2923,14 +2928,23 @@ function PostCommentCard({ chrome, comment, copy, language, onCopyComment }) {
 }
 
 function CommentAvatar({ chrome, comment }) {
-  if (comment.avatar_url) {
+  const [hasImageError, setHasImageError] = useState(false);
+  const avatarUrl = proxiedCommentAvatarUrl(comment.avatar_url);
+
+  useEffect(() => {
+    setHasImageError(false);
+  }, [comment.avatar_url]);
+
+  if (avatarUrl && !hasImageError) {
     return (
       /* eslint-disable-next-line @next/next/no-img-element */
       <img
         alt=""
         className="size-10 shrink-0 rounded-full border object-cover"
         draggable={false}
-        src={comment.avatar_url}
+        onError={() => setHasImageError(true)}
+        referrerPolicy="no-referrer"
+        src={avatarUrl}
         style={{ borderColor: chrome.divider }}
       />
     );
@@ -2943,10 +2957,105 @@ function CommentAvatar({ chrome, comment }) {
   );
 }
 
-function PostCommentsState({ chrome, compact = false, text }) {
+function proxiedCommentAvatarUrl(value) {
+  const url = String(value || "").trim();
+
+  if (!url) {
+    return "";
+  }
+
+  return isInstagramImageUrl(url)
+    ? apiUrl(`/api/v1/instagram/avatar?url=${encodeURIComponent(url)}`)
+    : url;
+}
+
+function isInstagramImageUrl(value) {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+
+    return (
+      host === "instagram.com" ||
+      host.endsWith(".instagram.com") ||
+      host === "cdninstagram.com" ||
+      host.endsWith(".cdninstagram.com") ||
+      host === "fbcdn.net" ||
+      host.endsWith(".fbcdn.net") ||
+      host === "fbsbx.com" ||
+      host.endsWith(".fbsbx.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function PostCommentsState({ chrome, compact = false, isLoading = false, text }) {
+  if (isLoading) {
+    return (
+      <div
+        aria-live="polite"
+        className={`rounded-[0.95rem] border px-5 text-center font-bold ${compact ? "py-3 text-xs" : "grid gap-4 py-6 text-sm"}`}
+        role="status"
+        style={buildPostCommentCardStyle(chrome, false)}
+      >
+        <div className={`items-center ${compact ? "flex justify-center gap-2" : "grid justify-items-center gap-3"}`}>
+          <span
+            aria-hidden="true"
+            className={`${compact ? "size-4" : "size-8"} block animate-spin rounded-full border-2 border-current border-t-transparent`}
+            style={{ color: chrome.accent }}
+          />
+          <span style={{ color: chrome.muted }}>{text}</span>
+        </div>
+
+        {!compact ? <PostCommentsLoadingSkeleton chrome={chrome} /> : null}
+      </div>
+    );
+  }
+
   return (
     <div className={`grid place-items-center rounded-[0.95rem] border px-5 text-center font-bold ${compact ? "py-3 text-xs" : "py-10 text-sm"}`} style={buildPostCommentCardStyle(chrome, false)}>
       <span style={{ color: chrome.muted }}>{text}</span>
+    </div>
+  );
+}
+
+function PostCommentsLoadingSkeleton({ chrome }) {
+  return (
+    <div aria-hidden="true" className="grid gap-3">
+      {[0, 1, 2].map((index) => (
+        <div
+          className="grid gap-3 rounded-[0.8rem] border p-3"
+          key={index}
+          style={{
+            background: hexToRgba(chrome.accent, 0.035),
+            borderColor: chrome.metricBorder,
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <span
+              className="size-9 shrink-0 animate-pulse rounded-full"
+              style={{ background: hexToRgba(chrome.accent, 0.16) }}
+            />
+            <span className="grid min-w-0 flex-1 gap-2">
+              <span
+                className="h-3 w-[42%] animate-pulse rounded-full"
+                style={{ background: hexToRgba(chrome.accent, 0.18) }}
+              />
+              <span
+                className="h-2.5 w-[28%] animate-pulse rounded-full"
+                style={{ background: hexToRgba(chrome.accent, 0.11) }}
+              />
+            </span>
+          </div>
+          <span
+            className="h-3 w-[88%] animate-pulse rounded-full"
+            style={{ background: hexToRgba(chrome.accent, 0.12) }}
+          />
+          <span
+            className="h-3 w-[64%] animate-pulse rounded-full"
+            style={{ background: hexToRgba(chrome.accent, 0.09) }}
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -3073,7 +3182,7 @@ function clampAssetIndex(index, assetCount) {
 }
 
 function canOpenPostComments(result) {
-  return result?.platform === "xiaoyuzhou" && Boolean(result?.canonical_url);
+  return Boolean(result?.platform && result?.canonical_url);
 }
 
 function normalizeCommentList(value) {

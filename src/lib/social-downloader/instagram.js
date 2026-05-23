@@ -547,6 +547,553 @@ async function requestMobileMediaInfo(mediaId, settings) {
   }
 }
 
+export async function resolveInstagramComments(normalized, options = {}, settings = {}) {
+  await ensureInstagramNetwork(settings);
+
+  const limit = normalizeInstagramCommentLimit(options.limit);
+  const cursor = parseInstagramCommentCursor(options.cursor);
+  const mediaId = await getMediaId(normalized.shortcode, settings);
+
+  if (mediaId && cursor.type !== "snapshot") {
+    const page = await requestMobileComments(mediaId, cursor.type === "mobile" ? cursor.value : "", limit, settings);
+    const hasMobilePayload = page && (page.comments.length > 0 || page.nextCursor || page.totalCount != null);
+
+    if (hasMobilePayload || cursor.type === "mobile") {
+      const comments = page?.comments ?? [];
+      const totalCount = page?.totalCount ?? null;
+      const publicCount = page?.publicCount ?? totalCount;
+
+      return {
+        platform: "instagram",
+        shortcode: normalized.shortcode,
+        canonical_url: normalized.canonical_url,
+        comments,
+        next_cursor: page?.nextCursor ? `mobile:${page.nextCursor}` : null,
+        has_more: Boolean(page?.nextCursor),
+        total_count: totalCount,
+        public_count: publicCount,
+        is_partial_public_snapshot: totalCount != null && !page?.nextCursor && totalCount > comments.length,
+        source: "instagram_mobile_comments",
+      };
+    }
+  }
+
+  const snapshot = await instagramPublicCommentSnapshot(normalized, mediaId, settings);
+  const offset = cursor.type === "snapshot" ? cursor.offset : 0;
+  const endOffset = offset + limit;
+  const comments = snapshot.comments.slice(offset, endOffset);
+  const nextCursor = endOffset < snapshot.comments.length ? `snapshot:${endOffset}` : null;
+  const totalCount = snapshot.totalCount ?? snapshot.comments.length;
+
+  return {
+    platform: "instagram",
+    shortcode: normalized.shortcode,
+    canonical_url: normalized.canonical_url,
+    comments,
+    next_cursor: nextCursor,
+    has_more: Boolean(nextCursor),
+    total_count: totalCount,
+    public_count: snapshot.comments.length,
+    is_partial_public_snapshot: totalCount > snapshot.comments.length,
+    source: snapshot.source,
+  };
+}
+
+async function requestMobileComments(mediaId, minId, limit, settings) {
+  const url = new URL(`https://i.instagram.com/api/v1/media/${encodeURIComponent(mediaId)}/comments/`);
+
+  url.searchParams.set("can_support_threading", "true");
+  url.searchParams.set("permalink_enabled", "false");
+  url.searchParams.set("count", String(limit));
+
+  if (minId) {
+    url.searchParams.set("min_id", minId);
+  }
+
+  try {
+    const response = await fetchWithTimeout(
+      url,
+      { headers: MOBILE_HEADERS, cache: "no-store" },
+      settings.httpTimeoutMs,
+    );
+    const data = await responseJson(response);
+
+    if (!data || typeof data !== "object") {
+      return null;
+    }
+
+    const comments = normalizeInstagramCommentsFromData(data);
+    const nextCursor = pickSingleLineText(
+      data.next_min_id,
+      data.next_max_id,
+      data.next_cursor,
+    );
+    const totalCount = firstInstagramCommentCount(
+      data.comment_count,
+      data.comments_count,
+      data.total_count,
+    );
+
+    return {
+      comments,
+      nextCursor,
+      totalCount,
+      publicCount: totalCount,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function instagramPublicCommentSnapshot(normalized, mediaId, settings) {
+  const sources = [];
+
+  if (mediaId) {
+    const mediaInfo = await requestMobileMediaInfo(mediaId, settings);
+
+    if (mediaInfo) {
+      sources.push({ data: mediaInfo, source: "instagram_mobile_media_snapshot" });
+    }
+  }
+
+  const gqlData = await requestWebGraphqlPostData(normalized.shortcode, settings);
+
+  if (gqlData) {
+    sources.push({ data: { gql_data: gqlData }, source: "instagram_web_graphql_snapshot" });
+  }
+
+  try {
+    const html = await fetchPublicPage(normalized.canonical_url, settings);
+
+    for (const text of scriptTexts(html)) {
+      if (!text) {
+        continue;
+      }
+
+      for (const data of extractEmbeddedJsonObjects(text, [
+        "window._sharedData",
+        "__additionalDataLoaded",
+        "__bbox",
+        "edge_media_to_parent_comment",
+        "edge_media_preview_comment",
+        "xdt_shortcode_media",
+      ])) {
+        sources.push({ data, source: "instagram_public_page_snapshot" });
+      }
+    }
+  } catch {
+    // The mobile and GraphQL snapshots above are usually enough for public comments.
+  }
+
+  const comments = dedupeInstagramComments(
+    sources.flatMap((source) => normalizeInstagramCommentsFromData(source.data)),
+  );
+  const totalCount = maxInstagramCommentCount(
+    ...sources.map((source) => parseMetricsFromInstagramData(source.data).comment_count),
+  );
+  const source = sources.find((item) => normalizeInstagramCommentsFromData(item.data).length > 0)?.source ||
+    "instagram_public_comment_snapshot";
+
+  return {
+    comments,
+    totalCount,
+    source,
+  };
+}
+
+function normalizeInstagramCommentLimit(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 12;
+  }
+
+  return Math.max(1, Math.min(30, parsed));
+}
+
+function parseInstagramCommentCursor(value) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw) {
+    return { type: "initial", value: "", offset: 0 };
+  }
+
+  if (raw.startsWith("mobile:")) {
+    return { type: "mobile", value: raw.slice("mobile:".length), offset: 0 };
+  }
+
+  if (raw.startsWith("snapshot:")) {
+    return { type: "snapshot", value: "", offset: normalizeInstagramCommentOffset(raw.slice("snapshot:".length)) };
+  }
+
+  const offset = normalizeInstagramCommentOffset(raw);
+
+  if (String(offset) === raw) {
+    return { type: "snapshot", value: "", offset };
+  }
+
+  return { type: "mobile", value: raw, offset: 0 };
+}
+
+function normalizeInstagramCommentOffset(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return parsed;
+}
+
+function normalizeInstagramCommentsFromData(data) {
+  const candidates = [];
+
+  collectInstagramCommentCandidates(data, candidates);
+
+  return dedupeInstagramComments(
+    candidates
+      .map((comment) => normalizeInstagramComment(comment))
+      .filter((comment) => comment.id && (comment.text || comment.author_name)),
+  );
+}
+
+function collectInstagramCommentCandidates(data, candidates, depth = 0, seen = new WeakSet()) {
+  if (!data || typeof data !== "object" || depth > 8 || seen.has(data)) {
+    return;
+  }
+
+  seen.add(data);
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      collectInstagramCommentCandidates(item, candidates, depth + 1, seen);
+    }
+
+    return;
+  }
+
+  for (const key of ["comments", "preview_comments", "top_comments"]) {
+    appendInstagramCommentList(candidates, data[key]);
+  }
+
+  for (const key of ["edge_media_to_parent_comment", "edge_media_to_comment", "edge_media_preview_comment"]) {
+    appendInstagramCommentEdge(candidates, data[key]);
+  }
+
+  for (const key of ["gql_data", "shortcode_media", "xdt_shortcode_media", "media", "item", "items", "data"]) {
+    collectInstagramCommentCandidates(data[key], candidates, depth + 1, seen);
+  }
+}
+
+function appendInstagramCommentEdge(candidates, edge) {
+  if (!edge || typeof edge !== "object") {
+    return;
+  }
+
+  appendInstagramCommentList(candidates, edge.edges);
+}
+
+function appendInstagramCommentList(candidates, list) {
+  if (!Array.isArray(list)) {
+    return;
+  }
+
+  for (const item of list) {
+    const comment = unwrapInstagramCommentNode(item);
+
+    if (looksLikeInstagramComment(comment)) {
+      candidates.push(comment);
+    }
+  }
+}
+
+function unwrapInstagramCommentNode(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (value.node && typeof value.node === "object") {
+    return value.node;
+  }
+
+  if (value.comment && typeof value.comment === "object") {
+    return value.comment;
+  }
+
+  return value;
+}
+
+function looksLikeInstagramComment(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return Boolean(
+    pickText(value.text, value.comment_text, value.content) &&
+      (value.user || value.owner || value.author || value.pk || value.id || value.comment_id),
+  );
+}
+
+function normalizeInstagramComment(comment) {
+  const node = unwrapInstagramCommentNode(comment) ?? {};
+  const author = instagramCommentAuthor(node);
+  const text = cleanDisplayText(pickText(node.text, node.comment_text, node.content), { maxLength: 5000 });
+  const createdAt = normalizeInstagramCommentTime(
+    node.created_at_utc,
+    node.created_at,
+    node.taken_at,
+    node.created_time,
+  );
+  const authorHandle = normalizeCreatorHandle(
+    pickSingleLineText(author.username, author.handle, author.id),
+  );
+  const authorName = pickSingleLineText(
+    author.full_name,
+    author.name,
+    author.username,
+    authorHandle,
+    "Instagram 用户",
+  );
+  const id = pickSingleLineText(node.pk, node.id, node.comment_id, node.node_id) ||
+    `instagram-comment-${hashInstagramComment([authorHandle, authorName, createdAt, text].join("|"))}`;
+  const replies = instagramCommentReplies(node)
+    .slice(0, 3)
+    .map((reply) => normalizeInstagramComment(reply))
+    .filter((reply) => reply.id);
+
+  return {
+    id,
+    text,
+    author_name: authorName,
+    author_handle: authorHandle,
+    avatar_url: instagramCommentAvatarUrl(author),
+    created_at: createdAt,
+    like_count: firstInstagramCommentCount(
+      node.comment_like_count,
+      node.like_count,
+      node.likes_count,
+      node.edge_liked_by,
+    ),
+    reply_count: firstInstagramCommentCount(
+      node.child_comment_count,
+      node.inline_child_comment_count,
+      node.reply_count,
+      node.edge_threaded_comments,
+      replies.length,
+    ),
+    ip_loc: "",
+    has_voice: false,
+    replies,
+  };
+}
+
+function instagramCommentAuthor(comment) {
+  for (const key of ["user", "owner", "author"]) {
+    const value = comment?.[key];
+
+    if (value && typeof value === "object") {
+      return value;
+    }
+  }
+
+  return {};
+}
+
+function instagramCommentAvatarUrl(author) {
+  for (const value of instagramAvatarUrlCandidates(author)) {
+    const url = cleanSingleLineText(decodeJsonString(value || ""), { maxLength: 4096 });
+
+    if (isHttpUrl(url)) {
+      return url;
+    }
+  }
+
+  return "";
+}
+
+function instagramAvatarUrlCandidates(author) {
+  if (!author || typeof author !== "object") {
+    return [];
+  }
+
+  return [
+    author.profile_pic_url,
+    author.profile_pic_url_hd,
+    author.profile_picture,
+    author.avatar_url,
+    author.picture,
+    author.profile_pic?.url,
+    author.profile_pic?.uri,
+    author.profile_pic_url_info?.url,
+    author.profile_pic_url_info?.uri,
+    author.hd_profile_pic_url_info?.url,
+    author.hd_profile_pic_url_info?.uri,
+    ...(Array.isArray(author.hd_profile_pic_versions)
+      ? author.hd_profile_pic_versions.flatMap((item) => [item?.url, item?.uri])
+      : []),
+  ].flatMap((value) => avatarUrlCandidateValues(value));
+}
+
+function avatarUrlCandidateValues(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => avatarUrlCandidateValues(item));
+  }
+
+  if (typeof value === "object") {
+    return [
+      value.url,
+      value.uri,
+      value.src,
+      value.href,
+    ].filter(Boolean);
+  }
+
+  return [];
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+
+    return ["http:", "https:"].includes(parsed.protocol) && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function instagramCommentReplies(comment) {
+  const replies = [];
+
+  for (const key of ["child_comments", "preview_child_comments", "preview_child_comments_v2", "replies"]) {
+    const value = comment?.[key];
+
+    if (Array.isArray(value)) {
+      replies.push(...value.map((item) => unwrapInstagramCommentNode(item)).filter(Boolean));
+    }
+  }
+
+  for (const key of ["edge_threaded_comments", "edge_comment_to_parent_comment"]) {
+    const edges = comment?.[key]?.edges;
+
+    if (Array.isArray(edges)) {
+      replies.push(...edges.map((item) => unwrapInstagramCommentNode(item)).filter(Boolean));
+    }
+  }
+
+  return dedupeInstagramCommentNodes(replies);
+}
+
+function dedupeInstagramCommentNodes(comments) {
+  const seen = new Set();
+  const deduped = [];
+
+  for (const comment of comments) {
+    const node = unwrapInstagramCommentNode(comment);
+    const key = pickSingleLineText(node?.pk, node?.id, node?.comment_id) ||
+      hashInstagramComment(`${instagramCommentAuthor(node).username || ""}|${node?.created_at || ""}|${node?.text || ""}`);
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(node);
+  }
+
+  return deduped;
+}
+
+function dedupeInstagramComments(comments) {
+  const seen = new Set();
+  const deduped = [];
+
+  for (const comment of comments) {
+    const key = comment.id || hashInstagramComment(`${comment.author_handle || ""}|${comment.created_at || ""}|${comment.text || ""}`);
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(comment);
+  }
+
+  return deduped;
+}
+
+function normalizeInstagramCommentTime(...values) {
+  for (const value of values) {
+    if (value == null || value === "") {
+      continue;
+    }
+
+    const numeric = typeof value === "number" || /^\d+$/.test(String(value).trim())
+      ? optionalInt(value)
+      : null;
+
+    if (numeric != null) {
+      const timestamp = numeric > 10_000_000_000 ? numeric : numeric * 1000;
+      const date = new Date(timestamp);
+
+      if (!Number.isNaN(date.getTime())) {
+        return date.toISOString();
+      }
+    }
+
+    const date = new Date(String(value));
+
+    if (!Number.isNaN(date.getTime())) {
+      return date.toISOString();
+    }
+  }
+
+  return null;
+}
+
+function firstInstagramCommentCount(...values) {
+  for (const value of values) {
+    const count = countFromValue(value);
+
+    if (count != null) {
+      return count;
+    }
+  }
+
+  return null;
+}
+
+function maxInstagramCommentCount(...values) {
+  let max = null;
+
+  for (const value of values) {
+    const count = countFromValue(value);
+
+    if (count != null && (max == null || count > max)) {
+      max = count;
+    }
+  }
+
+  return max;
+}
+
+function hashInstagramComment(value) {
+  let hash = 5381;
+
+  for (const character of String(value || "")) {
+    hash = ((hash << 5) + hash) ^ character.charCodeAt(0);
+  }
+
+  return Math.abs(hash >>> 0).toString(36);
+}
+
 async function resolveFromEmbedContext(shortcode, settings) {
   try {
     const response = await fetchWithTimeout(
@@ -584,10 +1131,29 @@ async function resolveFromEmbedContext(shortcode, settings) {
 }
 
 async function resolveFromWebGraphql(shortcode, settings) {
+  const gqlData = await requestWebGraphqlPostData(shortcode, settings);
+
+  if (!gqlData) {
+    return { assets: [], metrics: createMetrics(), creator_handle: "" };
+  }
+
+  const wrapped = { gql_data: gqlData };
+  const metrics = parseMetricsFromInstagramData(wrapped);
+  const creatorHandle = parseCreatorFromInstagramData(wrapped);
+
+  return {
+    assets: parseAssetsFromInstagramData(wrapped),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: parsePostInfoFromInstagramData(wrapped, { metrics, creatorHandle }),
+  };
+}
+
+async function requestWebGraphqlPostData(shortcode, settings) {
   const params = await getGraphqlParams(shortcode, settings);
 
   if (!params) {
-    return { assets: [], metrics: createMetrics(), creator_handle: "" };
+    return null;
   }
 
   const { headers, body } = params;
@@ -622,19 +1188,10 @@ async function resolveFromWebGraphql(shortcode, settings) {
       settings.httpTimeoutMs,
     );
     const data = await responseJson(response);
-    const gqlData = data && typeof data === "object" ? data.data : null;
-    const wrapped = { gql_data: gqlData };
-    const metrics = parseMetricsFromInstagramData(wrapped);
-    const creatorHandle = parseCreatorFromInstagramData(wrapped);
 
-    return {
-      assets: parseAssetsFromInstagramData(wrapped),
-      metrics,
-      creator_handle: creatorHandle,
-      post_info: parsePostInfoFromInstagramData(wrapped, { metrics, creatorHandle }),
-    };
+    return data && typeof data === "object" ? data.data : null;
   } catch {
-    return { assets: [], metrics: createMetrics(), creator_handle: "" };
+    return null;
   }
 }
 

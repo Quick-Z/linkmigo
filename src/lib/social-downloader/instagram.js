@@ -2206,11 +2206,13 @@ function compareInstagramMediaVersions(candidate, current) {
 function instagramVersionScore(version) {
   const width = optionalInt(version?.width) || 0;
   const height = optionalInt(version?.height) || 0;
+  const url = version?.url;
 
   return [
+    instagramUrlCompletenessScore(url),
     width * height,
     Math.max(width, height),
-    instagramUrlQualityScore(version?.url),
+    instagramUrlQualityScore(url),
     firstPresentInt(version?.bitrate, version?.bandwidth, version?.size) || 0,
   ];
 }
@@ -2292,11 +2294,61 @@ function instagramUrlQualityScore(rawUrl) {
     score += 300;
   }
 
+  if (instagramImageTransformHasCrop(lowered)) {
+    score -= 800;
+  }
+
   if (/thumbnail|thumb|preview|p\d+x\d+/.test(lowered)) {
     score -= 500;
   }
 
   return score;
+}
+
+function instagramUrlCompletenessScore(rawUrl) {
+  if (typeof rawUrl !== "string") {
+    return 0;
+  }
+
+  let text = rawUrl;
+
+  try {
+    const parsed = new URL(rawUrl);
+
+    text = `${parsed.pathname} ${parsed.search}`;
+  } catch {
+    // Use the raw text below.
+  }
+
+  const lowered = text.toLowerCase();
+  let score = 0;
+
+  if (!/[\?&]stp=/.test(lowered) || /xpids\.1440|original|orig|full|hd/.test(lowered)) {
+    score += 200;
+  }
+
+  if (instagramImageTransformHasCrop(lowered)) {
+    score -= 1200;
+  }
+
+  if (/thumbnail|thumb|preview|p\d+x\d+/.test(lowered)) {
+    score -= 500;
+  }
+
+  for (const match of lowered.matchAll(/(?:^|[_&=-])s(\d{2,4})x(\d{2,4})(?:[_&-]|$)/g)) {
+    const width = Number.parseInt(match[1], 10);
+    const height = Number.parseInt(match[2], 10);
+
+    if (Number.isFinite(width) && Number.isFinite(height) && Math.max(width, height) < 1080) {
+      score -= 200;
+    }
+  }
+
+  return score;
+}
+
+function instagramImageTransformHasCrop(text) {
+  return /(?:^|[_=&?-])c\d+(?:\.\d+){2,4}a?(?:[_&-]|$)/i.test(String(text || ""));
 }
 
 function instagramMediaUrlVariants(url, mediaType) {
@@ -2322,10 +2374,18 @@ function instagramMediaUrlVariants(url, mediaType) {
   const stp = parsed.searchParams.get("stp") || "";
 
   if (stp) {
+    const decroppedStpVariants = instagramDecroppedStpVariants(stp);
     const unresized = new URL(parsed);
 
     unresized.searchParams.delete("stp");
     variants.push(unresized.toString());
+
+    for (const decroppedStp of decroppedStpVariants) {
+      const decropped = new URL(parsed);
+
+      decropped.searchParams.set("stp", decroppedStp);
+      variants.push(decropped.toString());
+    }
 
     if (/s\d{3,4}x\d{3,4}/i.test(stp)) {
       const larger = new URL(parsed);
@@ -2336,6 +2396,25 @@ function instagramMediaUrlVariants(url, mediaType) {
   }
 
   variants.push(url);
+
+  return uniqueInstagramUrls(variants);
+}
+
+function instagramDecroppedStpVariants(stp) {
+  const normalized = String(stp || "");
+  const withoutCrop = normalized
+    .split("_")
+    .filter((part) => !/^c\d+(?:\.\d+){2,4}a?$/i.test(part))
+    .join("_");
+  const variants = [];
+
+  if (withoutCrop && withoutCrop !== normalized) {
+    if (/s\d{3,4}x\d{3,4}/i.test(withoutCrop)) {
+      variants.push(withoutCrop.replace(/s\d{3,4}x\d{3,4}/gi, "s1440x1440"));
+    }
+
+    variants.push(withoutCrop);
+  }
 
   return uniqueInstagramUrls(variants);
 }
@@ -2730,7 +2809,8 @@ function addCandidate(candidates, rawUrl, mediaType, width = null, height = null
     return;
   }
 
-  const key = dedupeKey(url);
+  const urls = instagramMediaUrlVariants(url, resolvedType);
+  const key = dedupeKey(urls[0]);
   const existing = candidates.get(key);
 
   if (existing) {
@@ -2742,11 +2822,17 @@ function addCandidate(candidates, rawUrl, mediaType, width = null, height = null
       existing.height = optionalInt(height);
     }
 
+    existing.fallback_urls = uniqueInstagramUrls([
+      ...(existing.fallback_urls || []),
+      ...urls.slice(1),
+    ]);
+
     return;
   }
 
   candidates.set(key, {
-    source_url: url,
+    source_url: urls[0],
+    fallback_urls: urls.slice(1),
     media_type: resolvedType,
     request_headers: instagramMediaRequestHeaders(),
     width: optionalInt(width),

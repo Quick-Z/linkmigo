@@ -13,7 +13,7 @@ import { writeUserActionLog } from "../user-action-logger";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-const mediaCacheVersion = 20;
+const mediaCacheVersion = 21;
 
 export function getCacheStore() {
   const settings = getSocialDownloaderSettings();

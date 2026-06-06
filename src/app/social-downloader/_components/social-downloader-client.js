@@ -2469,7 +2469,7 @@ function PostAssetPreview({ asset, chrome, title }) {
     /* eslint-disable-next-line @next/next/no-img-element */
     <img
       alt={title}
-      className="h-full w-full object-cover"
+      className="h-full w-full object-contain"
       draggable={false}
       src={previewUrl}
     />

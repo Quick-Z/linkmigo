@@ -246,7 +246,7 @@ export function AssetPreviewGrid({
                 /* eslint-disable-next-line @next/next/no-img-element */
                 <img
                   alt={asset.filename}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-contain"
                   draggable={false}
                   loading="lazy"
                   src={previewUrl}

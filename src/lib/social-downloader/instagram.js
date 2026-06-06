@@ -17,8 +17,8 @@ import {
   PAGE_HEADERS,
   randomAlpha,
   randomToken,
-  responseJson,
   scriptTexts,
+  stripJsonPrefix,
 } from "./utils";
 import {
   cleanDisplayText,
@@ -83,6 +83,93 @@ const EMBED_HEADERS = {
   "upgrade-insecure-requests": "1",
   "user-agent": PAGE_HEADERS["user-agent"],
 };
+
+function instagramRequestHeaders(baseHeaders, settings = {}) {
+  const headers = { ...baseHeaders };
+  const cookie = instagramCookieHeader(settings);
+
+  if (cookie) {
+    headers.cookie = cookie;
+
+    const csrf = instagramCookieValue(cookie, "csrftoken");
+
+    if (csrf && !headers["x-csrftoken"]) {
+      headers["x-csrftoken"] = csrf;
+    }
+  }
+
+  return headers;
+}
+
+function instagramMediaRequestHeaders(settings = {}) {
+  const cookie = instagramCookieHeader(settings);
+
+  return {
+    referer: "https://www.instagram.com/",
+    ...(cookie ? { cookie } : {}),
+  };
+}
+
+function instagramCookieHeader(settings = {}) {
+  const raw = String(
+    settings.instagramCookie ||
+      process.env.SOCIAL_INSTAGRAM_COOKIE ||
+      process.env.IG_COOKIE ||
+      process.env.INSTAGRAM_COOKIE ||
+      "",
+  )
+    .trim()
+    .replace(/^cookie\s*:\s*/i, "")
+    .replace(/^["']|["']$/g, "");
+
+  return raw.includes("=") ? raw.replace(/[\r\n]+/g, " ").trim() : "";
+}
+
+function instagramCookieValue(cookieHeader, name) {
+  const wanted = String(name || "").toLowerCase();
+
+  for (const part of String(cookieHeader || "").split(";")) {
+    const [rawKey, ...rawValue] = part.split("=");
+    const key = rawKey?.trim().toLowerCase();
+
+    if (key === wanted) {
+      return rawValue.join("=").trim();
+    }
+  }
+
+  return "";
+}
+
+function mergeInstagramCookieHeaders(...headers) {
+  const values = new Map();
+  const order = [];
+
+  for (const header of headers) {
+    for (const part of String(header || "").split(";")) {
+      const [rawKey, ...rawValue] = part.split("=");
+      const key = rawKey?.trim();
+      const value = rawValue.join("=").trim();
+
+      if (!key || !value) {
+        continue;
+      }
+
+      const normalizedKey = key.toLowerCase();
+
+      if (!values.has(normalizedKey)) {
+        order.push(normalizedKey);
+      }
+
+      values.set(normalizedKey, { key, value });
+    }
+  }
+
+  return order
+    .map((key) => values.get(key))
+    .filter(Boolean)
+    .map(({ key, value }) => `${key}=${value}`)
+    .join("; ");
+}
 
 const MEDIA_KEY_HINTS = {
   video_url: "video",
@@ -162,6 +249,7 @@ export async function resolveInstagramPost(normalized, settings) {
   await ensureInstagramNetwork(settings);
 
   const resolvedPosts = [];
+  let resolverError = null;
   let htmlText = "";
 
   for (const resolver of [
@@ -169,7 +257,18 @@ export async function resolveInstagramPost(normalized, settings) {
     resolveFromEmbedContext,
     resolveFromWebGraphql,
   ]) {
-    const post = await resolver(normalized.shortcode, settings);
+    let post;
+
+    try {
+      post = await resolver(normalized.shortcode, settings);
+    } catch (error) {
+      if (error instanceof AppError) {
+        resolverError ??= error;
+        continue;
+      }
+
+      throw error;
+    }
 
     if (post.assets.length > 0) {
       resolvedPosts.push(post);
@@ -210,6 +309,10 @@ export async function resolveInstagramPost(normalized, settings) {
     throw htmlError;
   }
 
+  if (resolverError) {
+    throw resolverError;
+  }
+
   return merged;
 }
 
@@ -220,7 +323,7 @@ async function ensureInstagramNetwork(settings) {
       {
         method: "HEAD",
         cache: "no-store",
-        headers: PAGE_HEADERS,
+        headers: instagramRequestHeaders(PAGE_HEADERS, settings),
       },
       Math.min(settings.httpTimeoutMs, 5000),
     );
@@ -252,7 +355,7 @@ async function ensureInstagramNetwork(settings) {
 export async function fetchPublicPage(canonicalUrl, settings) {
   const html = await fetchText({
     url: canonicalUrl,
-    headers: COMMON_PAGE_HEADERS,
+    headers: instagramRequestHeaders(COMMON_PAGE_HEADERS, settings),
     label: "Instagram",
     timeoutMs: settings.httpTimeoutMs,
   });
@@ -261,8 +364,10 @@ export async function fetchPublicPage(canonicalUrl, settings) {
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "Instagram 返回了空页面。", 404);
   }
 
-  if (looksLikeLoginRequired(html) && !hasPublicMediaData(html)) {
-    throw new AppError(ErrorCode.LOGIN_REQUIRED, "这个页面需要登录或无法公开读取。", 403);
+  const accessError = instagramAccessError(html);
+
+  if (accessError && !hasPublicMediaData(html)) {
+    throw accessError;
   }
 
   if (looksLikeRateLimitOrChallenge(html) && !hasPublicMediaData(html)) {
@@ -499,16 +604,26 @@ async function getMediaId(shortcode, settings) {
 
     const response = await fetchWithTimeout(
       url,
-      { headers: MOBILE_HEADERS, cache: "no-store" },
+      { headers: instagramRequestHeaders(MOBILE_HEADERS, settings), cache: "no-store" },
       settings.httpTimeoutMs,
     );
-    const data = await responseJson(response);
-    const mediaId = data && typeof data === "object" ? data.media_id : "";
+    const data = await instagramResponseJson(response);
+    const accessError = instagramAccessError(data, response);
+
+    if (accessError) {
+      throw accessError;
+    }
+
+    const mediaId = data && typeof data === "object" ? (data.media_id || data.media_igid) : "";
 
     if (mediaId) {
       return String(mediaId);
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
     // Fall back to decoding the public shortcode below.
   }
 
@@ -535,14 +650,24 @@ async function requestMobileMediaInfo(mediaId, settings) {
   try {
     const response = await fetchWithTimeout(
       `https://i.instagram.com/api/v1/media/${encodeURIComponent(mediaId)}/info/`,
-      { headers: MOBILE_HEADERS, cache: "no-store" },
+      { headers: instagramRequestHeaders(MOBILE_HEADERS, settings), cache: "no-store" },
       settings.httpTimeoutMs,
     );
-    const data = await responseJson(response);
+    const data = await instagramResponseJson(response);
+    const accessError = instagramAccessError(data, response);
+
+    if (accessError) {
+      throw accessError;
+    }
+
     const items = Array.isArray(data?.items) ? data.items : [];
 
     return items[0] && typeof items[0] === "object" ? items[0] : null;
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
     return null;
   }
 }
@@ -613,10 +738,15 @@ async function requestMobileComments(mediaId, minId, limit, settings) {
   try {
     const response = await fetchWithTimeout(
       url,
-      { headers: MOBILE_HEADERS, cache: "no-store" },
+      { headers: instagramRequestHeaders(MOBILE_HEADERS, settings), cache: "no-store" },
       settings.httpTimeoutMs,
     );
-    const data = await responseJson(response);
+    const data = await instagramResponseJson(response);
+    const accessError = instagramAccessError(data, response);
+
+    if (accessError) {
+      throw accessError;
+    }
 
     if (!data || typeof data !== "object") {
       return null;
@@ -1098,7 +1228,7 @@ async function resolveFromEmbedContext(shortcode, settings) {
   try {
     const response = await fetchWithTimeout(
       `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/embed/captioned/`,
-      { headers: EMBED_HEADERS, cache: "no-store" },
+      { headers: instagramRequestHeaders(EMBED_HEADERS, settings), cache: "no-store" },
       settings.httpTimeoutMs,
     );
 
@@ -1107,6 +1237,12 @@ async function resolveFromEmbedContext(shortcode, settings) {
     }
 
     const text = await response.text();
+    const accessError = instagramAccessError(text, response);
+
+    if (accessError && !hasPublicMediaData(text)) {
+      throw accessError;
+    }
+
     const match = /"init",\[\],\[(.*?)\]\],/s.exec(text);
 
     if (!match) {
@@ -1125,7 +1261,11 @@ async function resolveFromEmbedContext(shortcode, settings) {
       creator_handle: creatorHandle,
       post_info: parsePostInfoFromInstagramData(data, { metrics, creatorHandle }),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
     return { assets: [], metrics: createMetrics(), creator_handle: "" };
   }
 }
@@ -1178,7 +1318,7 @@ async function requestWebGraphqlPostData(shortcode, settings) {
         method: "POST",
         cache: "no-store",
         headers: {
-          ...EMBED_HEADERS,
+          ...instagramRequestHeaders(EMBED_HEADERS, settings),
           ...headers,
           "content-type": "application/x-www-form-urlencoded",
           "x-fb-friendly-name": "PolarisPostActionLoadPostQueryQuery",
@@ -1187,10 +1327,19 @@ async function requestWebGraphqlPostData(shortcode, settings) {
       },
       settings.httpTimeoutMs,
     );
-    const data = await responseJson(response);
+    const data = await instagramResponseJson(response);
+    const accessError = instagramAccessError(data, response);
+
+    if (accessError) {
+      throw accessError;
+    }
 
     return data && typeof data === "object" ? data.data : null;
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
     return null;
   }
 }
@@ -1601,7 +1750,7 @@ async function getGraphqlParams(shortcode, settings) {
   try {
     const response = await fetchWithTimeout(
       `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/`,
-      { headers: EMBED_HEADERS, cache: "no-store" },
+      { headers: instagramRequestHeaders(EMBED_HEADERS, settings), cache: "no-store" },
       settings.httpTimeoutMs,
     );
 
@@ -1610,6 +1759,12 @@ async function getGraphqlParams(shortcode, settings) {
     }
 
     const html = await response.text();
+    const accessError = instagramAccessError(html, response);
+
+    if (accessError && !hasPublicMediaData(html)) {
+      throw accessError;
+    }
+
     const siteData = objectFromEntries("SiteData", html) ?? {};
     const polarisSiteData = objectFromEntries("PolarisSiteData", html) ?? {};
     const webConfig = objectFromEntries("DGWWebConfig", html) ?? {};
@@ -1617,6 +1772,7 @@ async function getGraphqlParams(shortcode, settings) {
     const lsd = objectFromEntries("LSD", html)?.token || randomToken(8);
     const csrf = objectFromEntries("InstagramSecurityConfig", html)?.csrf_token;
     const bloks = objectFromEntries("WebBloksVersioningID", html)?.versioningID;
+    const authCookie = instagramCookieHeader(settings);
     const anonCookie = [
       csrf ? `csrftoken=${csrf}` : "",
       polarisSiteData.device_id ? `ig_did=${polarisSiteData.device_id}` : "",
@@ -1627,22 +1783,25 @@ async function getGraphqlParams(shortcode, settings) {
     ]
       .filter(Boolean)
       .join("; ");
+    const cookie = mergeInstagramCookieHeaders(authCookie, anonCookie);
+    const userId = instagramCookieValue(cookie, "ds_user_id") || "0";
+    const csrfToken = csrf || instagramCookieValue(cookie, "csrftoken");
     const headers = {
       "x-ig-app-id": String(webConfig.appId || WEB_APP_ID),
       "x-fb-lsd": String(lsd),
       "x-asbd-id": "129477",
     };
 
-    if (csrf) {
-      headers["x-csrftoken"] = String(csrf);
+    if (csrfToken) {
+      headers["x-csrftoken"] = String(csrfToken);
     }
 
     if (bloks) {
       headers["x-bloks-version-id"] = String(bloks);
     }
 
-    if (anonCookie) {
-      headers.cookie = anonCookie;
+    if (cookie) {
+      headers.cookie = cookie;
     }
 
     return {
@@ -1658,9 +1817,9 @@ async function getGraphqlParams(shortcode, settings) {
         __hsi: String(siteData.hsi || "7436540909012459023"),
         __dyn: randomToken(154),
         __csr: randomToken(154),
-        __user: "0",
+        __user: userId,
         __comet_req: String(numberFromQuery("__comet_req", html) || "7"),
-        av: "0",
+        av: userId,
         dpr: "2",
         lsd: String(lsd),
         jazoest: String(numberFromQuery("jazoest", html) || Math.floor(Math.random() * 9000) + 1000),
@@ -1669,7 +1828,11 @@ async function getGraphqlParams(shortcode, settings) {
         __spin_t: String(siteData.__spin_t || "1710000000"),
       },
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
     return null;
   }
 }
@@ -1818,6 +1981,7 @@ function parsedAssetFromUrl(rawUrl, mediaType, width = null, height = null) {
     source_url: urls[0],
     fallback_urls: urls.slice(1),
     media_type: mediaType,
+    request_headers: instagramMediaRequestHeaders(),
     width: optionalInt(width),
     height: optionalInt(height),
   };
@@ -2584,6 +2748,7 @@ function addCandidate(candidates, rawUrl, mediaType, width = null, height = null
   candidates.set(key, {
     source_url: url,
     media_type: resolvedType,
+    request_headers: instagramMediaRequestHeaders(),
     width: optionalInt(width),
     height: optionalInt(height),
   });
@@ -2687,26 +2852,175 @@ function loadsJsonVariants(text) {
   return values;
 }
 
-function looksLikeLoginRequired(html) {
-  const lowered = html.toLowerCase();
+async function instagramResponseJson(response) {
+  const text = stripJsonPrefix(await response.text());
 
-  return [
-    "login_required",
-    "you need to log in",
-    "please log in to continue",
-    "this content isn't available right now",
-  ].some((marker) => lowered.includes(marker));
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
-function looksLikeRateLimitOrChallenge(html) {
-  const lowered = html.toLowerCase();
+function instagramAccessError(data, response = null) {
+  const text = instagramAccessText(data).toLowerCase();
+  const details = instagramAccessDetails(data, response);
+  const status = optionalInt(response?.status);
+  const finalUrl = String(response?.url || "");
 
+  if (looksLikeInstagramRateLimitText(text) || status === 429) {
+    return new AppError(
+      ErrorCode.UPSTREAM_BLOCKED,
+      "Instagram 返回了限流或挑战页面。",
+      429,
+      details,
+    );
+  }
+
+  if (looksLikeInstagramAgeOrGeoText(text)) {
+    return new AppError(
+      ErrorCode.LOGIN_REQUIRED,
+      "这个 Instagram 内容受到年龄或地区限制，匿名接口无法读取。",
+      403,
+      details,
+    );
+  }
+
+  if (looksLikeInstagramLoginText(text) || /\/accounts\/login\//i.test(finalUrl) || [401, 403].includes(status)) {
+    return new AppError(
+      ErrorCode.LOGIN_REQUIRED,
+      "这个 Instagram 内容需要登录或无法公开读取。",
+      403,
+      details,
+    );
+  }
+
+  return null;
+}
+
+function instagramAccessText(data) {
+  if (typeof data === "string") {
+    return data;
+  }
+
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+
+  const values = [];
+  const keys = [
+    "message",
+    "error_message",
+    "error_type",
+    "error_title",
+    "error_body",
+    "title",
+    "description",
+    "status",
+    "gating_type",
+    "blocks_logging_data",
+    "geo_block_rule_type",
+    "logout_reason",
+    "logout_expectedness",
+  ];
+
+  for (const key of keys) {
+    const value = data[key];
+
+    if (value != null && value !== "") {
+      values.push(String(value));
+    }
+  }
+
+  if (data.require_login === true || data.requires_login === true) {
+    values.push("login_required");
+  }
+
+  if (Array.isArray(data.errors)) {
+    for (const error of data.errors) {
+      values.push(instagramAccessText(error));
+    }
+  }
+
+  return values.filter(Boolean).join(" ");
+}
+
+function instagramAccessDetails(data, response = null) {
+  const details = {};
+
+  if (response?.status) {
+    details.status_code = response.status;
+  }
+
+  if (response?.url && /\/accounts\/login\//i.test(String(response.url))) {
+    details.redirected_to_login = true;
+  }
+
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    for (const key of [
+      "message",
+      "error_title",
+      "error_body",
+      "title",
+      "description",
+      "gating_type",
+      "blocks_logging_data",
+      "geo_block_rule_type",
+      "media_igid",
+      "status",
+    ]) {
+      if (data[key] != null && data[key] !== "") {
+        details[key] = data[key];
+      }
+    }
+  }
+
+  return Object.keys(details).length > 0 ? details : undefined;
+}
+
+function looksLikeInstagramAgeOrGeoText(text) {
+  return [
+    "geoblock_required",
+    "geo_block",
+    "min_age",
+    "under 18",
+    "age-restricted",
+    "age restricted",
+    "people under 18",
+    "limits on who can see",
+  ].some((marker) => text.includes(marker));
+}
+
+function looksLikeInstagramLoginText(text) {
+  return [
+    "login_required",
+    "logged out",
+    "please log back in",
+    "you need to log in",
+    "please log in to continue",
+    "private account",
+    "this account is private",
+    "media is private",
+    '"is_private":true',
+    "this content isn't available right now",
+  ].some((marker) => text.includes(marker));
+}
+
+function looksLikeInstagramRateLimitText(text) {
   return [
     "please wait a few minutes before you try again",
     "challenge_required",
     "checkpoint_required",
     "suspicious automated behavior",
-  ].some((marker) => lowered.includes(marker));
+  ].some((marker) => text.includes(marker));
+}
+
+function looksLikeRateLimitOrChallenge(html) {
+  return looksLikeInstagramRateLimitText(html.toLowerCase());
 }
 
 function hasPublicMediaData(html) {

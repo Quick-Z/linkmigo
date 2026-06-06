@@ -107,6 +107,35 @@ SOCIAL_AUTO_SYSTEM_PROXY=0
 
 如果 VPN 使用 PAC 自动代理脚本，而不是明确的系统 HTTP、HTTPS 或 SOCKS5 代理端口，Node 服务端可能无法解析 PAC，建议手动配置 `SOCIAL_PROXY_URL`。
 
+如果 Instagram 返回“年龄或地区限制”“需要登录”等提示，匿名公开接口无法读取该内容。可以在 `.env.local` 配置一个你自己已登录、且能正常查看该内容的 Instagram Cookie：
+
+```bash
+SOCIAL_INSTAGRAM_COOKIE='sessionid=...; ds_user_id=...; csrftoken=...'
+```
+
+获取 Cookie 的一种方式：
+
+1. 在 Chrome 或 Edge 里登录 Instagram，并确认浏览器里能打开目标帖子。
+2. 打开开发者工具：`F12`，或 macOS 上按 `Option + Command + I`。
+3. 进入 `Application` 面板，左侧选择 `Storage` -> `Cookies` -> `https://www.instagram.com`。
+4. 在 Cookie 表格里找到 `sessionid`、`ds_user_id`、`csrftoken` 三行，分别复制它们的 `Value`。
+5. 按下面格式拼成一行，写入 `.env.local`：
+
+```bash
+SOCIAL_INSTAGRAM_COOKIE='sessionid=你的_sessionid; ds_user_id=你的_ds_user_id; csrftoken=你的_csrftoken'
+```
+
+如果在 `Application` 面板里找不到，也可以打开 `Network` 面板，刷新 Instagram 页面，点选 `www.instagram.com` 的请求，在 `Headers` -> `Request Headers` 里复制 `Cookie` 这一整行的值。复制后可以直接填入变量；至少需要包含 `sessionid`、`ds_user_id`、`csrftoken`。
+
+也可以使用兼容变量：
+
+```bash
+IG_COOKIE='sessionid=...; ds_user_id=...; csrftoken=...'
+INSTAGRAM_COOKIE='sessionid=...; ds_user_id=...; csrftoken=...'
+```
+
+保存后重启开发服务。Cookie 等同于登录凭证，只在本机使用，不要提交到 Git，也不要发给他人。
+
 Reddit 现在经常拒绝未授权的 `.json` 公开请求。建议创建一个 Reddit app，并在 `.env.local` 配置 OAuth client id 和唯一 User-Agent：
 
 1. 打开 https://www.reddit.com/prefs/apps 并登录 Reddit。

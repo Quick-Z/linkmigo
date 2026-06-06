@@ -59,6 +59,10 @@ export function getSocialDownloaderSettings() {
       "SOCIAL_MAX_ASSET_BYTES",
       intEnv("IG_MAX_ASSET_BYTES", DEFAULT_MAX_ASSET_BYTES),
     ),
+    instagramCookie: stringEnv(
+      "SOCIAL_INSTAGRAM_COOKIE",
+      stringEnv("IG_COOKIE", stringEnv("INSTAGRAM_COOKIE", "")),
+    ),
     redditClientId: stringEnv("SOCIAL_REDDIT_CLIENT_ID", stringEnv("REDDIT_CLIENT_ID", "")),
     redditClientSecret: stringEnv("SOCIAL_REDDIT_CLIENT_SECRET", stringEnv("REDDIT_CLIENT_SECRET", "")),
     redditRefreshToken: stringEnv("SOCIAL_REDDIT_REFRESH_TOKEN", stringEnv("REDDIT_REFRESH_TOKEN", "")),

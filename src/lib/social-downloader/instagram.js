@@ -30,6 +30,23 @@ import {
 } from "./post-info";
 
 const SUPPORTED_KINDS = new Set(["p", "reel", "reels", "tv"]);
+const PROFILE_RESERVED_PATHS = new Set([
+  "",
+  "accounts",
+  "about",
+  "api",
+  "developer",
+  "direct",
+  "explore",
+  "graphql",
+  "legal",
+  "privacy",
+  "reel",
+  "reels",
+  "stories",
+  "tv",
+  "web",
+]);
 const INSTAGRAM_HOSTS = new Set([
   "instagram.com",
   "www.instagram.com",
@@ -42,6 +59,8 @@ const SHORTCODE_RE = /^[A-Za-z0-9_-]{4,64}$/;
 const SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const WEB_APP_ID = "936619743392459";
 const GQL_DOC_ID = "8845758582119845";
+const PROFILE_PAGE_SIZE = 50;
+const PROFILE_POST_LIMIT = 500;
 
 const COMMON_PAGE_HEADERS = {
   "user-agent":
@@ -211,7 +230,7 @@ export function normalizeInstagramUrl(rawUrl) {
   let value = String(rawUrl ?? "").trim();
 
   if (!value) {
-    throw new AppError(ErrorCode.UNSUPPORTED_URL, "请输入 Instagram 帖子链接。", 400);
+    throw new AppError(ErrorCode.UNSUPPORTED_URL, "请输入 Instagram 主页或帖子链接。", 400);
   }
 
   if (!value.includes("://")) {
@@ -223,21 +242,34 @@ export function normalizeInstagramUrl(rawUrl) {
   try {
     parsed = new URL(value);
   } catch {
-    throw new AppError(ErrorCode.UNSUPPORTED_URL, "仅支持 instagram.com 的公开帖子、Reel 或 TV 链接。", 400);
+    throw new AppError(ErrorCode.UNSUPPORTED_URL, "仅支持 instagram.com 的公开主页、帖子、Reel 或 TV 链接。", 400);
   }
 
   const host = parsed.hostname.toLowerCase();
 
   if (!["http:", "https:"].includes(parsed.protocol) || !INSTAGRAM_HOSTS.has(host)) {
-    throw new AppError(ErrorCode.UNSUPPORTED_URL, "仅支持 instagram.com 的公开帖子、Reel 或 TV 链接。", 400);
+    throw new AppError(ErrorCode.UNSUPPORTED_URL, "仅支持 instagram.com 的公开主页、帖子、Reel 或 TV 链接。", 400);
   }
 
-  const [kind, shortcode] = extractKindAndShortcode(parsed.pathname.split("/").filter(Boolean));
+  const pathParts = parsed.pathname.split("/").filter(Boolean);
+  const profileHandle = extractInstagramProfileHandle(pathParts);
+
+  if (profileHandle) {
+    return {
+      canonical_url: `https://www.instagram.com/${profileHandle}/`,
+      creator_handle: profileHandle,
+      kind: "profile",
+      mode: "profile",
+    };
+  }
+
+  const [kind, shortcode] = extractKindAndShortcode(pathParts);
 
   return {
     canonical_url: `https://www.instagram.com/${kind}/${shortcode}/`,
     shortcode,
     kind,
+    mode: "post",
   };
 }
 
@@ -316,9 +348,127 @@ export async function resolveInstagramPost(normalized, settings) {
   return merged;
 }
 
+export async function resolveInstagramProfile(normalized, settings) {
+  await ensureInstagramNetwork(settings);
+
+  const fallbackHandle = normalizeCreatorHandle(normalized?.creator_handle);
+  const html = await fetchPublicPage(normalized.canonical_url, settings);
+  const firstAttempt = await resolveInstagramProfileFromHtml(html, fallbackHandle, settings);
+
+  if (firstAttempt.posts.length > 0) {
+    return firstAttempt;
+  }
+
+  const renderedHtml = await fetchRenderedInstagramProfileHtml(normalized.canonical_url, settings);
+
+  if (renderedHtml) {
+    const renderedAttempt = await resolveInstagramProfileFromHtml(renderedHtml, fallbackHandle, settings, {
+      preserveErrors: firstAttempt.profileErrors,
+      fallbackUserId: firstAttempt.profile.user_id || "",
+    });
+
+    if (renderedAttempt.posts.length > 0) {
+      return renderedAttempt;
+    }
+
+    const selectedRenderedError = selectInstagramProfileError(renderedAttempt.profileErrors);
+
+    if (selectedRenderedError) {
+      throw selectedRenderedError;
+    }
+  }
+
+  const selectedError = selectInstagramProfileError(firstAttempt.profileErrors);
+
+  if (selectedError) {
+    throw selectedError;
+  }
+
+  throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有在这个 Instagram 主页里发现可下载的帖子。", 404);
+}
+
+async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, options = {}) {
+  const htmlProfile = parseInstagramProfileFromHtml(html, fallbackHandle);
+  const username = normalizeCreatorHandle(htmlProfile.username || fallbackHandle);
+  let apiUser = null;
+  let feedPosts = [];
+  const profileErrors = Array.isArray(options.preserveErrors) ? [...options.preserveErrors] : [];
+
+  if (username) {
+    try {
+      apiUser = await requestInstagramWebProfileInfo(username, settings);
+    } catch (error) {
+      profileErrors.push(error);
+      apiUser = null;
+    }
+  }
+
+  const mergedProfile = mergeInstagramProfile(
+    htmlProfile,
+    apiUser ? normalizeInstagramProfileUser(apiUser, username) : null,
+  );
+  const initialPosts = dedupeInstagramProfilePosts([
+    ...normalizeInstagramProfilePostsFromHtml(html, username),
+    ...normalizeInstagramProfilePostsFromUser(apiUser, username),
+    ...extractInstagramProfilePostsFromRenderedHtml(html, username),
+  ]);
+  const userId = pickSingleLineText(
+    apiUser?.id,
+    apiUser?.pk,
+    htmlProfile.user_id,
+    options.fallbackUserId,
+  );
+
+  if (userId) {
+    try {
+      feedPosts = await requestInstagramProfileFeedPosts(userId, settings, {
+        creatorHandle: username || mergedProfile.username,
+        initialShortcodes: initialPosts.map((post) => post.shortcode),
+      });
+    } catch (error) {
+      profileErrors.push(error);
+      feedPosts = [];
+    }
+  }
+
+  const posts = dedupeInstagramProfilePosts([...initialPosts, ...feedPosts])
+    .sort(compareInstagramProfilePosts);
+
+  if (!mergedProfile.username) {
+    mergedProfile.username = username || fallbackHandle;
+  }
+
+  if (!mergedProfile.post_count && posts.length > 0) {
+    mergedProfile.post_count = posts.length;
+  }
+
+  return {
+    mode: "profile",
+    creator_handle: mergedProfile.username,
+    profile: mergedProfile,
+    posts,
+    profileErrors,
+  };
+}
+
+function selectInstagramProfileError(errors) {
+  const appErrors = Array.isArray(errors) ? errors.filter((error) => error instanceof AppError) : [];
+  const loginError = appErrors.find((error) => error.code === ErrorCode.LOGIN_REQUIRED);
+
+  if (loginError) {
+    return loginError;
+  }
+
+  return (
+    appErrors.find((error) => error.code === ErrorCode.UPSTREAM_BLOCKED) ||
+    appErrors.find((error) => error.code === ErrorCode.NO_MEDIA_FOUND) ||
+    null
+  );
+}
+
 async function ensureInstagramNetwork(settings) {
   try {
-    await fetchWithTimeout(
+    const response = await fetchWithTimeout(
       "https://www.instagram.com/",
       {
         method: "HEAD",
@@ -327,7 +477,29 @@ async function ensureInstagramNetwork(settings) {
       },
       Math.min(settings.httpTimeoutMs, 5000),
     );
+
+    if ([401, 403].includes(response.status)) {
+      throw new AppError(
+        ErrorCode.UPSTREAM_BLOCKED,
+        "当前服务器访问 Instagram 被拒绝（HTTP 403）。请确认服务器网络或系统代理可访问 Instagram；如内容需要登录，请配置 SOCIAL_INSTAGRAM_COOKIE 或 IG_COOKIE。",
+        403,
+        instagramTroubleshootingDetails({ status_code: response.status, stage: "network_probe" }),
+      );
+    }
+
+    if (response.status === 429) {
+      throw new AppError(
+        ErrorCode.UPSTREAM_BLOCKED,
+        "Instagram 对当前服务器进行了限流，请稍后重试，或更换可用代理。",
+        429,
+        instagramTroubleshootingDetails({ status_code: response.status, stage: "network_probe" }),
+      );
+    }
   } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
     if (error?.name === "AbortError") {
       throw new AppError(
         ErrorCode.UPSTREAM_BLOCKED,
@@ -575,6 +747,568 @@ function extractKindAndShortcode(parts) {
   }
 
   return [kind, shortcode];
+}
+
+function extractInstagramProfileHandle(parts) {
+  if (!Array.isArray(parts) || parts.length !== 1) {
+    return "";
+  }
+
+  const candidate = normalizeCreatorHandle(parts[0]);
+
+  if (!candidate || PROFILE_RESERVED_PATHS.has(candidate.toLowerCase())) {
+    return "";
+  }
+
+  return candidate;
+}
+
+async function requestInstagramWebProfileInfo(username, settings) {
+  const url = new URL("https://i.instagram.com/api/v1/users/web_profile_info/");
+
+  url.searchParams.set("username", username);
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      headers: instagramRequestHeaders(
+        {
+          ...COMMON_PAGE_HEADERS,
+          "x-ig-app-id": WEB_APP_ID,
+          "x-requested-with": "XMLHttpRequest",
+        },
+        settings,
+      ),
+      cache: "no-store",
+    },
+    settings.httpTimeoutMs,
+  );
+  const data = await instagramResponseJson(response);
+  const accessError = instagramAccessError(data, response);
+
+  if (accessError) {
+    throw accessError;
+  }
+
+  const user = data && typeof data === "object"
+    ? (dig(data, "data", "user") || data.user || null)
+    : null;
+
+  return user && typeof user === "object" ? user : null;
+}
+
+async function requestInstagramProfileFeedPosts(userId, settings, options = {}) {
+  const creatorHandle = normalizeCreatorHandle(options.creatorHandle);
+  const seen = new Set(
+    (Array.isArray(options.initialShortcodes) ? options.initialShortcodes : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  );
+  const posts = [];
+  let cursor = "";
+
+  while (posts.length < PROFILE_POST_LIMIT) {
+    const page = await requestInstagramProfileFeedPage(userId, settings, cursor);
+
+    if (!page || !page.items.length) {
+      break;
+    }
+
+    for (const item of page.items) {
+      const post = normalizeInstagramProfilePost(item, creatorHandle);
+
+      if (!post || seen.has(post.shortcode)) {
+        continue;
+      }
+
+      seen.add(post.shortcode);
+      posts.push(post);
+
+      if (posts.length >= PROFILE_POST_LIMIT) {
+        break;
+      }
+    }
+
+    if (!page.nextCursor || !page.moreAvailable) {
+      break;
+    }
+
+    cursor = page.nextCursor;
+  }
+
+  return posts;
+}
+
+async function requestInstagramProfileFeedPage(userId, settings, cursor = "") {
+  const url = new URL(`https://i.instagram.com/api/v1/feed/user/${encodeURIComponent(userId)}/`);
+
+  url.searchParams.set("count", String(PROFILE_PAGE_SIZE));
+
+  if (cursor) {
+    url.searchParams.set("max_id", cursor);
+  }
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      headers: instagramRequestHeaders(MOBILE_HEADERS, settings),
+      cache: "no-store",
+    },
+    settings.httpTimeoutMs,
+  );
+  const data = await instagramResponseJson(response);
+  const accessError = instagramAccessError(data, response);
+
+  if (accessError) {
+    throw accessError;
+  }
+
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const nextCursor = pickSingleLineText(
+    data?.next_max_id,
+    data?.next_cursor,
+    data?.max_id,
+  );
+
+  return {
+    items,
+    nextCursor,
+    moreAvailable: Boolean(data?.more_available && nextCursor),
+  };
+}
+
+function parseInstagramProfileFromHtml(html, fallbackHandle = "") {
+  const embeddedObjects = instagramEmbeddedObjectsFromHtml(html, [
+    "window._sharedData",
+    "__additionalDataLoaded",
+    "__bbox",
+    "edge_owner_to_timeline_media",
+    "xdt_api__v1__feed__user_timeline_graphql_connection",
+  ]);
+  const profileUser =
+    embeddedObjects
+      .map((value) => findInstagramProfileUser(value))
+      .find(Boolean) || null;
+  const username = normalizeCreatorHandle(
+    pickSingleLineText(
+      profileUser?.username,
+      fallbackHandle,
+      creatorHandleFromText(htmlTitle(html)),
+    ),
+  );
+  const biography = pickText(
+    profileUser?.biography,
+    metaContents(html, ["og:description", "description"]),
+  );
+  const fullName = pickSingleLineText(
+    profileUser?.full_name,
+    profileUser?.username,
+    username,
+  );
+
+  return {
+    username,
+    full_name: fullName,
+    biography,
+    avatar_url: instagramCommentAvatarUrl(profileUser),
+    post_count: firstPresentInt(
+      profileUser?.edge_owner_to_timeline_media?.count,
+      profileUser?.edge_felix_video_timeline?.count,
+      profileUser?.media_count,
+    ),
+    follower_count: firstPresentInt(
+      profileUser?.edge_followed_by?.count,
+      profileUser?.follower_count,
+    ),
+    following_count: firstPresentInt(
+      profileUser?.edge_follow?.count,
+      profileUser?.following_count,
+    ),
+    is_private: Boolean(profileUser?.is_private),
+    is_verified: Boolean(profileUser?.is_verified),
+    user_id: pickSingleLineText(profileUser?.id, profileUser?.pk),
+  };
+}
+
+function normalizeInstagramProfileUser(user, fallbackHandle = "") {
+  if (!user || typeof user !== "object") {
+    return null;
+  }
+
+  return {
+    username: normalizeCreatorHandle(user.username || fallbackHandle),
+    full_name: cleanSingleLineText(user.full_name, { maxLength: 180 }),
+    biography: cleanDisplayText(user.biography, { maxLength: 4000 }),
+    avatar_url: instagramCommentAvatarUrl(user),
+    post_count: firstPresentInt(
+      user.edge_owner_to_timeline_media?.count,
+      user.media_count,
+    ),
+    follower_count: firstPresentInt(
+      user.edge_followed_by?.count,
+      user.follower_count,
+    ),
+    following_count: firstPresentInt(
+      user.edge_follow?.count,
+      user.following_count,
+    ),
+    is_private: Boolean(user.is_private),
+    is_verified: Boolean(user.is_verified),
+    user_id: pickSingleLineText(user.id, user.pk),
+  };
+}
+
+function mergeInstagramProfile(...profiles) {
+  const merged = {
+    username: "",
+    full_name: "",
+    biography: "",
+    avatar_url: "",
+    post_count: null,
+    follower_count: null,
+    following_count: null,
+    is_private: false,
+    is_verified: false,
+    user_id: "",
+  };
+
+  for (const profile of profiles) {
+    if (!profile || typeof profile !== "object") {
+      continue;
+    }
+
+    merged.username ||= normalizeCreatorHandle(profile.username);
+    merged.full_name ||= cleanSingleLineText(profile.full_name, { maxLength: 180 });
+    merged.biography ||= cleanDisplayText(profile.biography, { maxLength: 4000 });
+    merged.avatar_url ||= cleanSingleLineText(profile.avatar_url, { maxLength: 4096 });
+    merged.post_count ??= optionalInt(profile.post_count);
+    merged.follower_count ??= optionalInt(profile.follower_count);
+    merged.following_count ??= optionalInt(profile.following_count);
+    merged.is_private ||= Boolean(profile.is_private);
+    merged.is_verified ||= Boolean(profile.is_verified);
+    merged.user_id ||= pickSingleLineText(profile.user_id);
+  }
+
+  return merged;
+}
+
+function normalizeInstagramProfilePostsFromHtml(html, fallbackHandle = "") {
+  return dedupeInstagramProfilePosts(
+    instagramEmbeddedObjectsFromHtml(html, [
+      "window._sharedData",
+      "__additionalDataLoaded",
+      "__bbox",
+      "edge_owner_to_timeline_media",
+      "xdt_api__v1__feed__user_timeline_graphql_connection",
+    ]).flatMap((value) => extractInstagramProfilePostsFromData(value, fallbackHandle)),
+  );
+}
+
+function normalizeInstagramProfilePostsFromUser(user, fallbackHandle = "") {
+  return dedupeInstagramProfilePosts(extractInstagramProfilePostsFromData(user, fallbackHandle));
+}
+
+function extractInstagramProfilePostsFromData(data, fallbackHandle = "", depth = 0) {
+  if (!data || typeof data !== "object" || depth > 8) {
+    return [];
+  }
+
+  if (Array.isArray(data)) {
+    return data.flatMap((item) => extractInstagramProfilePostsFromData(item, fallbackHandle, depth + 1));
+  }
+
+  const edges = Array.isArray(data?.edge_owner_to_timeline_media?.edges)
+    ? data.edge_owner_to_timeline_media.edges
+    : Array.isArray(data?.xdt_api__v1__feed__user_timeline_graphql_connection?.edges)
+      ? data.xdt_api__v1__feed__user_timeline_graphql_connection.edges
+      : Array.isArray(data?.edges)
+        ? data.edges
+        : [];
+  const posts = [];
+
+  for (const edge of edges) {
+    const post = normalizeInstagramProfilePost(edge?.node || edge, fallbackHandle);
+
+    if (post) {
+      posts.push(post);
+    }
+  }
+
+  if (posts.length > 0) {
+    return posts;
+  }
+
+  const nestedPosts = [];
+
+  for (const value of Object.values(data)) {
+    nestedPosts.push(...extractInstagramProfilePostsFromData(value, fallbackHandle, depth + 1));
+  }
+
+  return nestedPosts;
+}
+
+function normalizeInstagramProfilePost(rawPost, fallbackHandle = "") {
+  if (!rawPost || typeof rawPost !== "object") {
+    return null;
+  }
+
+  const shortcode = cleanSingleLineText(
+    rawPost.code || rawPost.shortcode || rawPost.id,
+    { maxLength: 80 },
+  );
+
+  if (!SHORTCODE_RE.test(shortcode)) {
+    return null;
+  }
+
+  const creatorHandle = normalizeCreatorHandle(
+    pickSingleLineText(
+      rawPost.owner?.username,
+      rawPost.user?.username,
+      rawPost.username,
+      fallbackHandle,
+    ),
+  );
+  const metrics = parseMetricsFromInstagramData(rawPost);
+  const postInfo = parsePostInfoFromInstagramData(rawPost, { metrics, creatorHandle });
+  const kind = instagramProfilePostKind(rawPost);
+  const previewUrl = instagramProfilePreviewUrl(rawPost);
+  const takenAt = firstPresentInt(rawPost.taken_at_timestamp, rawPost.taken_at);
+  const previewWidth = firstPresentInt(
+    rawPost.dimensions?.width,
+    rawPost.thumbnail_resources?.[0]?.config_width,
+    rawPost.display_resources?.[0]?.config_width,
+  );
+  const previewHeight = firstPresentInt(
+    rawPost.dimensions?.height,
+    rawPost.thumbnail_resources?.[0]?.config_height,
+    rawPost.display_resources?.[0]?.config_height,
+  );
+
+  return {
+    id: shortcode,
+    shortcode,
+    canonical_url: `https://www.instagram.com/${kind}/${shortcode}/`,
+    kind,
+    media_type: instagramProfileMediaType(rawPost),
+    preview_url: previewUrl,
+    preview_width: previewWidth,
+    preview_height: previewHeight,
+    taken_at: takenAt ? new Date(takenAt * 1000).toISOString() : "",
+    metrics,
+    post_info: postInfo,
+  };
+}
+
+function dedupeInstagramProfilePosts(posts) {
+  const deduped = [];
+  const byShortcode = new Map();
+
+  for (const post of posts) {
+    if (!post || !post.shortcode) {
+      continue;
+    }
+
+    const existing = byShortcode.get(post.shortcode);
+
+    if (!existing || instagramProfilePostScore(post) > instagramProfilePostScore(existing)) {
+      byShortcode.set(post.shortcode, post);
+    }
+  }
+
+  for (const post of byShortcode.values()) {
+    deduped.push(post);
+  }
+
+  return deduped;
+}
+
+function compareInstagramProfilePosts(left, right) {
+  const leftTime = Date.parse(left?.taken_at || "") || 0;
+  const rightTime = Date.parse(right?.taken_at || "") || 0;
+
+  if (leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+
+  return String(right?.shortcode || "").localeCompare(String(left?.shortcode || ""));
+}
+
+function instagramProfilePostScore(post) {
+  return [
+    post?.preview_url,
+    post?.post_info?.body,
+    post?.post_info?.title,
+    post?.taken_at,
+  ].reduce((sum, value) => sum + (value ? String(value).length : 0), 0);
+}
+
+function instagramProfilePostKind(rawPost) {
+  const productType = cleanSingleLineText(rawPost?.product_type, { maxLength: 40 }).toLowerCase();
+
+  if (productType === "clips" || productType === "reels") {
+    return "reel";
+  }
+
+  return "p";
+}
+
+function instagramProfileMediaType(rawPost) {
+  if (
+    Boolean(rawPost?.is_video) ||
+    optionalInt(rawPost?.media_type) === 2 ||
+    Array.isArray(rawPost?.video_versions)
+  ) {
+    return "video";
+  }
+
+  return "image";
+}
+
+function instagramProfilePreviewUrl(rawPost) {
+  return pickSingleLineText(
+    rawPost?.display_url,
+    rawPost?.thumbnail_src,
+    rawPost?.thumbnail_url,
+    rawPost?.thumbnail?.src,
+    rawPost?.image_versions2?.candidates?.[0]?.url,
+    rawPost?.display_resources?.at?.(-1)?.src,
+    rawPost?.thumbnail_resources?.at?.(-1)?.src,
+    rawPost?.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url,
+    rawPost?.carousel_media?.[0]?.display_url,
+    rawPost?.video_versions?.[0]?.url,
+  );
+}
+
+function extractInstagramProfilePostsFromRenderedHtml(html, fallbackHandle = "") {
+  if (!html) {
+    return [];
+  }
+
+  const posts = [];
+  const seen = new Set();
+  const pattern = /<a\b[^>]*href="\/([^"/?#]+)\/(p|reel)\/([A-Za-z0-9_-]{4,64})\/"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+
+  while ((match = pattern.exec(html))) {
+    const [, rawHandle, rawKind, shortcode, anchorHtml] = match;
+    const creatorHandle = normalizeCreatorHandle(rawHandle || fallbackHandle);
+
+    if (!creatorHandle || seen.has(shortcode)) {
+      continue;
+    }
+
+    seen.add(shortcode);
+
+    const previewUrl = pickSingleLineText(
+      matchAttribute(anchorHtml, "src"),
+      matchAttribute(anchorHtml, "srcset")?.split(",").at(-1)?.trim().split(/\s+/)[0],
+    );
+    const alt = cleanDisplayText(matchAttribute(anchorHtml, "alt"), { maxLength: 4000 });
+    const mediaType = rawKind === "reel" ? "video" : "image";
+    const title = alt ? instagramTitleFromCaption(alt) : `Instagram ${rawKind} by ${creatorHandle}`;
+
+    posts.push({
+      id: shortcode,
+      shortcode,
+      canonical_url: `https://www.instagram.com/${rawKind}/${shortcode}/`,
+      kind: rawKind,
+      media_type: mediaType,
+      preview_url: previewUrl,
+      preview_width: null,
+      preview_height: null,
+      taken_at: "",
+      metrics: createMetrics(),
+      post_info: createPostInfo(
+        {
+          title,
+          author: creatorHandle,
+          author_handle: creatorHandle,
+          body: alt,
+          tags: normalizeTags([], alt),
+          metrics: createMetrics(),
+          source: "instagram_rendered_profile_html",
+        },
+        {
+          metrics: createMetrics(),
+          creatorHandle,
+          source: "instagram_rendered_profile_html",
+        },
+      ),
+    });
+  }
+
+  return posts;
+}
+
+function matchAttribute(html, attributeName) {
+  if (!html || !attributeName) {
+    return "";
+  }
+
+  const escapedName = escapeRegExp(attributeName);
+  const match = new RegExp(`${escapedName}="([^"]+)"`, "i").exec(html);
+
+  return match ? htmlUnescape(match[1]) : "";
+}
+
+function instagramEmbeddedObjectsFromHtml(html, markers) {
+  const values = [];
+
+  for (const text of scriptTexts(html, { type: "application/ld+json" })) {
+    values.push(...loadsJsonVariants(text));
+  }
+
+  for (const text of scriptTexts(html)) {
+    if (!text) {
+      continue;
+    }
+
+    values.push(...extractEmbeddedJsonObjects(text, markers));
+  }
+
+  return values;
+}
+
+function findInstagramProfileUser(data, depth = 0) {
+  if (!data || typeof data !== "object" || depth > 8) {
+    return null;
+  }
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const nested = findInstagramProfileUser(item, depth + 1);
+
+      if (nested) {
+        return nested;
+      }
+    }
+
+    return null;
+  }
+
+  const username = normalizeCreatorHandle(data.username);
+  const hasProfileShape = username && (
+    "edge_owner_to_timeline_media" in data ||
+    "edge_followed_by" in data ||
+    "edge_follow" in data ||
+    "biography" in data ||
+    "full_name" in data
+  );
+
+  if (hasProfileShape) {
+    return data;
+  }
+
+  for (const value of Object.values(data)) {
+    const nested = findInstagramProfileUser(value, depth + 1);
+
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
 }
 
 async function resolveFromMobileApi(shortcode, settings) {
@@ -2107,6 +2841,42 @@ async function fetchRenderedInstagramHtml(shortcode, settings) {
   }
 }
 
+async function fetchRenderedInstagramProfileHtml(profileUrl, settings) {
+  if (isDisabledValue(process.env.SOCIAL_RENDERED_INSTAGRAM_FALLBACK)) {
+    return "";
+  }
+
+  const chromePath = resolveChromePath();
+
+  if (!chromePath) {
+    return "";
+  }
+
+  const timeoutMs = Math.min(Math.max(settings.httpTimeoutMs * 2, 20_000), 45_000);
+
+  try {
+    const { stdout } = await execFileAsync(
+      chromePath,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--dump-dom",
+        "--virtual-time-budget=9000",
+        profileUrl,
+      ],
+      {
+        timeout: timeoutMs,
+        maxBuffer: 30 * 1024 * 1024,
+      },
+    );
+
+    return stdout;
+  } catch {
+    return "";
+  }
+}
+
 function execFileAsync(file, args, options) {
   return new Promise((resolve, reject) => {
     execFile(file, args, options, (error, stdout, stderr) => {
@@ -2970,22 +3740,29 @@ function instagramAccessError(data, response = null) {
   if (looksLikeInstagramAgeOrGeoText(text)) {
     return new AppError(
       ErrorCode.LOGIN_REQUIRED,
-      "这个 Instagram 内容受到年龄或地区限制，匿名接口无法读取。",
+      "这个 Instagram 内容受到年龄或地区限制，匿名接口无法读取。请配置 SOCIAL_INSTAGRAM_COOKIE 或 IG_COOKIE 后重试。",
       403,
-      details,
+      instagramTroubleshootingDetails(details),
     );
   }
 
   if (looksLikeInstagramLoginText(text) || /\/accounts\/login\//i.test(finalUrl) || [401, 403].includes(status)) {
     return new AppError(
       ErrorCode.LOGIN_REQUIRED,
-      "这个 Instagram 内容需要登录或无法公开读取。",
+      "这个 Instagram 内容需要登录或当前网络无法公开读取。请配置 SOCIAL_INSTAGRAM_COOKIE 或 IG_COOKIE，或确认服务器/代理可访问 www.instagram.com 和 i.instagram.com。",
       403,
-      details,
+      instagramTroubleshootingDetails(details),
     );
   }
 
   return null;
+}
+
+function instagramTroubleshootingDetails(details = {}) {
+  return {
+    ...(details || {}),
+    hint: "如果浏览器里能打开该帖子，但服务端解析失败，请在 .env.local 配置 SOCIAL_INSTAGRAM_COOKIE（或 IG_COOKIE）为已登录 Instagram 的 Cookie；如果服务器无法直连 Instagram，请配置 SOCIAL_PROXY_URL。",
+  };
 }
 
 function instagramAccessText(data) {

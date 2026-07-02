@@ -5,15 +5,19 @@ import path from "node:path";
 import { CacheStore } from "./cache";
 import { AppError, ErrorCode } from "./errors";
 import { downloadMedia, estimateMediaDownloadSize, extensionForAsset } from "./downloader";
+import { resolveInstagramProfile } from "./instagram";
 import { getSocialDownloaderSettings } from "./settings";
 import { createPostInfo } from "./post-info";
 import { normalizeSocialUrl, resolveSocialPost } from "./social";
+import { safeFilenamePart } from "./shared";
 import { buildZipFile } from "./zip";
 import { writeUserActionLog } from "../user-action-logger";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-const mediaCacheVersion = 21;
+const mediaCacheVersion = 23;
+const profileCacheVersion = 1;
+let sharpFactoryPromise = null;
 
 export function getCacheStore() {
   const settings = getSocialDownloaderSettings();
@@ -51,6 +55,40 @@ export async function resolveUrl(rawUrl, options = {}) {
   });
 
   let cached = await cache.findByCanonical(normalized.canonical_url);
+
+  if (normalized.platform === "instagram" && normalized.mode === "profile") {
+    if (cached && isUsableCachedProfileRecord(cached, normalized)) {
+      cached = await cache.touchRecord(cached);
+
+      onProgress?.({
+        phase: "completed",
+        downloaded_bytes: 0,
+        total_bytes: null,
+        asset_index: cached.posts?.length ?? 0,
+        asset_count: cached.posts?.length ?? 0,
+      });
+
+      return resolveProfileResponse(cached);
+    }
+
+    const parsedProfile = await resolveInstagramProfile(normalized, settings);
+    const profileRecord = await saveProfileRecord({
+      cache,
+      normalized,
+      parsedProfile,
+      settings,
+    });
+
+    onProgress?.({
+      phase: "completed",
+      downloaded_bytes: 0,
+      total_bytes: null,
+      asset_index: profileRecord.posts.length,
+      asset_count: profileRecord.posts.length,
+    });
+
+    return resolveProfileResponse(profileRecord);
+  }
 
   if (cached && isUsableCachedRecord(cached, normalized)) {
     cached = await cache.touchRecord(cached);
@@ -122,6 +160,57 @@ export async function getZipFile(requestId, options = {}) {
     assets: selectedAssets,
     filePath: zipPath,
     filename: `${record.platform}-${record.shortcode}${zipSuffix}.zip`,
+  };
+}
+
+export async function getProfileZipFile(requestId, options = {}) {
+  const cache = getCacheStore();
+  const profileRecord = await cache.getRecord(requestId);
+
+  if (!isUsableCachedProfileRecord(profileRecord)) {
+    throw new AppError(ErrorCode.CACHE_EXPIRED, "主页帖子列表缓存不存在或已过期。", 404);
+  }
+
+  const selectedPostIds = normalizeAssetIds(options.postIds);
+  const selectedPosts = selectProfilePosts(profileRecord.posts, selectedPostIds);
+  const recordDir = cache.recordDir(profileRecord.request_id, profileRecord.platform);
+  const zipSuffix = selectedPostIds.length ? `-selected-${assetSelectionHash(selectedPostIds)}` : "";
+  const filenameBase = safeFilenamePart(profileRecord.creator_handle || profileRecord.profile?.username || "instagram-profile");
+  const zipPath = path.join(recordDir, `${filenameBase}${zipSuffix}.zip`);
+
+  if (!(await exists(zipPath))) {
+    const entries = [];
+
+    for (const [postIndex, post] of selectedPosts.entries()) {
+      const resolved = await resolveUrl(post.canonical_url);
+
+      if (!resolved?.request_id || resolved?.mode === "profile") {
+        continue;
+      }
+
+      const postRecord = await cache.getRecord(resolved.request_id);
+      const postFolder = profileZipPostFolderName(postIndex, post);
+
+      for (const asset of postRecord.assets) {
+        entries.push({
+          name: `${filenameBase}/${postFolder}/${asset.filename}`,
+          path: await cache.assetPath(postRecord, asset),
+        });
+      }
+    }
+
+    if (!entries.length) {
+      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "选中的帖子暂时无法打包，请稍后重试。", 502);
+    }
+
+    await buildZipFile(entries, zipPath);
+  }
+
+  return {
+    record: profileRecord,
+    posts: selectedPosts,
+    filePath: zipPath,
+    filename: `${filenameBase}${zipSuffix}.zip`,
   };
 }
 
@@ -208,6 +297,8 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
         destination = path.join(recordDir, relativePath);
       }
 
+      const measuredDimensions = await probeAssetDimensions(destination, parsedAsset.media_type);
+
       downloadedAssets.push({
         id: assetId,
         source_url: downloaded.sourceUrl ?? parsedAsset.source_url,
@@ -216,8 +307,8 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
         content_type: downloaded.contentType,
         size_bytes: downloaded.sizeBytes,
         relative_path: relativePath,
-        width: parsedAsset.width ?? null,
-        height: parsedAsset.height ?? null,
+        width: measuredDimensions?.width ?? parsedAsset.width ?? null,
+        height: measuredDimensions?.height ?? parsedAsset.height ?? null,
       });
 
       emitDownloadProgress({
@@ -343,11 +434,31 @@ function emitDownloadProgress({
 }
 
 function isUsableCachedRecord(record, normalized) {
+  if (record?.record_type === "instagram_profile") {
+    return false;
+  }
+
   if (!record.post_info || typeof record.post_info !== "object") {
     return false;
   }
 
   return Number(record.media_version || 0) >= mediaCacheVersion;
+}
+
+function isUsableCachedProfileRecord(record, normalized = null) {
+  if (!record || record.record_type !== "instagram_profile") {
+    return false;
+  }
+
+  if (!record.profile || typeof record.profile !== "object" || !Array.isArray(record.posts)) {
+    return false;
+  }
+
+  if (normalized?.canonical_url && record.canonical_url !== normalized.canonical_url) {
+    return false;
+  }
+
+  return Number(record.profile_cache_version || 0) >= profileCacheVersion;
 }
 
 function resolveResponse(record) {
@@ -368,6 +479,21 @@ function resolveResponse(record) {
       creatorHandle,
       source: metrics.source,
     }),
+    expires_at: record.expires_at,
+  };
+}
+
+function resolveProfileResponse(record) {
+  return {
+    mode: "profile",
+    request_id: record.request_id,
+    canonical_url: record.canonical_url,
+    shortcode: "",
+    kind: "profile",
+    platform: "instagram",
+    creator_handle: record.creator_handle || record.profile?.username || "",
+    profile: record.profile,
+    posts: record.posts,
     expires_at: record.expires_at,
   };
 }
@@ -415,6 +541,36 @@ function sanitizeAssetFilename(value) {
     .replace(/^[\s._-]+|[\s._-]+$/g, "");
 }
 
+async function probeAssetDimensions(filePath, mediaType) {
+  if (!["image", "video"].includes(mediaType)) {
+    return null;
+  }
+
+  try {
+    const sharp = await getSharp();
+    const metadata = await sharp(filePath, { animated: false }).metadata();
+
+    if (Number.isFinite(metadata.width) && Number.isFinite(metadata.height)) {
+      return {
+        width: Math.trunc(metadata.width),
+        height: Math.trunc(metadata.height),
+      };
+    }
+  } catch {
+    // Best-effort only; keep source metadata when probing fails.
+  }
+
+  return null;
+}
+
+async function getSharp() {
+  if (!sharpFactoryPromise) {
+    sharpFactoryPromise = import("sharp").then((module) => module.default ?? module);
+  }
+
+  return await sharpFactoryPromise;
+}
+
 async function exists(filePath) {
   try {
     await fs.access(filePath);
@@ -430,6 +586,27 @@ function normalizeAssetIds(assetIds) {
   }
 
   return [...new Set(assetIds.map((assetId) => String(assetId).trim()).filter(Boolean))];
+}
+
+function selectProfilePosts(posts, selectedPostIds) {
+  if (!Array.isArray(posts) || posts.length === 0) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "主页里没有可下载的帖子。", 404);
+  }
+
+  if (!selectedPostIds.length) {
+    return posts;
+  }
+
+  const postMap = new Map(posts.map((post) => [post.id, post]));
+  const selectedPosts = selectedPostIds.map((postId) => postMap.get(postId));
+
+  if (selectedPosts.some((post) => !post)) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "选中的帖子不存在或已过期。", 404, {
+      selected_post_ids: selectedPostIds,
+    });
+  }
+
+  return selectedPosts;
 }
 
 function selectRecordAssets(assets, selectedAssetIds) {
@@ -455,6 +632,123 @@ function selectRecordAssets(assets, selectedAssetIds) {
 
 function assetSelectionHash(assetIds) {
   return crypto.createHash("sha1").update(assetIds.join(",")).digest("hex").slice(0, 12);
+}
+
+async function saveProfileRecord({ cache, normalized, parsedProfile, settings }) {
+  const requestId = crypto.randomUUID().replaceAll("-", "");
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + settings.cacheTtlSeconds * 1000);
+  const creatorHandle = parsedProfile.creator_handle || parsedProfile.profile?.username || normalized.creator_handle || "";
+  const profile = normalizeProfileForCache(parsedProfile.profile, creatorHandle);
+  const posts = normalizeProfilePostsForCache(parsedProfile.posts);
+  const record = {
+    request_id: requestId,
+    record_type: "instagram_profile",
+    profile_cache_version: profileCacheVersion,
+    canonical_url: normalized.canonical_url,
+    shortcode: "",
+    kind: "profile",
+    platform: normalized.platform,
+    creator_handle: creatorHandle,
+    created_at: now.toISOString(),
+    expires_at: expiresAt.toISOString(),
+    assets: [],
+    metrics: createMetrics(),
+    post_info: createPostInfo(
+      {
+        title: profile.full_name || (profile.username ? `@${profile.username}` : "Instagram profile"),
+        author: profile.full_name || creatorHandle,
+        author_handle: creatorHandle,
+        body: profile.biography,
+      },
+      {
+        creatorHandle,
+      },
+    ),
+    profile,
+    posts,
+  };
+
+  await cache.saveRecord(record);
+
+  return record;
+}
+
+function normalizeProfileForCache(profile, creatorHandle) {
+  const safeProfile = profile && typeof profile === "object" ? profile : {};
+
+  return {
+    username: String(safeProfile.username || creatorHandle || "").trim(),
+    full_name: String(safeProfile.full_name || "").trim(),
+    biography: String(safeProfile.biography || "").trim(),
+    avatar_url: String(safeProfile.avatar_url || "").trim(),
+    post_count: positiveIntegerOrNull(safeProfile.post_count),
+    follower_count: positiveIntegerOrNull(safeProfile.follower_count),
+    following_count: positiveIntegerOrNull(safeProfile.following_count),
+    is_private: Boolean(safeProfile.is_private),
+    is_verified: Boolean(safeProfile.is_verified),
+    user_id: String(safeProfile.user_id || "").trim(),
+  };
+}
+
+function normalizeProfilePostsForCache(posts) {
+  return Array.isArray(posts)
+    ? posts
+      .map((post) => normalizeProfilePostForCache(post))
+      .filter(Boolean)
+    : [];
+}
+
+function normalizeProfilePostForCache(post) {
+  if (!post || typeof post !== "object" || !post.id || !post.shortcode || !post.canonical_url) {
+    return null;
+  }
+
+  return {
+    id: String(post.id),
+    shortcode: String(post.shortcode),
+    canonical_url: String(post.canonical_url),
+    kind: String(post.kind || "p"),
+    media_type: String(post.media_type || "image"),
+    preview_url: String(post.preview_url || ""),
+    preview_width: positiveIntegerOrNull(post.preview_width),
+    preview_height: positiveIntegerOrNull(post.preview_height),
+    taken_at: String(post.taken_at || ""),
+    metrics: normalizeMetrics(post.metrics),
+    post_info: createPostInfo(post.post_info, {
+      metrics: normalizeMetrics(post.metrics),
+      creatorHandle: post.post_info?.author_handle || "",
+    }),
+  };
+}
+
+function normalizeMetrics(metrics) {
+  const value = metrics && typeof metrics === "object" ? metrics : {};
+
+  return {
+    like_count: positiveIntegerOrNull(value.like_count),
+    comment_count: positiveIntegerOrNull(value.comment_count),
+    view_count: positiveIntegerOrNull(value.view_count),
+    save_count: positiveIntegerOrNull(value.save_count),
+    share_count: positiveIntegerOrNull(value.share_count),
+    source: String(value.source || "public_best_effort"),
+  };
+}
+
+function positiveIntegerOrNull(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function profileZipPostFolderName(postIndex, post) {
+  const datePart = String(post?.taken_at || "").slice(0, 10) || "undated";
+  const kind = safeFilenamePart(post?.kind || "post");
+  const shortcode = safeFilenamePart(post?.shortcode || `post-${postIndex + 1}`);
+  const title = safeFilenamePart(post?.post_info?.title || post?.post_info?.body || "");
+  const titleSuffix = title ? `-${title.slice(0, 48)}` : "";
+
+  return `${String(postIndex + 1).padStart(3, "0")}-${datePart}-${kind}-${shortcode}${titleSuffix}`;
 }
 
 function startCacheCleanupScheduler(cache, settings) {

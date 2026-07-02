@@ -17,7 +17,7 @@ import {
   pickText,
 } from "./post-info";
 
-export const SUPPORTED_URL_MESSAGE = "暂时支持 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、Reddit、V2EX、小宇宙、YouTube、Pornhub 的公开链接。";
+export const SUPPORTED_URL_MESSAGE = "暂时支持 Instagram、Threads、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、Reddit、V2EX、小宇宙、YouTube、Pornhub 的公开链接。";
 
 const SHARE_URL_PATTERN = /https?:\/\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/i;
 

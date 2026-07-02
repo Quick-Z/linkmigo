@@ -17,6 +17,7 @@ LinkMigo「链密狗」是一款社媒公开资源解析下载工具。你可以
 | 平台 | 支持内容 |
 | --- | --- |
 | Instagram | 公开图片、视频 |
+| Threads | 公开图片、视频 |
 | TikTok | 公开视频 |
 | 抖音 | 公开视频 |
 | 小红书 | 公开图文、视频 |
@@ -84,7 +85,7 @@ npm run start
 
 服务端会优先使用当前网络环境直接访问外网。如果「魔法」是全局路由或 TUN 模式，通常不需要额外配置；如果「魔法」客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP、HTTPS 或 SOCKS5 代理。
 
-如果服务端访问 Instagram、TikTok、抖音、小红书、快手、AcFun、Pinterest、Reddit、V2EX、YouTube、Pornhub 等平台时提示“上游访问受限”，可以创建 `.env.local` 手动指定代理：
+如果服务端访问 Instagram、Threads、TikTok、抖音、小红书、快手、AcFun、Pinterest、Reddit、V2EX、YouTube、Pornhub 等平台时提示“上游访问受限”，可以创建 `.env.local` 手动指定代理：
 
 ```bash
 SOCIAL_PROXY_URL=http://127.0.0.1:7890

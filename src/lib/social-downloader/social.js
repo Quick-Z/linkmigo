@@ -11,6 +11,7 @@ import { isPinterestHost, normalizePinterestUrl, resolvePinterestPost } from "./
 import { isPornhubHost, normalizePornhubUrl, resolvePornhubPost } from "./pornhub";
 import { isRedditHost, normalizeRedditUrl, resolveRedditPost } from "./reddit";
 import { extractUrlCandidate, SUPPORTED_URL_MESSAGE } from "./shared";
+import { isThreadsHost, normalizeThreadsUrl, resolveThreadsPost } from "./threads";
 import { isTiktokHost, normalizeTiktokUrl, resolveTiktokPost } from "./tiktok";
 import { isTwitterHost, normalizeTwitterUrl, resolveTwitterPost } from "./twitter";
 import { isV2exHost, normalizeV2exUrl, resolveV2exPost } from "./v2ex";
@@ -28,6 +29,7 @@ const PLATFORM_HANDLERS = [
     }),
     resolve: resolveInstagramPost,
   },
+  { platform: "threads", isHost: isThreadsHost, normalize: normalizeThreadsUrl, resolve: resolveThreadsPost },
   { platform: "tiktok", isHost: isTiktokHost, normalize: normalizeTiktokUrl, resolve: resolveTiktokPost },
   { platform: "douyin", isHost: isDouyinHost, normalize: normalizeDouyinUrl, resolve: resolveDouyinPost },
   { platform: "xiaohongshu", isHost: isXiaohongshuHost, normalize: normalizeXiaohongshuUrl, resolve: resolveXiaohongshuPost },

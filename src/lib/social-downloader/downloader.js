@@ -1041,7 +1041,11 @@ async function probeContentInfo({ asset, headers, maxBytes, timeoutMs }) {
       timeoutMs,
     );
   } catch {
-    return { contentType: "", contentLength: null };
+    return await probeContentInfoWithRange({ asset, headers, maxBytes, timeoutMs });
+  }
+
+  if ([401, 403, 405, 429].includes(response.status)) {
+    return await probeContentInfoWithRange({ asset, headers, maxBytes, timeoutMs });
   }
 
   if (response.status >= 400) {
@@ -1049,6 +1053,44 @@ async function probeContentInfo({ asset, headers, maxBytes, timeoutMs }) {
   }
 
   const contentLength = safeInt(response.headers.get("content-length"));
+
+  if (contentLength && contentLength > maxBytes) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+  }
+
+  return {
+    contentType: normalizeContentType(response.headers.get("content-type")),
+    contentLength,
+  };
+}
+
+async function probeContentInfoWithRange({ asset, headers, maxBytes, timeoutMs }) {
+  let response;
+
+  try {
+    response = await fetchWithTimeout(
+      asset.source_url,
+      {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          ...headers,
+          range: "bytes=0-0",
+        },
+      },
+      timeoutMs,
+    );
+  } catch {
+    return { contentType: "", contentLength: null };
+  }
+
+  if (response.status >= 400) {
+    return { contentType: "", contentLength: null };
+  }
+
+  const contentRange = String(response.headers.get("content-range") || "");
+  const contentRangeMatch = /\/(\d+)\s*$/i.exec(contentRange);
+  const contentLength = safeInt(contentRangeMatch?.[1]) || safeInt(response.headers.get("content-length"));
 
   if (contentLength && contentLength > maxBytes) {
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);

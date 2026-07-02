@@ -15,6 +15,7 @@ import {
 
 const platformLabels = {
   instagram: "Instagram",
+  threads: "Threads",
   tiktok: "TikTok",
   douyin: "Douyin",
   kuaishou: "Kuaishou",
@@ -41,9 +42,12 @@ const copyByLanguage = {
     darkMode: "暗色",
     download: "下载",
     downloadAll: "全部下载",
+    downloadSelectedPosts: "下载选中帖子",
     downloadSelected: "下载选中项",
     expiredAt: "过期时间",
     favorites: "收藏",
+    followers: "粉丝",
+    following: "关注",
     fullscreen: "全屏播放",
     image: "图片",
     invalidUrl: "请输入完整的 http 或 https 公开链接。",
@@ -96,6 +100,7 @@ const copyByLanguage = {
     pleaseWait: "请稍候",
     platformLabels: {
       instagram: "Instagram",
+      threads: "Threads",
       tiktok: "TikTok",
       douyin: "抖音",
       kuaishou: "快手",
@@ -114,20 +119,27 @@ const copyByLanguage = {
     preferences: "偏好设置",
     previous: "上一张",
     progress: "播放进度",
+    profilePosts: "主页帖子",
+    posts: "帖子",
+    postsCount: (count) => `${count} 个帖子`,
     publicPlatform: "公开平台",
     reset: "重置",
     resourcesCount: (count) => `${count} 个资源`,
     resultAria: "解析结果",
     search: "搜索",
+    selectedPostsCount: (count) => `已选 ${count} 个帖子`,
     selectedCount: (count) => `已选 ${count} 个`,
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "支持 Instagram、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
+    urlPlaceholder: "支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
     video: "视频",
     audio: "音频",
     volume: "音量",
     views: "播放",
     shares: "分享",
+    openProfile: "打开主页",
+    openPost: "打开帖子",
+    verified: "已认证",
   },
   en: {
     all: "All",
@@ -138,9 +150,12 @@ const copyByLanguage = {
     darkMode: "Dark",
     download: "Download",
     downloadAll: "Download All",
+    downloadSelectedPosts: "Download Selected Posts",
     downloadSelected: "Download Selected",
     expiredAt: "Expired at",
     favorites: "Favorites",
+    followers: "Followers",
+    following: "Following",
     fullscreen: "Fullscreen",
     image: "Image",
     invalidUrl: "Please enter a full public http or https link.",
@@ -193,6 +208,7 @@ const copyByLanguage = {
     pleaseWait: "Please wait",
     platformLabels: {
       instagram: "Instagram",
+      threads: "Threads",
       tiktok: "TikTok",
       douyin: "Douyin",
       kuaishou: "Kuaishou",
@@ -211,11 +227,15 @@ const copyByLanguage = {
     preferences: "Preferences",
     previous: "Previous",
     progress: "Playback progress",
+    profilePosts: "Profile Posts",
+    posts: "Posts",
+    postsCount: (count) => `${count} ${count === 1 ? "Post" : "Posts"}`,
     publicPlatform: "Public platform",
     reset: "Reset",
     resourcesCount: (count) => `${count} ${count === 1 ? "Resource" : "Resources"}`,
     resultAria: "Parse result",
     search: "Search",
+    selectedPostsCount: (count) => `${count} Posts Selected`,
     selectedCount: (count) => `${count} Selected`,
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
@@ -225,6 +245,9 @@ const copyByLanguage = {
     volume: "Volume",
     views: "Views/Plays",
     shares: "Shares",
+    openProfile: "Open Profile",
+    openPost: "Open Post",
+    verified: "Verified",
   },
 };
 
@@ -914,6 +937,8 @@ export function SocialDownloaderClient() {
   const [resolveProgress, setResolveProgress] = useState(null);
   const [resolvingPlatform, setResolvingPlatform] = useState("");
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
+  const [selectedPostIds, setSelectedPostIds] = useState([]);
+  const [isProfileDownloadPending, setIsProfileDownloadPending] = useState(false);
   const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
   const [postInfoInitialAssetIndex, setPostInfoInitialAssetIndex] = useState(0);
   const resolveRunRef = useRef(0);
@@ -928,8 +953,17 @@ export function SocialDownloaderClient() {
   const submitTheme = isLoading ? resolvingTheme : inputTheme;
   const inputDrivenTheme = normalizedUrl ? inputTheme : getButtonTheme("", colorMode);
   const hasOutput = Boolean(isLoading || result || error);
-  const selectedAssets = result ? result.assets.filter((asset) => selectedAssetIds.includes(asset.id)) : [];
-  const allSelected = result ? result.assets.length > 0 && selectedAssetIds.length === result.assets.length : false;
+  const isProfileResult = result?.mode === "profile";
+  const selectedAssets = !isProfileResult && result
+    ? result.assets.filter((asset) => selectedAssetIds.includes(asset.id))
+    : [];
+  const selectedPosts = isProfileResult ? result.posts.filter((post) => selectedPostIds.includes(post.id)) : [];
+  const allSelected = !isProfileResult && result
+    ? result.assets.length > 0 && selectedAssetIds.length === result.assets.length
+    : false;
+  const allPostsSelected = isProfileResult
+    ? result.posts.length > 0 && selectedPostIds.length === result.posts.length
+    : false;
   const creatorLabel = result?.creator_handle ? `@${result.creator_handle}` : `@${result?.shortcode ?? "linkmigo"}`;
   const expiryText = result ? formatExpiry(result.expires_at, language) : "";
 
@@ -957,12 +991,23 @@ export function SocialDownloaderClient() {
   useEffect(() => {
     if (!result) {
       setSelectedAssetIds([]);
+      setSelectedPostIds([]);
+      setIsProfileDownloadPending(false);
+      setIsPostInfoOpen(false);
+      setPostInfoInitialAssetIndex(0);
+      return;
+    }
+
+    if (result.mode === "profile") {
+      setSelectedAssetIds([]);
+      setSelectedPostIds(result.posts.map((post) => post.id));
       setIsPostInfoOpen(false);
       setPostInfoInitialAssetIndex(0);
       return;
     }
 
     setSelectedAssetIds(result.assets.map((asset) => asset.id));
+    setSelectedPostIds([]);
     setPostInfoInitialAssetIndex(0);
   }, [result]);
 
@@ -990,6 +1035,8 @@ export function SocialDownloaderClient() {
     setPostInfoInitialAssetIndex(0);
     setResolveProgress(createInitialResolveProgress());
     setSelectedAssetIds([]);
+    setSelectedPostIds([]);
+    setIsProfileDownloadPending(false);
 
     try {
       const response = await fetch("/api/v1/instagram/resolve/jobs", {
@@ -1104,6 +1151,8 @@ export function SocialDownloaderClient() {
     setResolveProgress(null);
     setResolvingPlatform("");
     setSelectedAssetIds([]);
+    setSelectedPostIds([]);
+    setIsProfileDownloadPending(false);
   }
 
   function clearUrl() {
@@ -1135,6 +1184,24 @@ export function SocialDownloaderClient() {
     });
   }
 
+  function toggleProfilePost(postId) {
+    setSelectedPostIds((current) => {
+      const isSelected = current.includes(postId);
+      const next = isSelected
+        ? current.filter((id) => id !== postId)
+        : [...current, postId];
+
+      logClientAction("profile_post_selection_toggled", {
+        post_id: postId,
+        selected: !isSelected,
+        selected_count: next.length,
+        request_id: result?.request_id,
+      });
+
+      return next;
+    });
+  }
+
   function toggleAll() {
     if (!result) {
       return;
@@ -1152,6 +1219,23 @@ export function SocialDownloaderClient() {
     setSelectedAssetIds(next);
   }
 
+  function toggleAllProfilePosts() {
+    if (!isProfileResult) {
+      return;
+    }
+
+    const next = allPostsSelected ? [] : result.posts.map((post) => post.id);
+
+    logClientAction("profile_post_select_all_toggled", {
+      selected_all: !allPostsSelected,
+      selected_count: next.length,
+      post_count: result.posts.length,
+      request_id: result.request_id,
+    });
+
+    setSelectedPostIds(next);
+  }
+
   function invertSelection() {
     if (!result) {
       return;
@@ -1165,6 +1249,26 @@ export function SocialDownloaderClient() {
       logClientAction("asset_selection_inverted", {
         selected_count: next.length,
         asset_count: result.assets.length,
+        request_id: result.request_id,
+      });
+
+      return next;
+    });
+  }
+
+  function invertProfileSelection() {
+    if (!isProfileResult) {
+      return;
+    }
+
+    setSelectedPostIds((current) => {
+      const next = result.posts
+        .map((post) => post.id)
+        .filter((postId) => !current.includes(postId));
+
+      logClientAction("profile_post_selection_inverted", {
+        selected_count: next.length,
+        post_count: result.posts.length,
         request_id: result.request_id,
       });
 
@@ -1234,6 +1338,57 @@ export function SocialDownloaderClient() {
     const zipUrl = `/api/v1/instagram/requests/${result.request_id}/download.zip?asset_ids=${encodeURIComponent(assetIds)}`;
 
     triggerBrowserDownload(apiUrl(zipUrl));
+  }
+
+  async function downloadSelectedPosts() {
+    if (!isProfileResult || selectedPosts.length === 0 || isProfileDownloadPending) {
+      return;
+    }
+
+    setIsProfileDownloadPending(true);
+    setError(null);
+
+    logClientAction("profile_post_download_clicked", {
+      request_id: result.request_id,
+      creator_handle: result.creator_handle,
+      selected_post_ids: selectedPosts.map((post) => post.id),
+      selected_count: selectedPosts.length,
+    });
+
+    try {
+      const response = await fetch(`/api/v1/instagram/profile-requests/${encodeURIComponent(result.request_id)}/download.zip`, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          post_ids: selectedPosts.map((post) => post.id),
+        }),
+      });
+
+      if (!response.ok) {
+        let payload = null;
+
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+
+        throw payload || new Error("Download failed");
+      }
+
+      const blob = await response.blob();
+      const filename = filenameFromDisposition(response.headers.get("content-disposition")) ||
+        `${result.creator_handle || "instagram-profile"}.zip`;
+
+      triggerBrowserBlobDownload(blob, filename);
+    } catch (caught) {
+      setError(getApiError(caught));
+    } finally {
+      setIsProfileDownloadPending(false);
+    }
   }
 
   const formStyle = buildSearchShellStyle(
@@ -1427,83 +1582,101 @@ export function SocialDownloaderClient() {
           {isLoading ? <ResolvingState copy={copy} language={language} progress={resolveProgress} theme={resolvingTheme} /> : null}
 
           {result ? (
-            <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(resultTheme)} aria-label={copy.resultAria}>
-              <div className="grid shrink-0 gap-3 border-b px-3 pb-1 pt-3 sm:px-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center" style={{ borderColor: resultTheme.panelBorder }}>
-                <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-5 pt-1">
-                  <GlassChip theme={resultTheme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
-                  <a
-                    className="lm-themed-action inline-flex h-9 max-w-full shrink-0 cursor-pointer items-center rounded-full border px-3 text-[13px] font-semibold transition"
-                    href={result.canonical_url}
-                    rel="noreferrer"
-                    style={buildLinkChipStyle(resultTheme)}
-                    target="_blank"
-                  >
-                    <span className="truncate">{copy.openOriginal}</span>
-                  </a>
-                  <GlassChip theme={resultTheme}>{copy.resourcesCount(result.assets.length)}</GlassChip>
-                  <GlassChip theme={resultTheme}>{copy.selectedCount(selectedAssetIds.length)}</GlassChip>
-                </div>
-
-                {expiryText ? (
-                  <div className="justify-self-start xl:justify-self-end">
-                    <GlassChip alignRight theme={resultTheme}>
-                      {copy.expiredAt} {expiryText}
-                    </GlassChip>
+            isProfileResult ? (
+              <ProfileResultSection
+                allSelected={allPostsSelected}
+                copy={copy}
+                expiryText={expiryText}
+                isDownloading={isProfileDownloadPending}
+                language={language}
+                onDownloadSelected={downloadSelectedPosts}
+                onInvertSelection={invertProfileSelection}
+                onToggleAll={toggleAllProfilePosts}
+                onTogglePost={toggleProfilePost}
+                result={result}
+                selectedPostIds={selectedPostIds}
+                selectedPosts={selectedPosts}
+                theme={resultTheme}
+              />
+            ) : (
+              <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(resultTheme)} aria-label={copy.resultAria}>
+                <div className="grid shrink-0 gap-3 border-b px-3 pb-1 pt-3 sm:px-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center" style={{ borderColor: resultTheme.panelBorder }}>
+                  <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-5 pt-1">
+                    <GlassChip theme={resultTheme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
+                    <a
+                      className="lm-themed-action inline-flex h-9 max-w-full shrink-0 cursor-pointer items-center rounded-full border px-3 text-[13px] font-semibold transition"
+                      href={result.canonical_url}
+                      rel="noreferrer"
+                      style={buildLinkChipStyle(resultTheme)}
+                      target="_blank"
+                    >
+                      <span className="truncate">{copy.openOriginal}</span>
+                    </a>
+                    <GlassChip theme={resultTheme}>{copy.resourcesCount(result.assets.length)}</GlassChip>
+                    <GlassChip theme={resultTheme}>{copy.selectedCount(selectedAssetIds.length)}</GlassChip>
                   </div>
-                ) : null}
-              </div>
 
-              <div className="grid shrink-0 gap-3 border-b px-3 py-3 sm:px-5 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start" style={{ borderColor: resultTheme.panelBorder }}>
-                <div className="-mt-1 flex min-w-0 flex-wrap items-center gap-2.5 overflow-visible pb-1 pt-1">
-                  <button
-                    className="lm-themed-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
-                    onClick={() => openPostInfoModal(0)}
-                    style={buildCreatorButtonStyle(resultTheme)}
-                    title={copy.openPostDetails}
-                    type="button"
-                  >
-                    <span className="truncate">{creatorLabel}</span>
-                    <span className="grid size-5 shrink-0 place-items-center rounded-full border text-[11px]" style={buildInfoBadgeStyle(resultTheme)}>
-                      <InfoIcon />
-                    </span>
-                  </button>
-                  {createMetricItems(result.metrics, copy).map((item) => (
-                    <StatPill key={item.key} label={item.label} language={language} theme={resultTheme} value={item.value} />
-                  ))}
+                  {expiryText ? (
+                    <div className="justify-self-start xl:justify-self-end">
+                      <GlassChip alignRight theme={resultTheme}>
+                        {copy.expiredAt} {expiryText}
+                      </GlassChip>
+                    </div>
+                  ) : null}
                 </div>
 
-                <div className="flex shrink-0 flex-wrap items-center gap-2 2xl:flex-nowrap 2xl:justify-end">
-                  <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={toggleAll} style={resultSecondaryButtonStyle} type="button">
-                    {allSelected ? copy.none : copy.all}
-                  </button>
-                  <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={invertSelection} style={resultSecondaryButtonStyle} type="button">
-                    {copy.invert}
-                  </button>
-                  <button
-                    className={`${actionButtonBaseClass} h-9 px-4 text-[13px]`}
-                    disabled={selectedAssets.length === 0}
-                    onClick={downloadSelected}
-                    style={buildPrimaryButtonStyle(resultTheme, selectedAssets.length === 0)}
-                    type="button"
-                  >
-                    {copy.downloadSelected}
-                  </button>
-                </div>
-              </div>
+                <div className="grid shrink-0 gap-3 border-b px-3 py-3 sm:px-5 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start" style={{ borderColor: resultTheme.panelBorder }}>
+                  <div className="-mt-1 flex min-w-0 flex-wrap items-center gap-2.5 overflow-visible pb-1 pt-1">
+                    <button
+                      className="lm-themed-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
+                      onClick={() => openPostInfoModal(0)}
+                      style={buildCreatorButtonStyle(resultTheme)}
+                      title={copy.openPostDetails}
+                      type="button"
+                    >
+                      <span className="truncate">{creatorLabel}</span>
+                      <span className="grid size-5 shrink-0 place-items-center rounded-full border text-[11px]" style={buildInfoBadgeStyle(resultTheme)}>
+                        <InfoIcon />
+                      </span>
+                    </button>
+                    {createMetricItems(result.metrics, copy).map((item) => (
+                      <StatPill key={item.key} label={item.label} language={language} theme={resultTheme} value={item.value} />
+                    ))}
+                  </div>
 
-              <FloatingScrollArea theme={resultTheme}>
-                <AssetPreviewGrid
-                  assets={result.assets}
-                  onPreviewAsset={openPostInfoModal}
-                  onToggleAsset={toggleAsset}
-                  selectedAssetIds={selectedAssetIds}
-                  theme={resultTheme}
-                  colorMode={colorMode}
-                  language={language}
-                  labels={copy}
-                />
-              </FloatingScrollArea>
-            </section>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 2xl:flex-nowrap 2xl:justify-end">
+                    <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={toggleAll} style={resultSecondaryButtonStyle} type="button">
+                      {allSelected ? copy.none : copy.all}
+                    </button>
+                    <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={invertSelection} style={resultSecondaryButtonStyle} type="button">
+                      {copy.invert}
+                    </button>
+                    <button
+                      className={`${actionButtonBaseClass} h-9 px-4 text-[13px]`}
+                      disabled={selectedAssets.length === 0}
+                      onClick={downloadSelected}
+                      style={buildPrimaryButtonStyle(resultTheme, selectedAssets.length === 0)}
+                      type="button"
+                    >
+                      {copy.downloadSelected}
+                    </button>
+                  </div>
+                </div>
+
+                <FloatingScrollArea theme={resultTheme}>
+                  <AssetPreviewGrid
+                    assets={result.assets}
+                    onPreviewAsset={openPostInfoModal}
+                    onToggleAsset={toggleAsset}
+                    selectedAssetIds={selectedAssetIds}
+                    theme={resultTheme}
+                    colorMode={colorMode}
+                    language={language}
+                    labels={copy}
+                  />
+                </FloatingScrollArea>
+              </section>
+            )
           ) : null}
         </div>
       </section>
@@ -1519,9 +1692,266 @@ export function SocialDownloaderClient() {
           result={result}
           theme={resultTheme}
         />
-      ) : null}
+  ) : null}
     </main>
   );
+}
+
+function ProfileResultSection({
+  allSelected,
+  copy,
+  expiryText,
+  isDownloading,
+  language,
+  onDownloadSelected,
+  onInvertSelection,
+  onToggleAll,
+  onTogglePost,
+  result,
+  selectedPostIds,
+  selectedPosts,
+  theme,
+}) {
+  const profile = result.profile ?? {};
+  const statItems = createProfileMetricItems(profile, copy);
+  const avatarUrl = instagramAvatarProxyUrl(profile.avatar_url);
+
+  return (
+    <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(theme)} aria-label={copy.resultAria}>
+      <div className="grid shrink-0 gap-3 border-b px-3 pb-1 pt-3 sm:px-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center" style={{ borderColor: theme.panelBorder }}>
+        <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-5 pt-1">
+          <GlassChip theme={theme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
+          <a
+            className="lm-themed-action inline-flex h-9 max-w-full shrink-0 cursor-pointer items-center rounded-full border px-3 text-[13px] font-semibold transition"
+            href={result.canonical_url}
+            rel="noreferrer"
+            style={buildLinkChipStyle(theme)}
+            target="_blank"
+          >
+            <span className="truncate">{copy.openProfile}</span>
+          </a>
+          <GlassChip theme={theme}>{copy.postsCount(result.posts.length)}</GlassChip>
+          <GlassChip theme={theme}>{copy.selectedPostsCount(selectedPostIds.length)}</GlassChip>
+        </div>
+
+        {expiryText ? (
+          <div className="justify-self-start xl:justify-self-end">
+            <GlassChip alignRight theme={theme}>
+              {copy.expiredAt} {expiryText}
+            </GlassChip>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid shrink-0 gap-3 border-b px-3 py-3 sm:px-5 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start" style={{ borderColor: theme.panelBorder }}>
+        <div className="flex min-w-0 items-start gap-3">
+          {avatarUrl ? (
+            <img
+              alt={profile.full_name || profile.username || result.creator_handle}
+              className="mt-0.5 size-14 shrink-0 rounded-2xl border object-cover shadow-[0_14px_28px_rgba(15,23,42,0.12)]"
+              src={avatarUrl}
+              style={{
+                borderColor: theme.panelBorder,
+                background: theme.previewGradient,
+              }}
+            />
+          ) : null}
+
+          <div className="grid min-w-0 gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="truncate text-base font-semibold sm:text-lg" style={{ color: theme.titleText }}>
+                {profile.full_name || `@${profile.username || result.creator_handle}`}
+              </span>
+              <span className="truncate rounded-full border px-2 py-0.5 text-xs font-semibold" style={buildInfoBadgeStyle(theme)}>
+                @{profile.username || result.creator_handle}
+              </span>
+              {profile.is_verified ? (
+                <span className="rounded-full border px-2 py-0.5 text-xs font-semibold" style={buildInfoBadgeStyle(theme)}>
+                  {copy.verified}
+                </span>
+              ) : null}
+            </div>
+
+            {profile.biography ? (
+              <p className="line-clamp-3 text-sm leading-6 sm:text-[15px]" style={{ color: theme.mutedText }}>
+                {profile.biography}
+              </p>
+            ) : null}
+
+            <div className="-mt-1 flex min-w-0 flex-wrap items-center gap-2.5 overflow-visible pb-1 pt-1">
+              {statItems.map((item) => (
+                <StatPill key={item.key} label={item.label} language={language} theme={theme} value={item.value} />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2 2xl:flex-nowrap 2xl:justify-end">
+          <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={onToggleAll} style={buildSecondaryButtonStyle(theme)} type="button">
+            {allSelected ? copy.none : copy.all}
+          </button>
+          <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={onInvertSelection} style={buildSecondaryButtonStyle(theme)} type="button">
+            {copy.invert}
+          </button>
+          <button
+            className={`${actionButtonBaseClass} h-9 px-4 text-[13px]`}
+            disabled={selectedPosts.length === 0 || isDownloading}
+            onClick={onDownloadSelected}
+            style={buildPrimaryButtonStyle(theme, selectedPosts.length === 0 || isDownloading)}
+            type="button"
+          >
+            {isDownloading ? copy.pleaseWait : copy.downloadSelectedPosts}
+          </button>
+        </div>
+      </div>
+
+      <FloatingScrollArea theme={theme}>
+        <ProfilePostGrid
+          copy={copy}
+          language={language}
+          posts={result.posts}
+          selectedPostIds={selectedPostIds}
+          theme={theme}
+          onTogglePost={onTogglePost}
+        />
+      </FloatingScrollArea>
+    </section>
+  );
+}
+
+function ProfilePostGrid({ copy, language, onTogglePost, posts, selectedPostIds, theme }) {
+  return (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]">
+      {posts.map((post) => {
+        const isSelected = selectedPostIds.includes(post.id);
+        const excerpt = profilePostExcerpt(post);
+        const dateText = formatProfilePostDate(post.taken_at, language);
+
+        return (
+          <article
+            aria-pressed={isSelected}
+            className="group grid min-w-0 cursor-pointer content-start gap-3 rounded-[1.2rem] border p-3 outline-none backdrop-blur-xl transition duration-300 focus:outline-none focus-visible:outline-none"
+            key={post.id}
+            onClick={() => onTogglePost(post.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onTogglePost(post.id);
+              }
+            }}
+            role="button"
+            style={buildAssetCardStyle(theme, isSelected)}
+            tabIndex={0}
+          >
+            <div className="relative aspect-square overflow-hidden rounded-[1rem] border" style={{ borderColor: theme.panelBorder, background: theme.previewGradient }}>
+              {post.preview_url ? (
+                <img alt={post.post_info?.title || post.shortcode} className="h-full w-full object-cover" src={post.preview_url} />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-sm font-semibold" style={{ color: theme.mutedText }}>
+                  Instagram
+                </div>
+              )}
+
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-[linear-gradient(180deg,rgba(10,18,30,0)_0%,rgba(10,18,30,0.72)_100%)] px-3 pb-3 pt-8 text-white">
+                <span className="truncate text-xs font-semibold uppercase tracking-[0.08em]">{post.kind}</span>
+                <span className="grid size-5 shrink-0 place-items-center rounded-full border border-white/60 bg-white/15 text-[10px] font-bold">
+                  {isSelected ? "✓" : ""}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid min-w-0 gap-2">
+              <div className="grid gap-1">
+                <span className="truncate text-sm font-semibold" style={{ color: theme.bodyText }} title={post.post_info?.title || post.shortcode}>
+                  {post.post_info?.title || `@${post.post_info?.author_handle || ""}`}
+                </span>
+                {excerpt ? (
+                  <span className="line-clamp-3 text-xs leading-5 sm:text-[13px]" style={{ color: theme.mutedText }}>
+                    {excerpt}
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                {Number.isFinite(post.metrics?.like_count) ? <MiniMetric theme={theme} label={copy.likes} value={post.metrics.like_count} /> : null}
+                {Number.isFinite(post.metrics?.comment_count) ? <MiniMetric theme={theme} label={copy.comments} value={post.metrics.comment_count} /> : null}
+                {Number.isFinite(post.metrics?.view_count) ? <MiniMetric theme={theme} label={copy.views} value={post.metrics.view_count} /> : null}
+                {dateText ? <MiniMetric theme={theme} label={dateText} value={null} /> : null}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <span className="truncate text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: theme.subtleText }}>
+                  {post.media_type}
+                </span>
+                <a
+                  className="lm-themed-action inline-flex h-8 shrink-0 items-center rounded-full border px-3 text-[12px] font-semibold transition"
+                  href={post.canonical_url}
+                  onClick={(event) => event.stopPropagation()}
+                  rel="noreferrer"
+                  style={buildLinkChipStyle(theme)}
+                  target="_blank"
+                >
+                  {copy.openPost}
+                </a>
+              </div>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function MiniMetric({ label, theme, value }) {
+  return (
+    <span
+      className="inline-flex max-w-full items-center rounded-full border px-2 py-1 text-[11px] font-medium"
+      style={{
+        color: theme.subtleText,
+        borderColor: theme.chipBorder,
+        background: theme.selectionBackground,
+      }}
+      title={label}
+    >
+      <span className="truncate">
+        {value == null ? label : `${label} ${formatCompactNumber(value)}`}
+      </span>
+    </span>
+  );
+}
+
+function createProfileMetricItems(profile, copy) {
+  return [
+    { key: "posts", label: copy.posts, value: profile?.post_count },
+    { key: "followers", label: copy.followers, value: profile?.follower_count },
+    { key: "following", label: copy.following, value: profile?.following_count },
+  ].filter((item) => Number.isFinite(item.value));
+}
+
+function profilePostExcerpt(post) {
+  return post?.post_info?.body || post?.post_info?.title || "";
+}
+
+function formatProfilePostDate(value, language = "zh") {
+  const timestamp = Date.parse(value || "");
+
+  if (!Number.isFinite(timestamp)) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function instagramAvatarProxyUrl(sourceUrl) {
+  if (!sourceUrl) {
+    return "";
+  }
+
+  return apiUrl(`/api/v1/instagram/avatar?url=${encodeURIComponent(sourceUrl)}`);
 }
 
 function PreferenceControls({
@@ -3805,6 +4235,35 @@ function triggerBrowserDownload(href) {
   link.remove();
 }
 
+function triggerBrowserBlobDownload(blob, filename) {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = objectUrl;
+  link.download = filename || "download.zip";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function filenameFromDisposition(value) {
+  const text = String(value || "");
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(text);
+
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      // Ignore malformed header values.
+    }
+  }
+
+  const fallbackMatch = /filename="([^"]+)"/i.exec(text);
+
+  return fallbackMatch ? fallbackMatch[1] : "";
+}
+
 function getPlatformLabel(platform, copy = copyByLanguage.zh) {
   return platform ? copy.platformLabels?.[platform] ?? platformLabels[platform] ?? platform : copy.publicPlatform;
 }
@@ -4280,6 +4739,10 @@ function detectPlatform(value) {
 
     if (hostname === "instagram.com" || hostname.endsWith(".instagram.com") || hostname.endsWith("ddinstagram.com")) {
       return "instagram";
+    }
+
+    if (hostname === "threads.com" || hostname.endsWith(".threads.com") || hostname === "threads.net" || hostname.endsWith(".threads.net")) {
+      return "threads";
     }
 
     if (hostname === "tiktok.com" || hostname.endsWith(".tiktok.com")) {

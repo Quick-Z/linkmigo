@@ -68,6 +68,7 @@ async function runResolveJob(jobId, url) {
         updateJobProgress(jobId, progress);
       },
     });
+    const summary = jobResultSummary(result);
 
     updateJob(jobId, {
       status: "completed",
@@ -76,10 +77,10 @@ async function runResolveJob(jobId, url) {
         mode: "percent",
         phase: "completed",
         percent: 100,
-        downloaded_bytes: result.assets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0),
-        total_bytes: result.assets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0),
-        asset_index: result.assets.length,
-        asset_count: result.assets.length,
+        downloaded_bytes: summary.downloadedBytes,
+        total_bytes: summary.totalBytes,
+        asset_index: summary.assetIndex,
+        asset_count: summary.assetCount,
       },
       result,
       error: null,
@@ -180,4 +181,27 @@ function positiveNumber(value) {
   const number = Number(value);
 
   return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function jobResultSummary(result) {
+  if (result?.mode === "profile") {
+    const count = Array.isArray(result.posts) ? result.posts.length : 0;
+
+    return {
+      downloadedBytes: 0,
+      totalBytes: null,
+      assetIndex: count,
+      assetCount: count,
+    };
+  }
+
+  const assets = Array.isArray(result?.assets) ? result.assets : [];
+  const totalBytes = assets.reduce((sum, asset) => sum + (asset.size_bytes || 0), 0);
+
+  return {
+    downloadedBytes: totalBytes,
+    totalBytes,
+    assetIndex: assets.length,
+    assetCount: assets.length,
+  };
 }

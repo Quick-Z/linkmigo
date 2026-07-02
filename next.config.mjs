@@ -11,6 +11,7 @@ const privateDevOrigins = [
 const nextConfig = {
   allowedDevOrigins: privateDevOrigins,
   reactCompiler: true,
+  output: "standalone",
 };
 
 export default nextConfig;

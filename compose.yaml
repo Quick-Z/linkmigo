@@ -1,0 +1,27 @@
+services:
+  linkmigo:
+    image: k21vin/linkmigo:latest
+    container_name: linkmigo
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      YTDL_NO_DEBUG_FILE: "1"
+      SOCIAL_CACHE_DIR: /data/social-downloader
+      CHROME_PATH: /usr/bin/chromium
+      SOCIAL_CACHE_TTL_SECONDS: "7200"
+      SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS: "300"
+      SOCIAL_MEDIA_TIMEOUT_SECONDS: "600"
+      SOCIAL_MAX_ASSET_BYTES: "10737418240"
+      SOCIAL_AUTO_SYSTEM_PROXY: "0"
+      # SOCIAL_PROXY_URL: "http://host.docker.internal:7890"
+      # SOCIAL_INSTAGRAM_COOKIE: "sessionid=...; ds_user_id=...; csrftoken=..."
+      # SOCIAL_REDDIT_CLIENT_ID: "..."
+      # SOCIAL_REDDIT_CLIENT_SECRET: "..."
+      # SOCIAL_REDDIT_USER_AGENT: "web:linkmigo:0.1.0 (by /u/your_reddit_username)"
+    volumes:
+      - ./data/social-downloader:/data/social-downloader
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { URL } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
-import { fetchWithTimeout } from "./utils";
+import { fetchWithTimeout, getProxyUrl } from "./utils";
 
 const require = createRequire(import.meta.url);
 const packagedFfmpegPath = require("ffmpeg-static");
@@ -812,7 +812,12 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
   }
 
   if ([401, 403, 429].includes(response.status)) {
-    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源被平台或 CDN 拒绝访问。", 502);
+    throw new AppError(
+      ErrorCode.DOWNLOAD_FAILED,
+      "媒体资源被平台或 CDN 拒绝访问。",
+      502,
+      { status: response.status },
+    );
   }
 
   if (response.status >= 400) {
@@ -967,6 +972,11 @@ async function downloadSingleMediaWithCurl({ asset, destination, maxBytes, timeo
       "-o",
       tempPath,
     ];
+    const proxyUrl = getProxyUrl();
+
+    if (proxyUrl) {
+      args.push("--proxy", proxyUrl);
+    }
 
     for (const [name, value] of Object.entries(headers)) {
       if (value == null || value === "") {
@@ -1028,7 +1038,11 @@ async function downloadSingleMediaWithCurl({ asset, destination, maxBytes, timeo
       ErrorCode.DOWNLOAD_FAILED,
       "媒体资源下载失败。",
       502,
-      error instanceof Error ? error.message : "curl fallback failed",
+      {
+        source_url: asset.source_url,
+        filename_hint: asset.filename_hint,
+        curl_error: error instanceof Error ? error.message : "curl fallback failed",
+      },
     );
   }
 }
@@ -1255,11 +1269,12 @@ function isMediaCurlFallbackError(error) {
     error.message,
     typeof error.details === "string" ? error.details : "",
     error.details?.error,
+    error.details?.status,
   ]
     .filter(Boolean)
     .join(" ");
 
-  return /terminated|other side closed|response body|读取中断/i.test(details);
+  return /terminated|other side closed|response body|读取中断|\b(?:401|403|429)\b|拒绝访问/i.test(details);
 }
 
 function normalizeDownloadedContentType(contentType, destination, mediaType) {

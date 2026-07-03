@@ -199,22 +199,12 @@ function threadsAssetsFromHtml(html, options = {}) {
     ? threadsAssetsFromRelayMedia(options.relayMedia)
     : [];
 
-  if (tagAssets.length > 0) {
-    return dedupeAssets(
-      tagAssets.map((asset, index) => ({
-        ...asset,
-        filename_hint: `${filenameBase}_${index + 1}`,
-        request_headers: threadsMediaHeaders(options.pageUrl),
-      })),
-    );
-  }
-
   if (relayAssets.length > 0) {
     return dedupeAssets(
       relayAssets.map((asset, index) => ({
-        ...asset,
+        ...threadsDownloadAsset(asset),
         filename_hint: `${filenameBase}_${index + 1}`,
-        request_headers: threadsMediaHeaders(options.pageUrl),
+        request_headers: threadsMediaHeaders(options.pageUrl, asset.media_type),
       })),
     );
   }
@@ -222,9 +212,19 @@ function threadsAssetsFromHtml(html, options = {}) {
   if (relayFallbackAssets.length > 0) {
     return dedupeAssets(
       relayFallbackAssets.map((asset, index) => ({
-        ...asset,
+        ...threadsDownloadAsset(asset),
         filename_hint: `${filenameBase}_${index + 1}`,
-        request_headers: threadsMediaHeaders(options.pageUrl),
+        request_headers: threadsMediaHeaders(options.pageUrl, asset.media_type),
+      })),
+    );
+  }
+
+  if (tagAssets.length > 0) {
+    return dedupeAssets(
+      tagAssets.map((asset, index) => ({
+        ...threadsDownloadAsset(asset),
+        filename_hint: `${filenameBase}_${index + 1}`,
+        request_headers: threadsMediaHeaders(options.pageUrl, asset.media_type),
       })),
     );
   }
@@ -326,13 +326,30 @@ function threadsPostInfoFromHtml(html, metrics, creatorHandle, relayMedia = null
   );
 }
 
-function threadsMediaHeaders(pageUrl) {
+function threadsDownloadAsset(asset) {
+  if (asset?.media_type !== "image" || !Array.isArray(asset.fallback_urls) || asset.fallback_urls.length === 0) {
+    return asset;
+  }
+
+  const originalUrl = asset.fallback_urls[asset.fallback_urls.length - 1];
+
+  if (!originalUrl || originalUrl === asset.source_url) {
+    return asset;
+  }
+
+  return {
+    ...asset,
+    source_url: originalUrl,
+    fallback_urls: [asset.source_url, ...asset.fallback_urls.slice(0, -1)].filter(Boolean),
+  };
+}
+
+function threadsMediaHeaders(pageUrl, mediaType = "") {
   return {
     "accept-language": THREADS_HEADERS["accept-language"],
     Referer: pageUrl || "https://www.threads.com/",
-    Origin: "https://www.threads.com",
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": mediaType === "video" ? "video" : "image",
+    "sec-fetch-mode": "no-cors",
     "sec-fetch-site": "cross-site",
   };
 }
@@ -588,7 +605,7 @@ function defaultThreadsGraphqlPreloader(shortcode) {
 }
 
 function findThreadsGraphqlPreloaderInValue(value, seen = new WeakSet(), depth = 0) {
-  if (!value || typeof value !== "object" || depth > 10 || seen.has(value)) {
+  if (!value || typeof value !== "object" || depth > 24 || seen.has(value)) {
     return null;
   }
 
@@ -628,7 +645,7 @@ function findThreadsGraphqlPreloaderInValue(value, seen = new WeakSet(), depth =
 }
 
 function findThreadsRelayMediaInValue(value, target = {}, seen = new WeakSet(), depth = 0) {
-  if (!value || typeof value !== "object" || depth > 12 || seen.has(value)) {
+  if (!value || typeof value !== "object" || depth > 28 || seen.has(value)) {
     return null;
   }
 
@@ -888,7 +905,10 @@ function parseThreadsMediaTagAssets(html) {
   for (const match of html.matchAll(/<(video|source)\b[^>]*>/gi)) {
     const tag = match[0];
     const attrs = htmlAttributes(tag);
-    const src = pickSingleLineText(attrs.src, attrs["data-src"]);
+    const src = pickSingleLineText(
+      usableThreadsMediaUrl(attrs.src),
+      usableThreadsMediaUrl(attrs["data-src"]),
+    );
 
     if (!looksLikeMediaUrl(src, "video")) {
       continue;
@@ -908,7 +928,11 @@ function parseThreadsMediaTagAssets(html) {
     const tag = match[0];
     const attrs = htmlAttributes(tag);
     const srcsetCandidate = bestSrcsetCandidate(attrs.srcset);
-    const sourceUrl = pickSingleLineText(srcsetCandidate?.url, attrs.src, attrs["data-src"]);
+    const sourceUrl = pickSingleLineText(
+      usableThreadsMediaUrl(srcsetCandidate?.url),
+      usableThreadsMediaUrl(attrs.src),
+      usableThreadsMediaUrl(attrs["data-src"]),
+    );
     const width = maxDimension(
       optionalDimension(attrs.width),
       optionalDimension(attrs["data-width"]),
@@ -1157,6 +1181,10 @@ function looksLikeMediaUrl(url, mediaType) {
 
   const lowered = String(url).toLowerCase();
 
+  if (isTruncatedThreadsMediaUrl(lowered)) {
+    return false;
+  }
+
   if (mediaType === "video") {
     return lowered.includes(".mp4") || lowered.includes("/o1/v/") || lowered.includes("/t16/");
   }
@@ -1167,6 +1195,16 @@ function looksLikeMediaUrl(url, mediaType) {
     lowered.includes(".webp") ||
     lowered.includes("cdninstagram.com") ||
     lowered.includes("fbcdn.net");
+}
+
+function usableThreadsMediaUrl(value) {
+  const url = String(value || "").trim();
+
+  return url && !isTruncatedThreadsMediaUrl(url) ? url : "";
+}
+
+function isTruncatedThreadsMediaUrl(url) {
+  return /(?:[?&]|%26)\.\.\.(?:$|[&#])|\.\.\.$/.test(String(url || ""));
 }
 
 function looksLikeAvatarAlt(alt) {

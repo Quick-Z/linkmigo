@@ -137,6 +137,29 @@ INSTAGRAM_COOKIE='sessionid=...; ds_user_id=...; csrftoken=...'
 
 保存后重启开发服务。Cookie 等同于登录凭证，只在本机使用，不要提交到 Git，也不要发给他人。
 
+如果小红书提示“安全验证”“当前笔记暂时无法浏览”或匿名公开页面无法解析，但你在浏览器登录后可以正常打开该笔记，可以在 `.env.local` 配置小红书 Cookie：
+
+```bash
+SOCIAL_XIAOHONGSHU_COOKIE='a1=...; web_session=...; webId=...'
+```
+
+获取方式和 Instagram 类似：
+
+1. 在 Chrome 或 Edge 里登录小红书，并确认浏览器里能打开目标笔记。
+2. 打开开发者工具，进入 `Application` -> `Storage` -> `Cookies` -> `https://www.xiaohongshu.com`。
+3. 复制该站点下的 Cookie，至少应包含登录态相关字段，例如 `web_session`。
+4. 写入 `.env.local` 后重启开发服务。
+
+也可以使用兼容变量：
+
+```bash
+SOCIAL_XHS_COOKIE='a1=...; web_session=...; webId=...'
+XIAOHONGSHU_COOKIE='a1=...; web_session=...; webId=...'
+XHS_COOKIE='a1=...; web_session=...; webId=...'
+```
+
+如果同一个账号在浏览器里也打不开该笔记，服务端无法解析，这是平台对该笔记本身的访问限制。
+
 Reddit 现在经常拒绝未授权的 `.json` 公开请求。建议创建一个 Reddit app，并在 `.env.local` 配置 OAuth client id 和唯一 User-Agent：
 
 1. 打开 https://www.reddit.com/prefs/apps 并登录 Reddit。

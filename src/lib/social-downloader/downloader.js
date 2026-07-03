@@ -863,6 +863,20 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
         });
       }
     }
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    throw new AppError(
+      ErrorCode.DOWNLOAD_FAILED,
+      "媒体资源读取中断。",
+      502,
+      {
+        source_url: asset.source_url,
+        error: error instanceof Error ? error.message : "unknown",
+      },
+    );
   } finally {
     await file.close();
   }

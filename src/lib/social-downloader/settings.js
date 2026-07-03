@@ -63,6 +63,13 @@ export function getSocialDownloaderSettings() {
       "SOCIAL_INSTAGRAM_COOKIE",
       stringEnv("IG_COOKIE", stringEnv("INSTAGRAM_COOKIE", "")),
     ),
+    xiaohongshuCookie: stringEnv(
+      "SOCIAL_XIAOHONGSHU_COOKIE",
+      stringEnv(
+        "SOCIAL_XHS_COOKIE",
+        stringEnv("XIAOHONGSHU_COOKIE", stringEnv("XHS_COOKIE", "")),
+      ),
+    ),
     redditClientId: stringEnv("SOCIAL_REDDIT_CLIENT_ID", stringEnv("REDDIT_CLIENT_ID", "")),
     redditClientSecret: stringEnv("SOCIAL_REDDIT_CLIENT_SECRET", stringEnv("REDDIT_CLIENT_SECRET", "")),
     redditRefreshToken: stringEnv("SOCIAL_REDDIT_REFRESH_TOKEN", stringEnv("REDDIT_REFRESH_TOKEN", "")),

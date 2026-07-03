@@ -189,25 +189,65 @@ export async function fetchTextResponse({
   }
 
   if ([401, 403].includes(response.status)) {
-    throw new AppError(ErrorCode.LOGIN_REQUIRED, `${label} 页面需要登录或拒绝了公开访问。`, 403);
+    throw new AppError(
+      ErrorCode.LOGIN_REQUIRED,
+      `${label} 页面需要登录或拒绝了公开访问。`,
+      403,
+      responseErrorDetails(response),
+    );
   }
 
   if (response.status === 404) {
-    throw new AppError(ErrorCode.NO_MEDIA_FOUND, `没有找到这个 ${label} 内容。`, 404);
+    throw new AppError(
+      ErrorCode.NO_MEDIA_FOUND,
+      `没有找到这个 ${label} 内容。`,
+      404,
+      responseErrorDetails(response),
+    );
   }
 
   if (response.status === 429) {
-    throw new AppError(ErrorCode.UPSTREAM_BLOCKED, `${label} 对当前请求进行了限流。`, 429);
+    throw new AppError(
+      ErrorCode.UPSTREAM_BLOCKED,
+      `${label} 对当前请求进行了限流。`,
+      429,
+      responseErrorDetails(response),
+    );
   }
 
   if (response.status >= 400) {
-    throw new AppError(ErrorCode.UPSTREAM_BLOCKED, `${label} 返回异常状态码 ${response.status}。`, 502);
+    throw new AppError(
+      ErrorCode.UPSTREAM_BLOCKED,
+      `${label} 返回异常状态码 ${response.status}。`,
+      502,
+      responseErrorDetails(response),
+    );
+  }
+
+  let text;
+
+  try {
+    text = await response.text();
+  } catch (error) {
+    throw new AppError(
+      ErrorCode.UPSTREAM_BLOCKED,
+      `${label} 页面响应读取失败（${getFetchFailureDetail(error)}）。`,
+      502,
+    );
   }
 
   return {
     headers: response.headers,
     response,
-    text: await response.text(),
+    text,
+  };
+}
+
+function responseErrorDetails(response) {
+  return {
+    status: response.status,
+    final_url: response.url || "",
+    location: response.headers.get("location") || "",
   };
 }
 

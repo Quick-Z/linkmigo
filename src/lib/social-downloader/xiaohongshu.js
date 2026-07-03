@@ -1,3 +1,5 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import { URL } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
@@ -25,6 +27,7 @@ import {
   resolveRedirect,
   safeFilenamePart,
   titleFromBody,
+  withCookieHeader,
 } from "./shared";
 
 const XIAOHONGSHU_HEADERS = {
@@ -34,6 +37,22 @@ const XIAOHONGSHU_HEADERS = {
   "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
   Referer: "https://www.xiaohongshu.com/",
 };
+const XIAOHONGSHU_MOBILE_HEADERS = {
+  ...XIAOHONGSHU_HEADERS,
+  "user-agent":
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+};
+const XIAOHONGSHU_RESTRICTED_HINT =
+  "已尝试桌面公开页和移动 H5 公开页。如果浏览器里能打开这条笔记，请在 .env.local 配置 SOCIAL_XIAOHONGSHU_COOKIE 为已登录小红书账号的 Cookie，重启服务后再试；如果浏览器账号也打不开，说明该笔记已被小红书限制访问或删除。";
+const XIAOHONGSHU_CURL_FALLBACK_ERRORS = [
+  "ERR_HTTP2_STREAM_ERROR",
+  "terminated",
+  "other side closed",
+  "response reading failed",
+  "页面响应读取失败",
+];
+const execFile = promisify(execFileCallback);
 
 export function normalizeXiaohongshuUrl(parsed) {
   const parts = parsed.pathname.split("/").filter(Boolean);
@@ -80,9 +99,10 @@ export function normalizeXiaohongshuUrl(parsed) {
 
 export async function resolveXiaohongshuPost(normalized, settings) {
   let active = normalized;
+  const pageHeaders = xiaohongshuPageHeaders(settings);
 
   if (active.kind === "short") {
-    const redirected = await resolveRedirect(active.canonical_url, settings, XIAOHONGSHU_HEADERS);
+    const redirected = await resolveRedirect(active.canonical_url, settings, pageHeaders);
 
     if (redirected) {
       active = normalizeXiaohongshuUrl(new URL(redirected));
@@ -94,26 +114,26 @@ export async function resolveXiaohongshuPost(normalized, settings) {
   }
 
   const pageUrl = active.canonical_url;
-  const pageResponse = await fetchTextResponse({
-    url: pageUrl,
-    headers: XIAOHONGSHU_HEADERS,
-    label: "Xiaohongshu",
-    timeoutMs: settings.httpTimeoutMs,
+  const pageResponse = await fetchXiaohongshuPageTextWithMobileFallback({
+    pageUrl,
+    pageHeaders,
+    shortcode: active.shortcode,
+    settings,
   });
   const text = pageResponse.text;
   const initialState = extractXiaohongshuInitialState(text);
   const note = findXiaohongshuNote(initialState, active.shortcode);
+  const htmlAssets = xiaohongshuHtmlAssets(text, active.shortcode, pageUrl, settings);
 
   if (!note) {
-    if (looksLikeXiaohongshuVerification(text)) {
-      throw new AppError(
-        ErrorCode.UPSTREAM_BLOCKED,
-        "小红书触发了安全验证，暂时无法从公开页面解析资源。",
-        502,
-      );
+    if (looksLikeXiaohongshuVerification(text) && htmlAssets.length === 0) {
+      throw xiaohongshuRestrictedError({ reason: "verification_page" });
     }
 
-    const fallbackAssets = xiaohongshuMetaAssets(text, active.shortcode, pageUrl);
+    const fallbackAssets = [
+      ...htmlAssets,
+      ...xiaohongshuMetaAssets(text, active.shortcode, pageUrl, settings),
+    ];
 
     if (fallbackAssets.length > 0) {
       const metrics = createMetrics("xiaohongshu_public_best_effort");
@@ -132,11 +152,15 @@ export async function resolveXiaohongshuPost(normalized, settings) {
   const user = note.user && typeof note.user === "object" ? note.user : {};
   const handle = user.nickname || user.nickName || user.userId || "unknown";
   const filenameBase = `xiaohongshu_${safeFilenamePart(handle)}_${active.shortcode}`;
-  const mediaHeaders = xiaohongshuMediaHeaders(pageUrl);
+  const mediaHeaders = xiaohongshuMediaHeaders(pageUrl, settings);
   const assets = xiaohongshuAssetsFromNote(note, filenameBase, mediaHeaders);
 
   if (assets.length === 0) {
-    assets.push(...xiaohongshuMetaAssets(text, active.shortcode, pageUrl));
+    assets.push(...htmlAssets);
+  }
+
+  if (assets.length === 0) {
+    assets.push(...xiaohongshuMetaAssets(text, active.shortcode, pageUrl, settings));
   }
 
   if (assets.length === 0) {
@@ -151,6 +175,254 @@ export async function resolveXiaohongshuPost(normalized, settings) {
     creator_handle: handle,
     post_info: postInfoFromXiaohongshu(note, metrics, handle),
   };
+}
+
+async function fetchXiaohongshuPageText(options) {
+  const allowRestrictedText = Boolean(options.allowRestrictedText);
+
+  if (options.forceCurl) {
+    const text = await fetchXiaohongshuPageTextWithCurl(options);
+
+    if (!allowRestrictedText && looksLikeXiaohongshuVerification(text)) {
+      throw xiaohongshuRestrictedError({ reason: "curl_verification_page" });
+    }
+
+    return {
+      headers: new Headers(),
+      response: null,
+      text,
+    };
+  }
+
+  try {
+    return await fetchTextResponse(options);
+  } catch (error) {
+    if (isXiaohongshuRestrictedError(error)) {
+      throw xiaohongshuRestrictedError({
+        reason: "restricted_redirect",
+        upstream: error.details,
+      });
+    }
+
+    if (!shouldUseXiaohongshuCurlFallback(error)) {
+      throw error;
+    }
+
+    const text = await fetchXiaohongshuPageTextWithCurl(options);
+
+    if (!allowRestrictedText && looksLikeXiaohongshuVerification(text)) {
+      throw xiaohongshuRestrictedError({ reason: "curl_verification_page" });
+    }
+
+    return {
+      headers: new Headers(),
+      response: null,
+      text,
+    };
+  }
+}
+
+async function fetchXiaohongshuPageTextWithMobileFallback({
+  pageUrl,
+  pageHeaders,
+  shortcode,
+  settings,
+}) {
+  try {
+    const response = await fetchXiaohongshuPageText({
+      url: pageUrl,
+      headers: pageHeaders,
+      label: "Xiaohongshu",
+      timeoutMs: settings.httpTimeoutMs,
+    });
+
+    if (
+      looksLikeXiaohongshuVerification(response.text) &&
+      xiaohongshuHtmlAssets(response.text, shortcode, pageUrl, settings).length === 0
+    ) {
+      return await fetchXiaohongshuMobilePageText({
+        pageUrl,
+        shortcode,
+        settings,
+        upstream: { reason: "desktop_restricted_text" },
+      });
+    }
+
+    return response;
+  } catch (error) {
+    if (!isXiaohongshuRestrictedError(error)) {
+      throw error;
+    }
+
+    return await fetchXiaohongshuMobilePageText({
+      pageUrl,
+      shortcode,
+      settings,
+      upstream: error.details,
+    });
+  }
+}
+
+async function fetchXiaohongshuMobilePageText({
+  pageUrl,
+  shortcode,
+  settings,
+  upstream,
+}) {
+  const mobileHeaders = xiaohongshuMobilePageHeaders(settings);
+  const mobileUrl = xiaohongshuMobileUrl(pageUrl, shortcode);
+  const mobileResponse = await fetchXiaohongshuPageText({
+    url: mobileUrl,
+    headers: mobileHeaders,
+    label: "Xiaohongshu mobile",
+    timeoutMs: settings.httpTimeoutMs,
+    allowRestrictedText: true,
+    forceCurl: true,
+  });
+  const mobileAssets = xiaohongshuHtmlAssets(mobileResponse.text, shortcode, pageUrl, settings);
+
+  if (mobileAssets.length === 0 && looksLikeXiaohongshuVerification(mobileResponse.text)) {
+    throw xiaohongshuRestrictedError({
+      reason: "mobile_h5_restricted",
+      upstream,
+    });
+  }
+
+  return {
+    ...mobileResponse,
+    source: "xiaohongshu_mobile_h5",
+  };
+}
+
+function shouldUseXiaohongshuCurlFallback(error) {
+  const details = [
+    error?.message,
+    error?.details,
+    error?.cause?.message,
+    error?.cause?.code,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return XIAOHONGSHU_CURL_FALLBACK_ERRORS.some((pattern) =>
+    details.toLowerCase().includes(pattern.toLowerCase()),
+  );
+}
+
+async function fetchXiaohongshuPageTextWithCurl({ url, headers, label, timeoutMs }) {
+  const timeoutSeconds = Math.max(1, Math.ceil((timeoutMs || 20_000) / 1000));
+  const args = [
+    "-sS",
+    "-L",
+    "--compressed",
+    "--max-time",
+    String(timeoutSeconds),
+    "-A",
+    headers["user-agent"],
+    "-H",
+    `accept: ${headers.accept}`,
+    "-H",
+    `accept-language: ${headers["accept-language"]}`,
+    "-H",
+    `referer: ${headers.Referer}`,
+  ];
+  const cookieHeader = headers.cookie || headers.Cookie;
+
+  if (cookieHeader) {
+    args.push("-H", `cookie: ${cookieHeader}`);
+  }
+
+  args.push("--http1.1", url);
+
+  try {
+    const { stdout } = await execFile("curl", args, {
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: (timeoutSeconds + 2) * 1000,
+    });
+
+    return stdout;
+  } catch (error) {
+    if (error?.signal === "SIGTERM" || error?.killed) {
+      throw new AppError(ErrorCode.UPSTREAM_BLOCKED, `${label} 页面请求超时。`, 504);
+    }
+
+    throw new AppError(
+      ErrorCode.UPSTREAM_BLOCKED,
+      `无法访问 ${label} 页面（curl fallback 失败）。`,
+      502,
+      error?.message,
+    );
+  }
+}
+
+function xiaohongshuPageHeaders(settings = {}) {
+  return withCookieHeader(XIAOHONGSHU_HEADERS, xiaohongshuCookieHeader(settings));
+}
+
+function xiaohongshuMobilePageHeaders(settings = {}) {
+  return withCookieHeader(XIAOHONGSHU_MOBILE_HEADERS, xiaohongshuCookieHeader(settings));
+}
+
+function xiaohongshuMobileUrl(pageUrl, shortcode) {
+  const parsed = new URL(pageUrl);
+
+  if (shortcode) {
+    parsed.pathname = `/explore/${shortcode}`;
+  }
+
+  return parsed.toString();
+}
+
+function xiaohongshuCookieHeader(settings = {}) {
+  const raw = String(
+    settings.xiaohongshuCookie ||
+      process.env.SOCIAL_XIAOHONGSHU_COOKIE ||
+      process.env.SOCIAL_XHS_COOKIE ||
+      process.env.XIAOHONGSHU_COOKIE ||
+      process.env.XHS_COOKIE ||
+      "",
+  )
+    .trim()
+    .replace(/^cookie\s*:\s*/i, "")
+    .replace(/^["']|["']$/g, "");
+
+  return raw.includes("=") ? raw.replace(/[\r\n]+/g, " ").trim() : "";
+}
+
+function isXiaohongshuRestrictedError(error) {
+  if (
+    error instanceof AppError &&
+    error.code === ErrorCode.UPSTREAM_BLOCKED &&
+    (error.details?.hint === XIAOHONGSHU_RESTRICTED_HINT || /小红书限制/.test(error.message))
+  ) {
+    return true;
+  }
+
+  const details = error?.details;
+  const text = [
+    error?.message,
+    typeof details === "string" ? details : "",
+    details?.final_url,
+    details?.location,
+    details?.body_excerpt,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return looksLikeXiaohongshuRestrictedText(text);
+}
+
+function xiaohongshuRestrictedError(details = {}) {
+  return new AppError(
+    ErrorCode.UPSTREAM_BLOCKED,
+    "小红书限制了这条笔记的公开访问或触发了安全验证，暂时无法用匿名公开页面解析资源。",
+    502,
+    {
+      ...details,
+      hint: XIAOHONGSHU_RESTRICTED_HINT,
+    },
+  );
 }
 
 function extractXiaohongshuInitialState(text) {
@@ -488,8 +760,128 @@ function xiaohongshuNoWatermarkImageUrl(value) {
   }
 }
 
-function xiaohongshuMetaAssets(text, shortcode, pageUrl) {
-  const headers = xiaohongshuMediaHeaders(pageUrl);
+function xiaohongshuHtmlAssets(text, shortcode, pageUrl, settings = {}) {
+  const headers = xiaohongshuMediaHeaders(pageUrl, settings);
+  const assets = [];
+  const imageUrls = xiaohongshuHtmlImageUrls(text);
+  const videoUrls = xiaohongshuHtmlVideoUrls(text);
+
+  videoUrls.forEach((url, index) => {
+    assets.push({
+      source_url: url,
+      media_type: "video",
+      filename_hint: `xiaohongshu_${shortcode}_h5_video_${index + 1}.mp4`,
+      request_headers: headers,
+    });
+  });
+
+  imageUrls.forEach((url, index) => {
+    const originalUrl = xiaohongshuNoWatermarkImageUrl(url);
+    const fallbackUrls = [originalUrl].filter((candidate) => candidate && candidate !== url);
+
+    assets.push({
+      source_url: url,
+      fallback_urls: fallbackUrls,
+      media_type: "image",
+      filename_hint: `xiaohongshu_${shortcode}_h5_photo_${index + 1}.jpg`,
+      request_headers: headers,
+    });
+  });
+
+  return dedupeAssets(assets);
+}
+
+function xiaohongshuHtmlImageUrls(text) {
+  const candidates = [];
+
+  for (const match of String(text || "").matchAll(/<img\b[^>]*(?:data-xhs-img|notes_pre_post)[^>]*>/gi)) {
+    const src = htmlAttribute(match[0], "src");
+
+    if (isXiaohongshuNoteImageUrl(src)) {
+      candidates.push(normalizeXiaohongshuCdnUrl(src));
+    }
+  }
+
+  for (const match of String(text || "").matchAll(/https?:\\?\/\\?\/[^"'<>\\\s]+notes_pre_post[^"'<>\\\s]*/gi)) {
+    const url = decodeXiaohongshuEmbeddedUrl(match[0]);
+
+    if (isXiaohongshuNoteImageUrl(url)) {
+      candidates.push(normalizeXiaohongshuCdnUrl(url));
+    }
+  }
+
+  return uniqueXiaohongshuUrls(candidates);
+}
+
+function xiaohongshuHtmlVideoUrls(text) {
+  const candidates = [];
+
+  for (const match of String(text || "").matchAll(/<video\b[^>]*>/gi)) {
+    const src = htmlAttribute(match[0], "src");
+
+    if (isXiaohongshuVideoUrl(src)) {
+      candidates.push(normalizeXiaohongshuCdnUrl(src));
+    }
+  }
+
+  for (const match of String(text || "").matchAll(/https?:\\?\/\\?\/[^"'<>\\\s]+(?:\.mp4|sns-video|v\.xhscdn)[^"'<>\\\s]*/gi)) {
+    const url = decodeXiaohongshuEmbeddedUrl(match[0]);
+
+    if (isXiaohongshuVideoUrl(url)) {
+      candidates.push(normalizeXiaohongshuCdnUrl(url));
+    }
+  }
+
+  return uniqueXiaohongshuUrls(candidates);
+}
+
+function htmlAttribute(tag, name) {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, "i");
+  const match = pattern.exec(tag);
+
+  return match ? htmlUnescape(match[2]) : "";
+}
+
+function decodeXiaohongshuEmbeddedUrl(value) {
+  return htmlUnescape(String(value || ""))
+    .replace(/\\u002[fF]/g, "/")
+    .replace(/\\\//g, "/");
+}
+
+function normalizeXiaohongshuCdnUrl(value) {
+  return decodeXiaohongshuEmbeddedUrl(value);
+}
+
+function uniqueXiaohongshuUrls(urls) {
+  const seen = new Set();
+  const output = [];
+
+  for (const url of urls) {
+    if (!url || seen.has(url)) {
+      continue;
+    }
+
+    seen.add(url);
+    output.push(url);
+  }
+
+  return output;
+}
+
+function isXiaohongshuNoteImageUrl(value) {
+  return /^https?:\/\//i.test(String(value || "")) &&
+    /xhscdn\.com/i.test(value) &&
+    /\/notes_pre_post\//i.test(value);
+}
+
+function isXiaohongshuVideoUrl(value) {
+  return /^https?:\/\//i.test(String(value || "")) &&
+    /xhscdn\.com/i.test(value) &&
+    /(?:\.mp4|sns-video|v\.xhscdn)/i.test(value);
+}
+
+function xiaohongshuMetaAssets(text, shortcode, pageUrl, settings = {}) {
+  const headers = xiaohongshuMediaHeaders(pageUrl, settings);
   const assets = [];
   const video = metaContents(text, ["og:video", "og:video:url", "og:video:secure_url"])[0];
   const image = metaContents(text, ["og:image", "og:image:url", "og:image:secure_url"])[0];
@@ -516,7 +908,11 @@ function xiaohongshuMetaAssets(text, shortcode, pageUrl) {
 }
 
 function looksLikeXiaohongshuVerification(text) {
-  return /captcha|verify|安全验证|滑块验证|环境异常|访问频繁/i.test(text);
+  return looksLikeXiaohongshuRestrictedText(text);
+}
+
+function looksLikeXiaohongshuRestrictedText(text) {
+  return /captcha|verify|安全验证|滑块验证|环境异常|访问频繁|\/404\/sec_|error_code=300031|当前笔记暂时无法浏览|当前内容仅支持在小红书 APP 内查看|sec_WZRZJKCu/i.test(String(text || ""));
 }
 
 function postInfoFromXiaohongshu(note, metrics, creatorHandle) {
@@ -590,14 +986,14 @@ function parseXiaohongshuCount(value) {
   return Number.isFinite(number) ? Math.round(number * multiplier) : null;
 }
 
-function xiaohongshuMediaHeaders(pageUrl) {
-  return {
+function xiaohongshuMediaHeaders(pageUrl, settings = {}) {
+  return withCookieHeader({
     Referer: pageUrl,
     Origin: "https://www.xiaohongshu.com",
     "user-agent": XIAOHONGSHU_HEADERS["user-agent"],
     accept: "image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8",
     "accept-language": XIAOHONGSHU_HEADERS["accept-language"],
-  };
+  }, xiaohongshuCookieHeader(settings));
 }
 
 export function isXiaohongshuHost(host) {

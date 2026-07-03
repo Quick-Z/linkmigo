@@ -15,7 +15,7 @@ import { writeUserActionLog } from "../user-action-logger";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-const mediaCacheVersion = 32;
+const mediaCacheVersion = 36;
 const profileCacheVersion = 1;
 let sharpFactoryPromise = null;
 

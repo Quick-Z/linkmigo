@@ -95,6 +95,7 @@ export async function resolvePinterestPost(normalized, settings) {
   const cookieHeader = cookieHeaderFromSetCookie(pageResponse.headers);
   const pin =
     (await requestPinterestPinResource(active.shortcode, pageUrl, settings, cookieHeader)) ||
+    (await requestPinterestWidgetPin(active.shortcode, pageUrl, settings, cookieHeader)) ||
     findPinterestPinData(text, active.shortcode);
   const mediaHeaders = pinterestMediaHeaders(pageUrl, cookieHeader);
   const handle = pinterestCreatorHandle(pin, text);
@@ -159,6 +160,45 @@ async function requestPinterestPinResource(pinId, pageUrl, settings, cookieHeade
   } catch {
     return null;
   }
+}
+
+async function requestPinterestWidgetPin(pinId, pageUrl, settings, cookieHeader = "") {
+  const endpoints = [
+    "https://widgets.pinterest.com/v3/pidgets/pins/info/",
+    "https://api.pinterest.com/v3/pidgets/pins/info/",
+  ];
+
+  for (const endpoint of endpoints) {
+    const resourceUrl = new URL(endpoint);
+
+    resourceUrl.searchParams.set("pin_ids", pinId);
+
+    try {
+      const response = await fetchWithTimeout(
+        resourceUrl.toString(),
+        {
+          headers: withCookieHeader({
+            ...PINTEREST_HEADERS,
+            accept: "application/json, text/javascript, */*; q=0.01",
+            Referer: pageUrl,
+          }, cookieHeader),
+          cache: "no-store",
+        },
+        settings.httpTimeoutMs,
+      );
+      const payload = await responseJson(response);
+      const data = payload?.data?.[pinId] || payload?.resource_response?.data?.[pinId] || payload?.data;
+      const pin = isPinterestPinCandidate(data, pinId) ? data : findPinterestPinRecursive(data, pinId);
+
+      if (pin) {
+        return pin;
+      }
+    } catch {
+      // Try the next public widget host, then fall back to embedded page data.
+    }
+  }
+
+  return null;
 }
 
 function findPinterestPinData(text, pinId) {
@@ -656,8 +696,7 @@ function isPinterestMediaUrl(url, mediaType) {
       /pinimg\.com\/.*(?:hls|exp|video)/i.test(text);
   }
 
-  return /\.(?:jpe?g|png|webp|gif)(?:$|\?)/i.test(text) ||
-    /pinimg\.com\/(?:originals|(?:control\d*\/)?[0-9]+x)\//i.test(text);
+  return isPinterestPinImageUrl(text);
 }
 
 function pinterestMetaAssets(text, shortcode, mediaHeaders) {
@@ -756,16 +795,24 @@ function pinterestImageUrlVariants(url) {
 }
 
 function pinterestImageUrlScore(url) {
+  let parsed = null;
   let pathname = "";
 
   try {
-    pathname = new URL(url).pathname.toLowerCase();
+    parsed = new URL(url);
+    pathname = parsed.pathname.toLowerCase();
   } catch {
     pathname = String(url || "").toLowerCase();
   }
 
+  if (isPinterestDecorativeImagePath(pathname)) {
+    return -10_000;
+  }
+
+  const hostBonus = parsed && /^i\.pinimg\.com$/i.test(parsed.hostname) ? 1_500 : 0;
+
   if (/\/originals\//.test(pathname)) {
-    return 5000;
+    return 5000 + hostBonus;
   }
 
   const sized = /\/(?:control\d*\/)?([0-9]+)x\//.exec(pathname);
@@ -774,11 +821,11 @@ function pinterestImageUrlScore(url) {
     const width = Number.parseInt(sized[1], 10) || 0;
     const controlBonus = /\/control\d*\//.test(pathname) ? 100 : 0;
 
-    return width + controlBonus;
+    return width + controlBonus + hostBonus;
   }
 
   if (/large|orig|full/.test(pathname)) {
-    return 1000;
+    return 1000 + hostBonus;
   }
 
   if (/thumb|small|236x/.test(pathname)) {
@@ -786,6 +833,50 @@ function pinterestImageUrlScore(url) {
   }
 
   return 0;
+}
+
+function isPinterestPinImageUrl(url) {
+  let parsed;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const pathname = parsed.pathname.toLowerCase();
+
+  if (!hostname.endsWith(".pinimg.com") && hostname !== "pinimg.com") {
+    return false;
+  }
+
+  if (hostname !== "i.pinimg.com") {
+    return false;
+  }
+
+  if (isPinterestDecorativeImagePath(pathname)) {
+    return false;
+  }
+
+  if (/\/originals\//i.test(pathname)) {
+    return true;
+  }
+
+  const sized = /\/(?:control\d*\/)?([0-9]+)x\//i.exec(pathname);
+
+  if (sized) {
+    return (Number.parseInt(sized[1], 10) || 0) >= 236;
+  }
+
+  return /\.(?:jpe?g|png|webp|gif)(?:$|\?)/i.test(parsed.pathname);
+}
+
+function isPinterestDecorativeImagePath(pathname) {
+  return /(?:^|\/)(?:webapp|assets|images|static|favicon|logo|icon)(?:\/|$)/i.test(pathname) ||
+    /(?:^|\/)(?:avatars?|profile|user\/default)(?:\/|$)/i.test(pathname) ||
+    /\/d5\/3b\/01\/d53b014d86a6b6761bf649a0ed813c2b\.png$/i.test(pathname) ||
+    /(?:favicon|logo|icon|avatar|default)[^/]*\.(?:png|webp|jpe?g|gif)$/i.test(pathname);
 }
 
 function pinterestImageWidthFromUrl(url) {

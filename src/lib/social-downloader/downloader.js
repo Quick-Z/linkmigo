@@ -867,7 +867,11 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
       });
     } else {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readResponseBodyChunk({
+          reader,
+          timeoutMs,
+          sourceUrl: asset.source_url,
+        });
 
         if (done) {
           break;
@@ -890,6 +894,11 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
           content_length: contentLength,
           downloaded_bytes: size,
         });
+
+        if (contentLength && size >= contentLength) {
+          await reader.cancel().catch(() => {});
+          break;
+        }
       }
     }
   } catch (error) {
@@ -930,6 +939,30 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
     sourceUrl: asset.source_url,
     sizeBytes: size,
   };
+}
+
+async function readResponseBodyChunk({ reader, timeoutMs, sourceUrl }) {
+  let timer = null;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reader.cancel().catch(() => {});
+      reject(new AppError(
+        ErrorCode.DOWNLOAD_FAILED,
+        "媒体资源读取超时。",
+        504,
+        { source_url: sourceUrl },
+      ));
+    }, Math.max(1, Number(timeoutMs) || 20_000));
+  });
+
+  try {
+    return await Promise.race([reader.read(), timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function downloadSingleMediaWithCurl({ asset, destination, maxBytes, timeoutMs, onProgress, progressPartId = "media" }) {
@@ -1274,7 +1307,7 @@ function isMediaCurlFallbackError(error) {
     .filter(Boolean)
     .join(" ");
 
-  return /terminated|other side closed|response body|读取中断|\b(?:401|403|429)\b|拒绝访问/i.test(details);
+  return /terminated|other side closed|response body|读取(?:中断|超时)|timeout|timed out|\b(?:401|403|429)\b|拒绝访问/i.test(details);
 }
 
 function normalizeDownloadedContentType(contentType, destination, mediaType) {

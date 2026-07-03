@@ -210,6 +210,15 @@ SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS=300
 SOCIAL_MEDIA_TIMEOUT_SECONDS=600
 ```
 
+默认允许 4 个解析任务同时运行，以便多个用户可以同时使用；小红书默认同一时间只跑 1 个解析任务，避免同平台同 IP 的请求互相触发风控；单个帖子内部仍按原来的方式串行下载资源。如果目标平台开始限流，建议优先调低对应平台并发：
+
+```bash
+SOCIAL_RESOLVE_CONCURRENCY=4
+SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY=1
+SOCIAL_ASSET_DOWNLOAD_CONCURRENCY=1
+SOCIAL_PROFILE_ZIP_CONCURRENCY=1
+```
+
 如果同一个公开链接在缓存目录尚未清理前被再次解析，服务端会复用已有资源，并把该记录的过期时间重新延后一个缓存周期，减少重复下载和频繁清理。
 
 如果需要手动清空缓存资源和对应的过期时间记录，可以运行：

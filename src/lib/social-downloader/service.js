@@ -15,7 +15,7 @@ import { writeUserActionLog } from "../user-action-logger";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-const mediaCacheVersion = 23;
+const mediaCacheVersion = 32;
 const profileCacheVersion = 1;
 let sharpFactoryPromise = null;
 
@@ -165,6 +165,7 @@ export async function getZipFile(requestId, options = {}) {
 
 export async function getProfileZipFile(requestId, options = {}) {
   const cache = getCacheStore();
+  const settings = getSocialDownloaderSettings();
   const profileRecord = await cache.getRecord(requestId);
 
   if (!isUsableCachedProfileRecord(profileRecord)) {
@@ -180,24 +181,31 @@ export async function getProfileZipFile(requestId, options = {}) {
 
   if (!(await exists(zipPath))) {
     const entries = [];
-
-    for (const [postIndex, post] of selectedPosts.entries()) {
+    const postEntryResults = new Array(selectedPosts.length);
+    const postTasks = selectedPosts.map((post, postIndex) => async () => {
       const resolved = await resolveUrl(post.canonical_url);
 
       if (!resolved?.request_id || resolved?.mode === "profile") {
-        continue;
+        postEntryResults[postIndex] = [];
+        return;
       }
 
       const postRecord = await cache.getRecord(resolved.request_id);
       const postFolder = profileZipPostFolderName(postIndex, post);
+      const postEntries = [];
 
       for (const asset of postRecord.assets) {
-        entries.push({
+        postEntries.push({
           name: `${filenameBase}/${postFolder}/${asset.filename}`,
           path: await cache.assetPath(postRecord, asset),
         });
       }
-    }
+
+      postEntryResults[postIndex] = postEntries;
+    });
+
+    await runConcurrent(postTasks, settings.profileZipConcurrency);
+    entries.push(...postEntryResults.flat().filter(Boolean));
 
     if (!entries.length) {
       throw new AppError(ErrorCode.DOWNLOAD_FAILED, "选中的帖子暂时无法打包，请稍后重试。", 502);
@@ -236,8 +244,9 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
   await fs.mkdir(path.join(recordDir, "assets"), { recursive: true });
 
   try {
-    for (let index = 0; index < parsedAssets.length; index += 1) {
-      const parsedAsset = parsedAssets[index];
+    const downloadedAssetResults = new Array(parsedAssets.length);
+    let completedAssets = 0;
+    const downloadTasks = parsedAssets.map((parsedAsset, index) => async () => {
       const assetId = `asset-${index + 1}`;
       let extension = extensionForAsset(parsedAsset);
       let filename = assetFilename(normalized, parsedAsset, index + 1, extension);
@@ -279,7 +288,7 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
       } catch (error) {
         if (error instanceof AppError) {
           lastDownloadError = error;
-          continue;
+          return;
         }
 
         throw error;
@@ -299,7 +308,7 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
 
       const measuredDimensions = await probeAssetDimensions(destination, parsedAsset.media_type);
 
-      downloadedAssets.push({
+      downloadedAssetResults[index] = {
         id: assetId,
         source_url: downloaded.sourceUrl ?? parsedAsset.source_url,
         media_type: parsedAsset.media_type,
@@ -309,17 +318,21 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
         relative_path: relativePath,
         width: measuredDimensions?.width ?? parsedAsset.width ?? null,
         height: measuredDimensions?.height ?? parsedAsset.height ?? null,
-      });
+      };
+      completedAssets += 1;
 
       emitDownloadProgress({
         onProgress,
         progressParts,
         estimatedTotalBytes,
         phase: "downloading",
-        assetIndex: index + 1,
+        assetIndex: completedAssets,
         assetCount: parsedAssets.length,
       });
-    }
+    });
+
+    await runConcurrent(downloadTasks, settings.assetDownloadConcurrency);
+    downloadedAssets.push(...downloadedAssetResults.filter(Boolean));
 
     if (!downloadedAssets.length) {
       throw lastDownloadError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "发现了媒体地址，但无法下载任何资源。", 502);
@@ -385,6 +398,22 @@ async function estimateTotalDownloadBytes(parsedAssets, settings) {
   }
 
   return allPartsKnown && totalBytes ? totalBytes : null;
+}
+
+async function runConcurrent(tasks, concurrency) {
+  const limit = Math.max(1, Math.min(tasks.length || 1, Number(concurrency) || 1));
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < tasks.length) {
+      const task = tasks[nextIndex];
+
+      nextIndex += 1;
+      await task();
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, worker));
 }
 
 function updateDownloadProgressPart({ event, progressParts, assetIndex }) {

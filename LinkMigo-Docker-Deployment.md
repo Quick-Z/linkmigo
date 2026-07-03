@@ -210,6 +210,10 @@ services:
       SOCIAL_CACHE_TTL_SECONDS: "7200"
       SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS: "300"
       SOCIAL_MEDIA_TIMEOUT_SECONDS: "600"
+      SOCIAL_RESOLVE_CONCURRENCY: "4"
+      SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY: "1"
+      SOCIAL_ASSET_DOWNLOAD_CONCURRENCY: "1"
+      SOCIAL_PROFILE_ZIP_CONCURRENCY: "1"
       SOCIAL_MAX_ASSET_BYTES: "10737418240"
       SOCIAL_AUTO_SYSTEM_PROXY: "0"
       # SOCIAL_PROXY_URL: "http://host.docker.internal:7890"
@@ -362,4 +366,3 @@ LinkMigo 可以做成一个完整的 Docker 镜像，并通过单服务 `compose
   - `./logs:/app/logs`
 - 镜像内安装 Chromium
 - 镜像内使用 Next.js standalone 产物运行
-

@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { URL } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
@@ -10,6 +11,7 @@ import { fetchWithTimeout } from "./utils";
 
 const require = createRequire(import.meta.url);
 const packagedFfmpegPath = require("ffmpeg-static");
+const execFile = promisify(execFileCallback);
 
 const MEDIA_HEADERS = {
   "user-agent":
@@ -115,6 +117,26 @@ export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, o
     } catch (error) {
       if (!(error instanceof AppError)) {
         throw error;
+      }
+
+      if (isMediaCurlFallbackError(error)) {
+        try {
+          return await downloadSingleMediaWithCurl({
+            asset: { ...asset, source_url: sourceUrl },
+            destination,
+            maxBytes,
+            timeoutMs,
+            onProgress,
+            progressPartId: "media",
+          });
+        } catch (curlError) {
+          if (!(curlError instanceof AppError)) {
+            throw curlError;
+          }
+
+          lastError = curlError;
+          continue;
+        }
       }
 
       lastError = error;
@@ -797,11 +819,13 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, `媒体资源下载失败，状态码 ${response.status}。`, 502);
   }
 
-  const contentType = normalizeContentType(response.headers.get("content-type")) || expectedType || guessContentType(destination, asset.media_type);
+  let contentType = normalizeContentType(response.headers.get("content-type")) || expectedType || guessContentType(destination, asset.media_type);
 
   if (!contentTypeMatches(asset.media_type, contentType, asset.source_url)) {
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, "上游返回的媒体类型不符合预期。", 502);
   }
+
+  contentType = normalizeDownloadedContentType(contentType, destination, asset.media_type);
 
   const contentLength = safeInt(response.headers.get("content-length")) || expectedInfo.contentLength;
 
@@ -901,6 +925,112 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
     sourceUrl: asset.source_url,
     sizeBytes: size,
   };
+}
+
+async function downloadSingleMediaWithCurl({ asset, destination, maxBytes, timeoutMs, onProgress, progressPartId = "media" }) {
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+
+  const tempPath = `${destination}.part`;
+  const headers = { ...MEDIA_HEADERS, ...(asset.request_headers || {}) };
+  const expectedInfo = await probeContentInfo({ asset, headers, maxBytes, timeoutMs });
+  let contentType = expectedInfo.contentType || guessContentType(destination, asset.media_type);
+  const contentLength = expectedInfo.contentLength;
+
+  if (!contentTypeMatches(asset.media_type, contentType, asset.source_url)) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "上游返回的媒体类型不符合预期。", 502);
+  }
+
+  contentType = normalizeDownloadedContentType(contentType, destination, asset.media_type);
+
+  if (contentLength && contentLength > maxBytes) {
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+  }
+
+  await fs.unlink(tempPath).catch(() => {});
+
+  onProgress?.({
+    type: "stream_start",
+    part_id: progressPartId,
+    content_length: contentLength,
+    downloaded_bytes: 0,
+  });
+
+  try {
+    const timeoutSeconds = Math.max(1, Math.ceil((timeoutMs || 20_000) / 1000));
+    const args = [
+      "-sS",
+      "-L",
+      "--fail",
+      "--compressed",
+      "--max-time",
+      String(timeoutSeconds),
+      "-o",
+      tempPath,
+    ];
+
+    for (const [name, value] of Object.entries(headers)) {
+      if (value == null || value === "") {
+        continue;
+      }
+
+      if (name.toLowerCase() === "user-agent") {
+        args.push("-A", String(value));
+      } else {
+        args.push("-H", `${name}: ${value}`);
+      }
+    }
+
+    args.push(asset.source_url);
+
+    await execFile("curl", args, {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: (timeoutSeconds + 2) * 1000,
+    });
+
+    const stat = await fs.stat(tempPath);
+
+    if (stat.size === 0) {
+      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源为空。", 502);
+    }
+
+    if (stat.size > maxBytes) {
+      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+    }
+
+    await fs.rename(tempPath, destination);
+
+    onProgress?.({
+      type: "stream_complete",
+      part_id: progressPartId,
+      content_length: contentLength || stat.size,
+      downloaded_bytes: stat.size,
+    });
+
+    return {
+      path: destination,
+      contentType,
+      sourceUrl: asset.source_url,
+      sizeBytes: stat.size,
+    };
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => {});
+
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    if (error?.signal === "SIGTERM" || error?.killed) {
+      throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载超时。", 504);
+    }
+
+    throw new AppError(
+      ErrorCode.DOWNLOAD_FAILED,
+      "媒体资源下载失败。",
+      502,
+      error instanceof Error ? error.message : "curl fallback failed",
+    );
+  }
 }
 
 async function estimateSingleMediaSize({ asset, maxBytes, timeoutMs }) {
@@ -1114,6 +1244,32 @@ async function probeContentInfoWithRange({ asset, headers, maxBytes, timeoutMs }
     contentType: normalizeContentType(response.headers.get("content-type")),
     contentLength,
   };
+}
+
+function isMediaCurlFallbackError(error) {
+  if (!(error instanceof AppError) || error.code !== ErrorCode.DOWNLOAD_FAILED) {
+    return false;
+  }
+
+  const details = [
+    error.message,
+    typeof error.details === "string" ? error.details : "",
+    error.details?.error,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return /terminated|other side closed|response body|读取中断/i.test(details);
+}
+
+function normalizeDownloadedContentType(contentType, destination, mediaType) {
+  if (contentType !== "application/octet-stream") {
+    return contentType;
+  }
+
+  const guessed = guessContentType(destination, mediaType);
+
+  return guessed || contentType;
 }
 
 function contentTypeMatches(mediaType, contentType, sourceUrl) {

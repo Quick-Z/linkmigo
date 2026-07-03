@@ -69,7 +69,7 @@ export function normalizeXiaohongshuUrl(parsed) {
 
   let noteId = "";
 
-  if (parts[0] === "explore" && parts[1]) {
+  if ((parts[0] === "explore" || parts[0] === "search_result") && parts[1]) {
     noteId = parts[1];
   } else if (parts.length >= 3 && parts[0] === "discovery" && parts[1] === "item") {
     noteId = parts[2];
@@ -114,16 +114,32 @@ export async function resolveXiaohongshuPost(normalized, settings) {
   }
 
   const pageUrl = active.canonical_url;
-  const pageResponse = await fetchXiaohongshuPageTextWithMobileFallback({
+  let pageResponse = await fetchXiaohongshuPageTextWithMobileFallback({
     pageUrl,
     pageHeaders,
     shortcode: active.shortcode,
     settings,
   });
-  const text = pageResponse.text;
-  const initialState = extractXiaohongshuInitialState(text);
-  const note = findXiaohongshuNote(initialState, active.shortcode);
-  const htmlAssets = xiaohongshuHtmlAssets(text, active.shortcode, pageUrl, settings);
+  let text = pageResponse.text;
+  let initialState = extractXiaohongshuInitialState(text);
+  let note = findXiaohongshuNote(initialState, active.shortcode);
+  let htmlAssets = xiaohongshuHtmlAssets(text, active.shortcode, pageUrl, settings);
+
+  if (!note && pageResponse.source !== "xiaohongshu_mobile_h5" && htmlAssets.length === 0) {
+    const mobileResponse = await fetchXiaohongshuMobileSupplement({
+      pageUrl,
+      shortcode: active.shortcode,
+      settings,
+    });
+
+    if (mobileResponse) {
+      pageResponse = mobileResponse;
+      text = pageResponse.text;
+      initialState = extractXiaohongshuInitialState(text);
+      note = findXiaohongshuNote(initialState, active.shortcode);
+      htmlAssets = xiaohongshuHtmlAssets(text, active.shortcode, pageUrl, settings);
+    }
+  }
 
   if (!note) {
     if (looksLikeXiaohongshuVerification(text) && htmlAssets.length === 0) {
@@ -153,10 +169,32 @@ export async function resolveXiaohongshuPost(normalized, settings) {
   const handle = user.nickname || user.nickName || user.userId || "unknown";
   const filenameBase = `xiaohongshu_${safeFilenamePart(handle)}_${active.shortcode}`;
   const mediaHeaders = xiaohongshuMediaHeaders(pageUrl, settings);
-  const assets = xiaohongshuAssetsFromNote(note, filenameBase, mediaHeaders);
+  let assets = xiaohongshuAssetsFromNote(note, filenameBase, mediaHeaders);
+  let bestHtmlAssets = htmlAssets;
+
+  if (pageResponse.source !== "xiaohongshu_mobile_h5") {
+    const mobileResponse = await fetchXiaohongshuMobileSupplement({
+      pageUrl,
+      shortcode: active.shortcode,
+      settings,
+    });
+    const mobileHtmlAssets = mobileResponse
+      ? xiaohongshuHtmlAssets(mobileResponse.text, active.shortcode, pageUrl, settings)
+      : [];
+
+    if (mobileHtmlAssets.length > 0) {
+      bestHtmlAssets = dedupeAssets([...mobileHtmlAssets, ...htmlAssets]);
+    }
+  }
+
+  assets = mergeXiaohongshuNoteAndHtmlAssets({
+    noteAssets: assets,
+    htmlAssets: bestHtmlAssets,
+    preferHtmlImages: pageResponse.source === "xiaohongshu_mobile_h5",
+  });
 
   if (assets.length === 0) {
-    assets.push(...htmlAssets);
+    assets.push(...bestHtmlAssets);
   }
 
   if (assets.length === 0) {
@@ -250,7 +288,7 @@ async function fetchXiaohongshuPageTextWithMobileFallback({
 
     return response;
   } catch (error) {
-    if (!isXiaohongshuRestrictedError(error)) {
+    if (!isXiaohongshuDesktopFallbackError(error)) {
       throw error;
     }
 
@@ -294,6 +332,27 @@ async function fetchXiaohongshuMobilePageText({
   };
 }
 
+async function fetchXiaohongshuMobileSupplement({
+  pageUrl,
+  shortcode,
+  settings,
+}) {
+  try {
+    return await fetchXiaohongshuMobilePageText({
+      pageUrl,
+      shortcode,
+      settings,
+      upstream: { reason: "mobile_h5_supplement" },
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
 function shouldUseXiaohongshuCurlFallback(error) {
   const details = [
     error?.message,
@@ -302,6 +361,7 @@ function shouldUseXiaohongshuCurlFallback(error) {
     error?.cause?.code,
   ]
     .filter(Boolean)
+    .map((value) => typeof value === "string" ? value : JSON.stringify(value))
     .join(" ");
 
   return XIAOHONGSHU_CURL_FALLBACK_ERRORS.some((pattern) =>
@@ -411,6 +471,14 @@ function isXiaohongshuRestrictedError(error) {
     .join(" ");
 
   return looksLikeXiaohongshuRestrictedText(text);
+}
+
+function isXiaohongshuDesktopFallbackError(error) {
+  return isXiaohongshuRestrictedError(error) ||
+    (
+      error instanceof AppError &&
+      error.code === ErrorCode.NO_MEDIA_FOUND
+    );
 }
 
 function xiaohongshuRestrictedError(details = {}) {
@@ -621,6 +689,38 @@ function xiaohongshuAssetsFromNote(note, filenameBase, mediaHeaders) {
   return assets;
 }
 
+function mergeXiaohongshuNoteAndHtmlAssets({
+  noteAssets,
+  htmlAssets,
+  preferHtmlImages = false,
+}) {
+  if (!htmlAssets.length) {
+    return noteAssets;
+  }
+
+  const noteVideos = noteAssets.filter((asset) => asset.media_type === "video");
+  const noteImages = noteAssets.filter((asset) => asset.media_type === "image");
+  const noteOtherAssets = noteAssets.filter((asset) => !["image", "video"].includes(asset.media_type));
+  const htmlVideos = htmlAssets.filter((asset) => asset.media_type === "video");
+  const htmlImages = htmlAssets.filter((asset) => asset.media_type === "image");
+  const selectedVideos = noteVideos.length > 0 ? noteVideos : htmlVideos;
+  const shouldUseHtmlImages =
+    htmlImages.length > 0 &&
+    noteVideos.length === 0 &&
+    (
+      preferHtmlImages ||
+      noteImages.length === 0 ||
+      htmlImages.length >= noteImages.length
+    );
+  const selectedImages = shouldUseHtmlImages ? htmlImages : noteImages;
+
+  return dedupeAssets([
+    ...selectedVideos,
+    ...selectedImages,
+    ...noteOtherAssets,
+  ]);
+}
+
 function xiaohongshuVideoUrls(container) {
   const stream = dig(container, "video", "media", "stream") || container?.stream;
 
@@ -714,10 +814,15 @@ function xiaohongshuImageUrls(imageData) {
   }
 
   for (const url of [...candidates.map((candidate) => candidate[1])]) {
+    const h5OriginalUrls = xiaohongshuH5OriginalImageUrls(url);
     const noWatermarkUrl = xiaohongshuNoWatermarkImageUrl(url);
 
+    h5OriginalUrls.forEach((h5OriginalUrl) => {
+      candidates.push([100, h5OriginalUrl]);
+    });
+
     if (noWatermarkUrl) {
-      candidates.push([85, noWatermarkUrl]);
+      candidates.push([100, noWatermarkUrl]);
     }
   }
 
@@ -776,12 +881,12 @@ function xiaohongshuHtmlAssets(text, shortcode, pageUrl, settings = {}) {
   });
 
   imageUrls.forEach((url, index) => {
-    const originalUrl = xiaohongshuNoWatermarkImageUrl(url);
-    const fallbackUrls = [originalUrl].filter((candidate) => candidate && candidate !== url);
+    const imageCandidates = xiaohongshuPreferredImageUrls(url);
+    const sourceUrl = imageCandidates[0];
 
     assets.push({
-      source_url: url,
-      fallback_urls: fallbackUrls,
+      source_url: sourceUrl,
+      fallback_urls: imageCandidates.slice(1),
       media_type: "image",
       filename_hint: `xiaohongshu_${shortcode}_h5_photo_${index + 1}.jpg`,
       request_headers: headers,
@@ -791,13 +896,21 @@ function xiaohongshuHtmlAssets(text, shortcode, pageUrl, settings = {}) {
   return dedupeAssets(assets);
 }
 
+function xiaohongshuPreferredImageUrls(url) {
+  return uniqueXiaohongshuUrls([
+    ...xiaohongshuH5OriginalImageUrls(url),
+    xiaohongshuNoWatermarkImageUrl(url),
+    url,
+  ]);
+}
+
 function xiaohongshuHtmlImageUrls(text) {
   const candidates = [];
 
   for (const match of String(text || "").matchAll(/<img\b[^>]*(?:data-xhs-img|notes_pre_post)[^>]*>/gi)) {
     const src = htmlAttribute(match[0], "src");
 
-    if (isXiaohongshuNoteImageUrl(src)) {
+    if (isXiaohongshuNoteImageUrl(src) || isXiaohongshuH5NoteImageUrl(src)) {
       candidates.push(normalizeXiaohongshuCdnUrl(src));
     }
   }
@@ -872,6 +985,64 @@ function isXiaohongshuNoteImageUrl(value) {
   return /^https?:\/\//i.test(String(value || "")) &&
     /xhscdn\.com/i.test(value) &&
     /\/notes_pre_post\//i.test(value);
+}
+
+function isXiaohongshuH5NoteImageUrl(value) {
+  return /^https?:\/\//i.test(String(value || "")) &&
+    /xhscdn\.com/i.test(value) &&
+    /\/[^/?#]+![^/?#]+(?:[?&#]|$)/i.test(value) &&
+    !/avatar/i.test(value);
+}
+
+function xiaohongshuH5OriginalImageUrl(value) {
+  return xiaohongshuH5OriginalImageUrls(value)[0] || "";
+}
+
+function xiaohongshuH5OriginalImageUrls(value) {
+  if (!isXiaohongshuH5NoteImageUrl(value)) {
+    return [];
+  }
+
+  try {
+    const parsed = new URL(value);
+    const imagePath = xiaohongshuH5ImageObjectPath(parsed.pathname);
+
+    if (!imagePath) {
+      return [];
+    }
+
+    return [
+      `https://sns-img-qc.xhscdn.com/${imagePath}?imageView2/format/jpg`,
+      `https://sns-img-bd.xhscdn.com/${imagePath}?imageView2/format/jpg`,
+      `https://sns-img-hw.xhscdn.com/${imagePath}?imageView2/format/jpg`,
+      `https://ci.xiaohongshu.com/${imagePath}?imageView2/format/jpg`,
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function xiaohongshuH5ImageObjectPath(pathname) {
+  const parts = String(pathname || "")
+    .split("/")
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  const objectParts = parts.length > 2 ? parts.slice(2) : parts;
+  const lastIndex = objectParts.length - 1;
+
+  objectParts[lastIndex] = objectParts[lastIndex].split("!", 1)[0];
+
+  if (
+    objectParts.some((part) => !part || part.includes(".") || /[?#]/.test(part))
+  ) {
+    return "";
+  }
+
+  return objectParts.join("/");
 }
 
 function isXiaohongshuVideoUrl(value) {

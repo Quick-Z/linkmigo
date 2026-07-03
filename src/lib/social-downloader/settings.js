@@ -55,6 +55,22 @@ export function getSocialDownloaderSettings() {
         floatEnv("IG_MEDIA_TIMEOUT_SECONDS", 10 * 60),
       ),
     ) * 1000,
+    resolveConcurrency: positiveIntEnv(
+      "SOCIAL_RESOLVE_CONCURRENCY",
+      positiveIntEnv("IG_RESOLVE_CONCURRENCY", 4),
+    ),
+    xiaohongshuResolveConcurrency: positiveIntEnv(
+      "SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY",
+      positiveIntEnv("SOCIAL_XHS_RESOLVE_CONCURRENCY", 1),
+    ),
+    assetDownloadConcurrency: positiveIntEnv(
+      "SOCIAL_ASSET_DOWNLOAD_CONCURRENCY",
+      positiveIntEnv("IG_ASSET_DOWNLOAD_CONCURRENCY", 1),
+    ),
+    profileZipConcurrency: positiveIntEnv(
+      "SOCIAL_PROFILE_ZIP_CONCURRENCY",
+      positiveIntEnv("IG_PROFILE_ZIP_CONCURRENCY", 1),
+    ),
     maxAssetBytes: intEnv(
       "SOCIAL_MAX_ASSET_BYTES",
       intEnv("IG_MAX_ASSET_BYTES", DEFAULT_MAX_ASSET_BYTES),

@@ -182,6 +182,8 @@ export async function fetchTextResponse({
       `无法访问 ${label} 页面（${getFetchFailureDetail(error)}）。`,
       502,
       {
+        failure_detail: getFetchFailureDetail(error),
+        cause_code: getFetchFailureCauseCode(error),
         proxy: getProxyUrl() ? "enabled" : "disabled",
         hint: "请确认服务器网络或系统代理可访问该平台；也可以在 .env.local 配置 SOCIAL_PROXY_URL，例如 http://127.0.0.1:7890。",
       },
@@ -535,8 +537,7 @@ function unquoteGsettings(value) {
 }
 
 function getFetchFailureDetail(error) {
-  const cause = error?.cause;
-  const code = cause && typeof cause === "object" && "code" in cause ? String(cause.code) : "";
+  const code = getFetchFailureCauseCode(error);
 
   if (code === "ENOTFOUND") {
     return "DNS 解析失败";
@@ -554,7 +555,15 @@ function getFetchFailureDetail(error) {
     return "连接被重置";
   }
 
-  return error instanceof Error ? error.message : "网络连接失败";
+  const message = error instanceof Error ? error.message : "网络连接失败";
+
+  return code ? `${message} (${code})` : message;
+}
+
+function getFetchFailureCauseCode(error) {
+  const cause = error?.cause;
+
+  return cause && typeof cause === "object" && "code" in cause ? String(cause.code) : "";
 }
 
 export function jsonFromScriptId(text, scriptId) {

@@ -8,7 +8,6 @@ import {
   dig,
   escapeRegExp,
   extractEmbeddedJsonObjects,
-  fetchText,
   fetchWithTimeout,
   firstPresentInt,
   htmlUnescape,
@@ -337,6 +336,12 @@ export async function resolveInstagramPost(normalized, settings) {
     return merged;
   }
 
+  const renderedPost = await resolveFromRenderedPage(normalized.shortcode, settings);
+
+  if (renderedPost.assets.length > 0) {
+    return mergeInstagramResolverPosts([merged, renderedPost]);
+  }
+
   if (htmlError) {
     throw htmlError;
   }
@@ -525,14 +530,58 @@ async function ensureInstagramNetwork(settings) {
 }
 
 export async function fetchPublicPage(canonicalUrl, settings) {
-  const html = await fetchText({
-    url: canonicalUrl,
-    headers: instagramRequestHeaders(COMMON_PAGE_HEADERS, settings),
-    label: "Instagram",
-    timeoutMs: settings.httpTimeoutMs,
-  });
+  let response;
+
+  try {
+    response = await fetchWithTimeout(
+      canonicalUrl,
+      {
+        headers: instagramRequestHeaders(COMMON_PAGE_HEADERS, settings),
+        cache: "no-store",
+      },
+      settings.httpTimeoutMs,
+    );
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "Instagram 页面请求超时。", 504);
+    }
+
+    throw new AppError(
+      ErrorCode.UPSTREAM_BLOCKED,
+      "无法访问 Instagram 页面（网络连接失败）。",
+      502,
+      {
+        cause: error instanceof Error ? error.message : "fetch failed",
+      },
+    );
+  }
+
+  let html = "";
+
+  try {
+    html = await response.text();
+  } catch {
+    html = "";
+  }
 
   if (!html.trim()) {
+    if (response.status === 404) {
+      throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有找到这个 Instagram 内容。", 404);
+    }
+
+    if ([401, 403].includes(response.status)) {
+      throw new AppError(
+        ErrorCode.LOGIN_REQUIRED,
+        "Instagram 页面需要登录或拒绝了公开访问。",
+        403,
+        instagramTroubleshootingDetails({
+          status_code: response.status,
+          final_url: response.url || "",
+          stage: "public_page",
+        }),
+      );
+    }
+
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "Instagram 返回了空页面。", 404);
   }
 
@@ -544,6 +593,29 @@ export async function fetchPublicPage(canonicalUrl, settings) {
 
   if (looksLikeRateLimitOrChallenge(html) && !hasPublicMediaData(html)) {
     throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "Instagram 返回了限流或挑战页面。", 429);
+  }
+
+  if (response.status === 404 && !hasPublicMediaData(html)) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有找到这个 Instagram 内容。", 404);
+  }
+
+  if (response.status >= 400 && !hasPublicMediaData(html)) {
+    const statusError = instagramAccessError(html, response);
+
+    if (statusError) {
+      throw statusError;
+    }
+
+    throw new AppError(
+      ErrorCode.UPSTREAM_BLOCKED,
+      `Instagram 返回异常状态码 ${response.status}。`,
+      502,
+      instagramTroubleshootingDetails({
+        status_code: response.status,
+        final_url: response.url || "",
+        stage: "public_page",
+      }),
+    );
   }
 
   return html;
@@ -2023,6 +2095,28 @@ async function resolveFromWebGraphql(shortcode, settings) {
   };
 }
 
+async function resolveFromRenderedPage(shortcode, settings) {
+  const html = await fetchRenderedInstagramHtml(shortcode, settings);
+
+  if (!html) {
+    return { assets: [], metrics: createMetrics(), creator_handle: "" };
+  }
+
+  const metrics = parseMetricsFromHtml(html);
+  const creatorHandle = parseCreatorFromHtml(html);
+
+  return {
+    assets: parseAssetsFromHtml(html),
+    metrics,
+    creator_handle: creatorHandle,
+    post_info: parsePostInfoFromHtml(html, {
+      metrics,
+      creatorHandle,
+      shortcode,
+    }),
+  };
+}
+
 async function requestWebGraphqlPostData(shortcode, settings) {
   const params = await getGraphqlParams(shortcode, settings);
 
@@ -3432,6 +3526,10 @@ function extractFromJson(data, candidates) {
 
   if ("image_versions2" in data) {
     extractImageVersions(data.image_versions2, candidates, width, height);
+  }
+
+  if ("video_versions" in data) {
+    addValueAsCandidate(candidates, data.video_versions, "video", width, height);
   }
 
   if (["string", "object"].includes(typeof data.image) && data.image) {

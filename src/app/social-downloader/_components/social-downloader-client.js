@@ -61,6 +61,7 @@ const copyByLanguage = {
     commentsEnd: "已加载当前公开页面返回的评论",
     commentsLoadFailed: "评论加载失败",
     commentsPanel: "评论区",
+    commentsUnavailablePartial: "已读取到评论数，但公开页面没有返回评论内容",
     commentsVisibleCount: (loaded, total) => `已显示 ${loaded} / ${total}`,
     copiedBody: "文案已复制",
     copiedComment: "评论已复制",
@@ -169,6 +170,7 @@ const copyByLanguage = {
     commentsEnd: "Loaded comments from the public page.",
     commentsLoadFailed: "Failed to load comments",
     commentsPanel: "Comments",
+    commentsUnavailablePartial: "Comment count was found, but the public page did not return comment text.",
     commentsVisibleCount: (loaded, total) => `Showing ${loaded} / ${total}`,
     copiedBody: "Caption copied",
     copiedComment: "Comment copied",
@@ -3220,6 +3222,11 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
   }, [loadMore]);
 
   const visibleTotal = Math.max(publicCount ?? totalCount ?? comments.length, comments.length);
+  const hasUnavailablePublicComments = !isLoading &&
+    !error &&
+    comments.length === 0 &&
+    (totalCount ?? 0) > 0 &&
+    (publicCount ?? 0) === 0;
   const statusText = comments.length > 0
     ? copy.commentsVisibleCount(comments.length, visibleTotal)
     : "";
@@ -3285,7 +3292,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
             ) : null}
 
             {!isLoading && !error && comments.length === 0 ? (
-              <PostCommentsState chrome={chrome} text={copy.noComments} />
+              <PostCommentsState chrome={chrome} text={hasUnavailablePublicComments ? copy.commentsUnavailablePartial : copy.noComments} />
             ) : null}
 
             {comments.map((comment) => (

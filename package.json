@@ -6,6 +6,10 @@
     "dev": "YTDL_NO_DEBUG_FILE=1 next dev -H 0.0.0.0",
     "build": "next build",
     "cache:clear": "node scripts/clear-social-cache.mjs",
+    "docker:build:local-platforms": "scripts/docker-build-local-platforms.sh",
+    "docker:buildx": "scripts/docker-buildx.sh",
+    "docker:buildx:local": "scripts/docker-buildx.sh --local",
+    "docker:push:manifest": "scripts/docker-push-manifest.sh",
     "start": "YTDL_NO_DEBUG_FILE=1 next start -H 0.0.0.0"
   },
   "dependencies": {

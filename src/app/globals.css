@@ -12,6 +12,8 @@
   --ig-yellow: #fcb045;
   --ig-border: #dbdbdb;
   --ig-muted: #737373;
+  --font-geist-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, Helvetica, sans-serif;
+  --font-geist-mono: "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 @theme inline {

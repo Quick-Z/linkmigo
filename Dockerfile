@@ -1,25 +1,37 @@
-FROM node:22-bookworm-slim AS deps
+ARG NODE_IMAGE=node:22-bookworm-slim
+
+FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-FROM node:22-bookworm-slim AS builder
+FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runner
+FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
 
-RUN sed -i \
-    -e 's|http://deb.debian.org/debian-security|http://mirrors.ustc.edu.cn/debian-security|g' \
-    -e 's|http://deb.debian.org/debian|http://mirrors.ustc.edu.cn/debian|g' \
-    /etc/apt/sources.list.d/debian.sources \
-  && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 update \
-  && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends chromium ca-certificates fonts-liberation \
-  && rm -rf /var/lib/apt/lists/*
+ARG APT_MIRROR=
+ARG INSTALL_CHROMIUM=0
+
+RUN if [ "$INSTALL_CHROMIUM" = "1" ]; then \
+      if [ -n "$APT_MIRROR" ]; then \
+        mirror="${APT_MIRROR%/}"; \
+        sed -i \
+          -e "s|http://deb.debian.org/debian-security|${mirror}/debian-security|g" \
+          -e "s|http://deb.debian.org/debian|${mirror}/debian|g" \
+          /etc/apt/sources.list.d/debian.sources; \
+      fi \
+      && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 update \
+      && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends chromium ca-certificates fonts-liberation \
+      && rm -rf /var/lib/apt/lists/*; \
+    else \
+      echo "Skipping Chromium install. Set INSTALL_CHROMIUM=1 to include /usr/bin/chromium."; \
+    fi
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -27,7 +39,6 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV YTDL_NO_DEBUG_FILE=1
 ENV SOCIAL_CACHE_DIR=/data/social-downloader
-ENV CHROME_PATH=/usr/bin/chromium
 
 RUN mkdir -p /data/social-downloader /app/logs && chown -R node:node /data /app/logs
 

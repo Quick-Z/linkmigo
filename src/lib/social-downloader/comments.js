@@ -2,6 +2,7 @@ import { resolveBilibiliComments } from "./bilibili";
 import { resolveInstagramComments } from "./instagram";
 import { resolveRedditComments } from "./reddit";
 import { resolveV2exComments } from "./v2ex";
+import { resolveXiaohongshuComments } from "./xiaohongshu";
 import { resolveXiaoyuzhouComments } from "./xiaoyuzhou";
 import { resolveYoutubeComments } from "./youtube";
 
@@ -10,6 +11,7 @@ const COMMENT_RESOLVERS = {
   instagram: resolveInstagramComments,
   reddit: resolveRedditComments,
   v2ex: resolveV2exComments,
+  xiaohongshu: resolveXiaohongshuComments,
   xiaoyuzhou: resolveXiaoyuzhouComments,
   youtube: resolveYoutubeComments,
 };

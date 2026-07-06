@@ -1,6 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import { URL } from "node:url";
+import vm from "node:vm";
 
 import { AppError, ErrorCode } from "./errors";
 import {
@@ -8,6 +11,7 @@ import {
   dedupeAssets,
   dig,
   fetchTextResponse,
+  fetchWithTimeout,
   firstPresentInt,
   htmlUnescape,
   metaContents,
@@ -15,6 +19,7 @@ import {
   PAGE_HEADERS,
 } from "./utils";
 import {
+  cleanDisplayText,
   createPostInfo,
   normalizeTags,
   pickSingleLineText,
@@ -22,7 +27,9 @@ import {
 } from "./post-info";
 import {
   balancedJsonEndIndex,
+  cookieHeaderFromMap,
   createMetrics,
+  mergeCookieMapFromSetCookie,
   postInfoFromHtmlMeta,
   resolveRedirect,
   safeFilenamePart,
@@ -53,6 +60,14 @@ const XIAOHONGSHU_CURL_FALLBACK_ERRORS = [
   "页面响应读取失败",
 ];
 const execFile = promisify(execFileCallback);
+const XIAOHONGSHU_COMMENT_PAGE_PATHS = [
+  "/api/sns/web/v2/comment/page",
+];
+const XIAOHONGSHU_COMMENT_SUB_PAGE_PATH = "/api/sns/web/v2/comment/sub/page";
+const XIAOHONGSHU_COMMENT_IMAGE_FORMATS = "jpg,webp,avif";
+const XIAOHONGSHU_RENDERED_COMMENT_BUDGET_MS = 12_000;
+
+let cachedXiaohongshuSigner = null;
 
 export function normalizeXiaohongshuUrl(parsed) {
   const parts = parsed.pathname.split("/").filter(Boolean);
@@ -213,6 +228,123 @@ export async function resolveXiaohongshuPost(normalized, settings) {
     creator_handle: handle,
     post_info: postInfoFromXiaohongshu(note, metrics, handle),
   };
+}
+
+export async function resolveXiaohongshuComments(normalized, options = {}, settings = {}) {
+  const active = await resolveXiaohongshuActiveNote(normalized, settings);
+  const pageUrl = active.canonical_url;
+  const pageHeaders = xiaohongshuPageHeaders(settings);
+  const pageResponse = await fetchXiaohongshuPageTextWithMobileFallback({
+    pageUrl,
+    pageHeaders,
+    shortcode: active.shortcode,
+    settings,
+  });
+  const text = pageResponse.text;
+  const initialState = extractXiaohongshuInitialState(text);
+  const note = findXiaohongshuNote(initialState, active.shortcode);
+  const limit = normalizeXiaohongshuCommentLimit(options.limit);
+  const cursor = parseXiaohongshuCommentCursor(options.cursor);
+  const xsecToken = xiaohongshuNoteXsecToken(note, pageUrl);
+  const cookieHeader = xiaohongshuCommentCookieHeader(settings, pageResponse.headers);
+
+  if (cursor.type !== "snapshot") {
+    const apiPayload = await requestXiaohongshuCommentPage({
+      pageUrl,
+      pageText: text,
+      noteId: active.shortcode,
+      cursor: cursor.type === "api" ? cursor.value : "",
+      topCommentId: "",
+      xsecToken,
+      limit,
+      cookieHeader,
+      settings,
+    }).catch(() => null);
+
+    if (apiPayload && (apiPayload.comments.length > 0 || apiPayload.nextCursor || apiPayload.totalCount != null)) {
+      return {
+        platform: "xiaohongshu",
+        shortcode: active.shortcode,
+        canonical_url: pageUrl,
+        comments: apiPayload.comments,
+        next_cursor: apiPayload.nextCursor ? `api:${apiPayload.nextCursor}` : null,
+        has_more: Boolean(apiPayload.nextCursor),
+        total_count: apiPayload.totalCount,
+        public_count: apiPayload.publicCount,
+        is_partial_public_snapshot: apiPayload.totalCount != null && apiPayload.publicCount < apiPayload.totalCount,
+        source: apiPayload.source,
+      };
+    }
+  }
+
+  const renderedSnapshot = await xiaohongshuRenderedCommentSnapshot({
+    pageUrl,
+    shortcode: active.shortcode,
+    settings,
+  }).catch(() => null);
+
+  if (renderedSnapshot?.comments?.length > 0) {
+    const offset = cursor.type === "snapshot" ? cursor.offset : 0;
+    const endOffset = offset + limit;
+    const comments = renderedSnapshot.comments.slice(offset, endOffset);
+    const totalCount = renderedSnapshot.totalCount ?? parseXiaohongshuCount(note?.interactInfo?.commentCount) ?? renderedSnapshot.comments.length;
+    const nextCursor = endOffset < renderedSnapshot.comments.length ? `snapshot:${endOffset}` : null;
+
+    return {
+      platform: "xiaohongshu",
+      shortcode: active.shortcode,
+      canonical_url: pageUrl,
+      comments,
+      next_cursor: nextCursor,
+      has_more: Boolean(nextCursor),
+      total_count: totalCount,
+      public_count: renderedSnapshot.comments.length,
+      is_partial_public_snapshot: totalCount > renderedSnapshot.comments.length,
+      source: renderedSnapshot.source,
+    };
+  }
+
+  const publicComments = xiaohongshuPageComments(initialState, active.shortcode);
+  const offset = cursor.type === "snapshot" ? cursor.offset : 0;
+  const endOffset = offset + limit;
+  const comments = publicComments
+    .slice(offset, endOffset)
+    .map((comment) => normalizeXiaohongshuComment(comment))
+    .filter((comment) => comment.id);
+  const totalCount = parseXiaohongshuCount(note?.interactInfo?.commentCount) ?? publicComments.length;
+  const nextCursor = endOffset < publicComments.length ? `snapshot:${endOffset}` : null;
+
+  return {
+    platform: "xiaohongshu",
+    shortcode: active.shortcode,
+    canonical_url: pageUrl,
+    comments,
+    next_cursor: nextCursor,
+    has_more: Boolean(nextCursor),
+    total_count: totalCount,
+    public_count: publicComments.length,
+    is_partial_public_snapshot: totalCount > publicComments.length,
+    source: "xiaohongshu_public_comment_snapshot",
+  };
+}
+
+async function resolveXiaohongshuActiveNote(normalized, settings = {}) {
+  let active = normalized;
+  const pageHeaders = xiaohongshuPageHeaders(settings);
+
+  if (active.kind === "short") {
+    const redirected = await resolveRedirect(active.canonical_url, settings, pageHeaders);
+
+    if (redirected) {
+      active = normalizeXiaohongshuUrl(new URL(redirected));
+    }
+  }
+
+  if (active.kind === "short" || !active.shortcode) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "小红书短链接没有解析到笔记 ID。", 404);
+  }
+
+  return active;
 }
 
 async function fetchXiaohongshuPageText(options) {
@@ -450,6 +582,26 @@ function xiaohongshuCookieHeader(settings = {}) {
   return raw.includes("=") ? raw.replace(/[\r\n]+/g, " ").trim() : "";
 }
 
+function xiaohongshuCommentCookieHeader(settings = {}, pageHeaders = new Headers()) {
+  const cookieMap = new Map();
+
+  mergeCookieMapFromHeader(cookieMap, xiaohongshuCookieHeader(settings));
+  mergeCookieMapFromSetCookie(cookieMap, pageHeaders);
+
+  return cookieHeaderFromMap(cookieMap);
+}
+
+function mergeCookieMapFromHeader(cookieMap, cookieHeader) {
+  for (const part of String(cookieHeader || "").split(";")) {
+    const pair = part.trim();
+    const name = pair.split("=", 1)[0]?.trim();
+
+    if (name && pair.includes("=")) {
+      cookieMap.set(name, pair);
+    }
+  }
+}
+
 function isXiaohongshuRestrictedError(error) {
   if (
     error instanceof AppError &&
@@ -635,6 +787,912 @@ function isXiaohongshuNoteCandidate(value) {
     (value.noteId || value.id) &&
     (Array.isArray(value.imageList) || value.video || value.interactInfo || value.user),
   );
+}
+
+function normalizeXiaohongshuCommentLimit(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed)) {
+    return 12;
+  }
+
+  return Math.max(1, Math.min(30, parsed));
+}
+
+function parseXiaohongshuCommentCursor(value) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw) {
+    return { type: "api", value: "", offset: 0 };
+  }
+
+  if (raw.startsWith("api:")) {
+    return { type: "api", value: raw.slice("api:".length), offset: 0 };
+  }
+
+  if (raw.startsWith("snapshot:")) {
+    return { type: "snapshot", value: "", offset: normalizeXiaohongshuCommentOffset(raw.slice("snapshot:".length)) };
+  }
+
+  const offset = normalizeXiaohongshuCommentOffset(raw);
+
+  if (String(offset) === raw) {
+    return { type: "snapshot", value: "", offset };
+  }
+
+  return { type: "api", value: raw, offset: 0 };
+}
+
+function normalizeXiaohongshuCommentOffset(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return parsed;
+}
+
+function xiaohongshuNoteXsecToken(note, pageUrl) {
+  const fromNote = pickSingleLineText(note?.xsecToken, note?.xsec_token);
+
+  if (fromNote) {
+    return fromNote;
+  }
+
+  try {
+    return new URL(pageUrl).searchParams.get("xsec_token") || "";
+  } catch {
+    return "";
+  }
+}
+
+function xiaohongshuPageComments(initialState, noteId) {
+  const comments = [];
+  const detailMap = dig(initialState, "note", "noteDetailMap");
+  const noteEntries = [];
+
+  if (detailMap && typeof detailMap === "object") {
+    for (const key of [noteId, dig(initialState, "note", "currentNoteId")]) {
+      if (key && detailMap[key]) {
+        noteEntries.push(detailMap[key]);
+      }
+    }
+
+    noteEntries.push(...Object.values(detailMap));
+  }
+
+  for (const entry of noteEntries) {
+    const list = entry?.comments?.list ?? entry?.commentList ?? entry?.comments;
+
+    if (Array.isArray(list)) {
+      comments.push(...list.filter((comment) => looksLikeXiaohongshuComment(comment, noteId)));
+    }
+  }
+
+  return dedupeXiaohongshuCommentNodes(comments);
+}
+
+async function requestXiaohongshuCommentPage({
+  pageUrl,
+  pageText,
+  noteId,
+  cursor,
+  topCommentId,
+  xsecToken,
+  limit,
+  cookieHeader,
+  settings,
+}) {
+  for (const path of XIAOHONGSHU_COMMENT_PAGE_PATHS) {
+    const data = await requestXiaohongshuCommentApi({
+      path,
+      pageUrl,
+      pageText,
+      params: {
+        note_id: noteId,
+        cursor: cursor || "",
+        num: String(limit),
+        top_comment_id: topCommentId || "",
+        image_formats: XIAOHONGSHU_COMMENT_IMAGE_FORMATS,
+        xsec_token: xsecToken || "",
+      },
+      cookieHeader,
+      settings,
+    }).catch(() => null);
+    const page = parseXiaohongshuCommentApiPayload(data, "xiaohongshu_web_comment_page");
+
+    if (!page) {
+      continue;
+    }
+
+    const comments = [];
+
+    for (const comment of page.rawComments.slice(0, limit)) {
+      const expanded = await expandXiaohongshuCommentReplies({
+        comment,
+        pageUrl,
+        pageText,
+        noteId,
+        topCommentId,
+        xsecToken,
+        cookieHeader,
+        settings,
+      });
+
+      comments.push(normalizeXiaohongshuComment(expanded));
+    }
+
+    return {
+      ...page,
+      comments: comments.filter((comment) => comment.id),
+      publicCount: page.publicCount ?? comments.length,
+    };
+  }
+
+  return null;
+}
+
+async function expandXiaohongshuCommentReplies({
+  comment,
+  pageUrl,
+  pageText,
+  noteId,
+  topCommentId,
+  xsecToken,
+  cookieHeader,
+  settings,
+}) {
+  const replyCount = parseXiaohongshuCount(comment?.subCommentCount ?? comment?.sub_comment_count ?? comment?.replyCount);
+  const replies = xiaohongshuCommentReplies(comment);
+
+  if (!comment?.id || !replyCount || replies.length >= replyCount) {
+    return comment;
+  }
+
+  let cursor = pickSingleLineText(comment.subCommentCursor, comment.sub_comment_cursor);
+  let hasMore = true;
+  const expanded = [...replies];
+
+  while (hasMore && expanded.length < Math.min(replyCount, 30)) {
+    const data = await requestXiaohongshuCommentApi({
+      path: XIAOHONGSHU_COMMENT_SUB_PAGE_PATH,
+      pageUrl,
+      pageText,
+      params: {
+        note_id: noteId,
+        root_comment_id: comment.id,
+        num: "10",
+        cursor,
+        image_formats: XIAOHONGSHU_COMMENT_IMAGE_FORMATS,
+        top_comment_id: topCommentId || "",
+        xsec_token: xsecToken || "",
+      },
+      cookieHeader,
+      settings,
+    }).catch(() => null);
+    const page = parseXiaohongshuCommentApiPayload(data, "xiaohongshu_web_comment_sub_page");
+
+    if (!page || page.rawComments.length === 0) {
+      break;
+    }
+
+    expanded.push(...page.rawComments);
+    cursor = page.nextCursor || "";
+    hasMore = Boolean(page.nextCursor);
+  }
+
+  return {
+    ...comment,
+    subComments: dedupeXiaohongshuCommentNodes(expanded),
+  };
+}
+
+async function requestXiaohongshuCommentApi({
+  path,
+  pageUrl,
+  pageText,
+  params,
+  cookieHeader,
+  settings = {},
+}) {
+  const url = new URL(path, "https://www.xiaohongshu.com");
+
+  for (const [key, value] of Object.entries(params || {})) {
+    url.searchParams.set(key, String(value ?? ""));
+  }
+
+  const pathWithQuery = `${url.pathname}${url.search}`;
+  const headers = await xiaohongshuCommentApiHeaders({
+    pageUrl,
+    pageText,
+    pathWithQuery,
+    cookieHeader,
+    settings,
+  });
+  const response = await fetchWithTimeout(url.toString(), {
+    headers,
+    cache: "no-store",
+  }, Math.min(settings.httpTimeoutMs ?? 20_000, 8_000));
+  const text = await response.text();
+
+  if (response.status >= 400) {
+    throw new AppError(ErrorCode.UPSTREAM_BLOCKED, `小红书评论接口返回异常状态码 ${response.status}。`, 502, {
+      body_excerpt: text.slice(0, 240),
+    });
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "小红书评论接口没有返回 JSON。", 502, {
+      body_excerpt: text.slice(0, 240),
+    });
+  }
+}
+
+async function xiaohongshuCommentApiHeaders({
+  pageUrl,
+  pageText,
+  pathWithQuery,
+  cookieHeader,
+  settings,
+}) {
+  const signHeaders = await xiaohongshuSignedHeaders(pathWithQuery, pageText, settings).catch(() => ({}));
+
+  return withCookieHeader({
+    ...PAGE_HEADERS,
+    accept: "application/json, text/plain, */*",
+    "accept-language": XIAOHONGSHU_HEADERS["accept-language"],
+    Origin: "https://www.xiaohongshu.com",
+    Referer: pageUrl,
+    "x-b3-traceid": randomXiaohongshuTraceId(pathWithQuery),
+    ...signHeaders,
+  }, cookieHeader || xiaohongshuCookieHeader(settings));
+}
+
+async function xiaohongshuSignedHeaders(pathWithQuery, pageText, settings = {}) {
+  const signer = await loadXiaohongshuSigner(pageText, settings);
+  const commonHeaders = {
+    "X-Mns": "unload",
+    "X-S-Common": xiaohongshuXSCommonHeader(),
+  };
+
+  if (!signer) {
+    return commonHeaders;
+  }
+
+  const signed = signer(pathWithQuery, "");
+
+  if (!signed) {
+    return commonHeaders;
+  }
+
+  return {
+    ...commonHeaders,
+    "x-s": typeof signed === "string" && /^XYS_|^XYW_/.test(signed)
+      ? signed
+      : `XYW_${Buffer.from(signed).toString("base64")}`,
+    "x-t": String(Date.now()),
+  };
+}
+
+function xiaohongshuXSCommonHeader() {
+  const payload = {
+    s0: 5,
+    s1: "",
+    x0: "b1b1",
+    x1: "4.3.7",
+    x2: "PC",
+    x3: "xhs-pc-web",
+    x4: "6.27.1",
+    x5: "",
+    x6: "",
+    x7: "",
+    x8: "",
+    x9: xiaohongshuCrc32(""),
+    x10: 0,
+    x11: "normal",
+    x12: "0;",
+  };
+
+  return xiaohongshuCustomBase64(xiaohongshuUtf8Bytes(JSON.stringify(payload)));
+}
+
+function xiaohongshuUtf8Bytes(value) {
+  return Array.from(Buffer.from(String(value || ""), "utf8"));
+}
+
+function xiaohongshuCustomBase64(bytes) {
+  const alphabet = "ZmserbBoHQtNP+wOcza/LpngG8yJq42KWYj0DSfdikx3VT16IlUAFM97hECvuRX5";
+  const input = Array.isArray(bytes) ? bytes : [];
+  const remainder = input.length % 3;
+  const output = [];
+  const end = input.length - remainder;
+
+  for (let index = 0; index < end; index += 3) {
+    const triplet = ((input[index] << 16) & 0xff0000) +
+      ((input[index + 1] << 8) & 0xff00) +
+      (input[index + 2] & 0xff);
+
+    output.push(
+      alphabet[(triplet >> 18) & 63],
+      alphabet[(triplet >> 12) & 63],
+      alphabet[(triplet >> 6) & 63],
+      alphabet[triplet & 63],
+    );
+  }
+
+  if (remainder === 1) {
+    const value = input[input.length - 1];
+    output.push(alphabet[value >> 2], alphabet[(value << 4) & 63], "=", "=");
+  } else if (remainder === 2) {
+    const value = (input[input.length - 2] << 8) + input[input.length - 1];
+    output.push(alphabet[value >> 10], alphabet[(value >> 4) & 63], alphabet[(value << 2) & 63], "=");
+  }
+
+  return output.join("");
+}
+
+function xiaohongshuCrc32(value) {
+  let crc = -1;
+
+  for (const character of String(value || "")) {
+    crc ^= character.charCodeAt(0);
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 1) ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+    }
+  }
+
+  return ((-1 ^ crc) ^ 0xedb88320) | 0;
+}
+
+async function loadXiaohongshuSigner(pageText, settings = {}) {
+  if (cachedXiaohongshuSigner) {
+    return cachedXiaohongshuSigner;
+  }
+
+  const signUrl = xiaohongshuSignScriptUrl(pageText);
+
+  if (!signUrl) {
+    return null;
+  }
+
+  const response = await fetchXiaohongshuPageText({
+    url: signUrl,
+    headers: XIAOHONGSHU_HEADERS,
+    label: "Xiaohongshu sign",
+    timeoutMs: settings.httpTimeoutMs ?? 20_000,
+    allowRestrictedText: true,
+  });
+  const context = {
+    console,
+    parseInt,
+    Uint8Array,
+    Date,
+    Math,
+    Array,
+    Object,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Error,
+    TypeError,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    encodeURIComponent,
+    decodeURIComponent,
+  };
+  context.globalThis = context;
+
+  vm.runInNewContext(response.text, context, { timeout: 3_000 });
+
+  if (typeof context._dsf !== "function") {
+    return null;
+  }
+
+  cachedXiaohongshuSigner = (pathWithQuery, body = "") => context._dsf(pathWithQuery, body);
+
+  return cachedXiaohongshuSigner;
+}
+
+function xiaohongshuSignScriptUrl(pageText) {
+  const fromState = /"signConfig"\s*:\s*\{[^}]*"url"\s*:\s*"([^"]+)"/i.exec(String(pageText || ""));
+
+  if (fromState?.[1]) {
+    return decodeJsonUrl(fromState[1]);
+  }
+
+  const fromHtml = /https?:\\?\/\\?\/[^"'<>\\\s]+\/as\/v2\/ds\/[^"'<>\\\s]+\.js/i.exec(String(pageText || ""));
+
+  return fromHtml ? decodeJsonUrl(fromHtml[0]) : "";
+}
+
+function decodeJsonUrl(value) {
+  return htmlUnescape(String(value || "").replace(/\\\//g, "/"));
+}
+
+async function xiaohongshuRenderedCommentSnapshot({
+  pageUrl,
+  shortcode,
+  settings = {},
+}) {
+  const html = await fetchRenderedXiaohongshuHtml(pageUrl, settings);
+
+  if (!html) {
+    return null;
+  }
+
+  const comments = parseRenderedXiaohongshuComments(html)
+    .map((comment) => normalizeXiaohongshuComment(comment))
+    .filter((comment) => comment.id && comment.text);
+
+  if (comments.length === 0) {
+    return null;
+  }
+
+  return {
+    comments,
+    totalCount: renderedXiaohongshuCommentTotal(html, shortcode),
+    source: "xiaohongshu_rendered_public_comment_snapshot",
+  };
+}
+
+async function fetchRenderedXiaohongshuHtml(pageUrl, settings = {}) {
+  if (!isEnabledValue(process.env.SOCIAL_RENDERED_XIAOHONGSHU_COMMENTS) &&
+      !isEnabledValue(process.env.SOCIAL_RENDERED_XHS_COMMENTS)) {
+    return "";
+  }
+
+  const chromePath = resolveChromePath();
+
+  if (!chromePath) {
+    return "";
+  }
+
+  const profileDir = mkdtempSync(`${tmpdir()}/linkmigo-xhs-comments-`);
+  const timeoutMs = Math.min(Math.max((settings.httpTimeoutMs ?? 20_000) * 2, 25_000), 60_000);
+
+  try {
+    const { stdout } = await execFile(
+      chromePath,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-features=AutofillServerCommunication,MediaRouter,OptimizationGuideModelDownloading",
+        "--metrics-recording-only",
+        "--mute-audio",
+        "--no-first-run",
+        "--no-default-browser-check",
+        `--user-data-dir=${profileDir}`,
+        "--dump-dom",
+        `--virtual-time-budget=${XIAOHONGSHU_RENDERED_COMMENT_BUDGET_MS}`,
+        pageUrl,
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 40 * 1024 * 1024,
+        timeout: timeoutMs,
+      },
+    );
+
+    return stdout;
+  } catch {
+    return "";
+  } finally {
+    try {
+      rmSync(profileDir, { force: true, recursive: true });
+    } catch {
+      // Temporary browser profiles are best-effort cleanup.
+    }
+  }
+}
+
+function parseRenderedXiaohongshuComments(html) {
+  const region = renderedXiaohongshuCommentsRegion(html);
+  const comments = [];
+
+  for (const chunk of renderedXiaohongshuParentCommentChunks(region)) {
+    const replyIndex = searchRenderedClassIndex(chunk, "reply-container");
+    const commentChunk = replyIndex >= 0 ? chunk.slice(0, replyIndex) : chunk;
+    const comment = renderedXiaohongshuCommentFromChunk(commentChunk);
+
+    if (!comment) {
+      continue;
+    }
+
+    const replyRegion = replyIndex >= 0 ? chunk.slice(replyIndex) : "";
+    const replies = renderedXiaohongshuSubCommentChunks(replyRegion)
+      .map((replyChunk) => renderedXiaohongshuCommentFromChunk(replyChunk))
+      .filter(Boolean);
+
+    comment.subComments = replies;
+    comment.subCommentCount = Math.max(comment.subCommentCount ?? 0, replies.length);
+    comments.push(comment);
+  }
+
+  return dedupeXiaohongshuCommentNodes(comments);
+}
+
+function renderedXiaohongshuCommentsRegion(html) {
+  const text = String(html || "");
+  const commentsIndex = searchRenderedClassIndex(text, "comments-el");
+
+  if (commentsIndex < 0) {
+    return text;
+  }
+
+  const tail = text.slice(commentsIndex);
+  const endMatches = [
+    searchRenderedClassIndex(tail, "bottom-page"),
+    tail.indexOf("</body>"),
+  ].filter((index) => index > 0);
+  const endIndex = endMatches.length > 0 ? Math.min(...endMatches) : tail.length;
+
+  return tail.slice(0, endIndex);
+}
+
+function renderedXiaohongshuParentCommentChunks(region) {
+  return renderedChunksByClass(region, "parent-comment");
+}
+
+function renderedXiaohongshuSubCommentChunks(region) {
+  return renderedChunksByClass(region, "comment-item-sub");
+}
+
+function renderedChunksByClass(html, className) {
+  const text = String(html || "");
+  const pattern = new RegExp(`<div\\b[^>]*class=["'][^"']*\\b${escapeRegExpLiteral(className)}\\b[^"']*["'][^>]*>`, "gi");
+  const starts = [];
+  let match;
+
+  while ((match = pattern.exec(text))) {
+    starts.push(match.index);
+  }
+
+  return starts.map((start, index) => text.slice(start, starts[index + 1] ?? text.length));
+}
+
+function renderedXiaohongshuCommentFromChunk(chunk) {
+  const id = renderedXiaohongshuCommentId(chunk);
+  const authorTag = /<a\b[^>]*class=["'][^"']*\bname\b[^"']*["'][^>]*>[\s\S]*?<\/a>/i.exec(chunk)?.[0] || "";
+  const authorName = stripRenderedHtml(authorTag);
+  const text = renderedXiaohongshuCommentText(chunk);
+
+  if (!id || !authorName || !text) {
+    return null;
+  }
+
+  const date = renderedXiaohongshuCommentDate(chunk);
+  const avatarTag = /<img\b[^>]*class=["'][^"']*\bavatar-item\b[^"']*["'][^>]*>/i.exec(chunk)?.[0] || "";
+
+  return {
+    id,
+    content: text,
+    createTime: date.createdAt,
+    ipLocation: date.location,
+    likeCount: renderedXiaohongshuLikeCount(chunk),
+    subCommentCount: renderedXiaohongshuReplyCount(chunk),
+    userInfo: {
+      nickname: authorName,
+      userId: renderedHtmlAttribute(authorTag, "data-user-id"),
+      avatarUrl: renderedHtmlAttribute(avatarTag, "src"),
+    },
+  };
+}
+
+function renderedXiaohongshuCommentId(chunk) {
+  const fromId = /\bid=["']comment-([^"']+)["']/i.exec(chunk)?.[1];
+
+  if (fromId) {
+    return fromId;
+  }
+
+  const author = stripRenderedHtml(/<a\b[^>]*class=["'][^"']*\bname\b[^"']*["'][^>]*>[\s\S]*?<\/a>/i.exec(chunk)?.[0] || "");
+  const text = renderedXiaohongshuCommentText(chunk);
+  const date = renderedXiaohongshuCommentDate(chunk).createdAt;
+
+  return `rendered-${hashXiaohongshuComment(`${author}|${text}|${date}`)}`;
+}
+
+function renderedXiaohongshuCommentText(chunk) {
+  const match = /<span\b[^>]*class=["'][^"']*\bnote-text\b[^"']*["'][^>]*>([\s\S]*)<\/span>\s*<\/div>/i.exec(chunk);
+
+  return cleanDisplayText(stripRenderedHtml(match?.[1] || ""), { maxLength: 5000 });
+}
+
+function renderedXiaohongshuCommentDate(chunk) {
+  const dateHtml = /<div\b[^>]*class=["'][^"']*\bdate\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(chunk)?.[1] || "";
+  const spans = [...dateHtml.matchAll(/<span\b[^>]*>([\s\S]*?)<\/span>/gi)].map((match) => stripRenderedHtml(match[1]));
+  const location = stripRenderedHtml(/<span\b[^>]*class=["'][^"']*\blocation\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i.exec(dateHtml)?.[1] || "");
+
+  return {
+    createdAt: spans.find((value) => value && value !== location) || "",
+    location,
+  };
+}
+
+function renderedXiaohongshuLikeCount(chunk) {
+  const likeHtml = /<div\b[^>]*class=["'][^"']*\blike\b[^"']*["'][^>]*>([\s\S]*?)(?=<div\b[^>]*class=["'][^"']*\breply\b|\<\/div>\s*\<\/div>)/i.exec(chunk)?.[1] || "";
+  const count = renderedXiaohongshuLastNumericCount(likeHtml);
+
+  return count ?? null;
+}
+
+function renderedXiaohongshuReplyCount(chunk) {
+  const count = renderedXiaohongshuLastNumericCount(chunk);
+
+  return count ?? 0;
+}
+
+function renderedXiaohongshuLastNumericCount(html) {
+  const values = [...String(html || "").matchAll(/<span\b[^>]*class=["'][^"']*\bcount\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi)]
+    .map((match) => parseXiaohongshuCount(stripRenderedHtml(match[1])))
+    .filter((value) => Number.isFinite(value));
+
+  return values.length > 0 ? values[values.length - 1] : null;
+}
+
+function renderedXiaohongshuCommentTotal(html) {
+  const totalText = /<div\b[^>]*class=["'][^"']*\btotal\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(renderedXiaohongshuCommentsRegion(html))?.[1] || "";
+
+  return parseXiaohongshuCount(stripRenderedHtml(totalText));
+}
+
+function searchRenderedClassIndex(html, className) {
+  const pattern = new RegExp(`<[^>]+class=["'][^"']*\\b${escapeRegExpLiteral(className)}\\b[^"']*["']`, "i");
+  const match = pattern.exec(String(html || ""));
+
+  return match ? match.index : -1;
+}
+
+function renderedHtmlAttribute(tag, name) {
+  const pattern = new RegExp(`\\b${escapeRegExpLiteral(name)}=["']([^"']*)["']`, "i");
+  const value = pattern.exec(String(tag || ""))?.[1] || "";
+
+  return htmlUnescape(value);
+}
+
+function stripRenderedHtml(value) {
+  return htmlUnescape(String(value || "")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveChromePath() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    process.env.GOOGLE_CHROME_PATH,
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+
+  return candidates.find((candidate) =>
+    typeof candidate === "string" &&
+    candidate.length > 0 &&
+    existsSync(candidate),
+  ) || "";
+}
+
+function isEnabledValue(value) {
+  return /^(?:1|true|yes|on|enabled)$/i.test(String(value || "").trim());
+}
+
+function escapeRegExpLiteral(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseXiaohongshuCommentApiPayload(payload, source) {
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : payload;
+
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const rawComments = xiaohongshuCommentListFromPayload(data);
+  const nextCursor = pickSingleLineText(data.cursor, data.next_cursor, data.nextCursor);
+  const hasMore = Boolean(data.has_more ?? data.hasMore);
+  const totalCount = firstPresentInt(
+    data.total_count,
+    data.totalCount,
+    data.comment_count,
+    data.commentCount,
+  );
+
+  return {
+    rawComments,
+    comments: rawComments.map((comment) => normalizeXiaohongshuComment(comment)).filter((comment) => comment.id),
+    nextCursor: hasMore ? nextCursor : "",
+    totalCount,
+    publicCount: rawComments.length,
+    source,
+  };
+}
+
+function xiaohongshuCommentListFromPayload(data) {
+  for (const value of [
+    data?.comments,
+    data?.comment_list,
+    data?.commentList,
+    data?.list,
+    data?.items,
+  ]) {
+    if (Array.isArray(value)) {
+      return value.filter((comment) => looksLikeXiaohongshuComment(comment));
+    }
+  }
+
+  return [];
+}
+
+function looksLikeXiaohongshuComment(value, noteId = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const ownNoteId = String(value.noteId || value.note_id || "");
+
+  return Boolean(
+    (value.id || value.commentId || value.comment_id) &&
+      (pickText(value.content, value.text, value.commentContent) || value.userInfo || value.user) &&
+      (!noteId || !ownNoteId || ownNoteId === noteId),
+  );
+}
+
+function normalizeXiaohongshuComment(comment) {
+  const author = xiaohongshuCommentAuthor(comment);
+  const text = cleanDisplayText(pickText(comment?.content, comment?.text, comment?.commentContent), { maxLength: 5000 });
+  const createdAt = normalizeXiaohongshuCommentTime(
+    comment?.createTime,
+    comment?.createdAt,
+    comment?.created_at,
+    comment?.time,
+  );
+  const replies = xiaohongshuCommentReplies(comment)
+    .map((reply) => normalizeXiaohongshuComment(reply))
+    .filter((reply) => reply.id);
+  const authorHandle = pickSingleLineText(author.userId, author.user_id, author.id);
+  const authorName = pickSingleLineText(author.nickname, author.nickName, author.name, authorHandle, "小红书用户");
+  const id = pickSingleLineText(comment?.id, comment?.commentId, comment?.comment_id) ||
+    `xiaohongshu-comment-${hashXiaohongshuComment([authorHandle, authorName, createdAt, text].join("|"))}`;
+
+  return {
+    id,
+    text,
+    author_name: authorName,
+    author_handle: authorHandle,
+    avatar_url: xiaohongshuCommentAvatarUrl(author),
+    created_at: createdAt,
+    like_count: parseXiaohongshuCount(comment?.likeCount ?? comment?.like_count ?? comment?.likedCount),
+    reply_count: parseXiaohongshuCount(comment?.subCommentCount ?? comment?.sub_comment_count ?? comment?.replyCount) ?? replies.length,
+    ip_loc: pickSingleLineText(comment?.ipLocation, comment?.ip_location, comment?.ipLoc, comment?.ip_loc),
+    has_voice: false,
+    replies,
+  };
+}
+
+function xiaohongshuCommentAuthor(comment) {
+  for (const key of ["userInfo", "user_info", "user", "author"]) {
+    const value = comment?.[key];
+
+    if (value && typeof value === "object") {
+      return value;
+    }
+  }
+
+  return {};
+}
+
+function xiaohongshuCommentReplies(comment) {
+  const replies = [];
+
+  for (const key of ["subComments", "sub_comments", "subCommentList", "sub_comment_list", "replies", "replyList"]) {
+    const value = comment?.[key];
+
+    if (Array.isArray(value)) {
+      replies.push(...value.filter((reply) => looksLikeXiaohongshuComment(reply)));
+    }
+  }
+
+  return dedupeXiaohongshuCommentNodes(replies);
+}
+
+function xiaohongshuCommentAvatarUrl(author) {
+  for (const value of [
+    author.image,
+    author.avatar,
+    author.avatarUrl,
+    author.avatar_url,
+    author.images,
+  ].flatMap((item) => Array.isArray(item) ? item : [item])) {
+    const url = typeof value === "object"
+      ? pickSingleLineText(value?.url, value?.uri)
+      : pickSingleLineText(value);
+
+    if (/^https?:\/\//i.test(url)) {
+      return url;
+    }
+  }
+
+  return "";
+}
+
+function normalizeXiaohongshuCommentTime(...values) {
+  for (const value of values) {
+    if (value == null || value === "") {
+      continue;
+    }
+
+    if (typeof value === "number" || /^\d+$/.test(String(value))) {
+      const number = Number(value);
+      const millis = number > 10_000_000_000 ? number : number * 1000;
+      const date = new Date(millis);
+
+      if (!Number.isNaN(date.getTime())) {
+        return date.toISOString();
+      }
+    }
+
+    const text = pickSingleLineText(value);
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+function dedupeXiaohongshuCommentNodes(comments) {
+  const seen = new Set();
+  const deduped = [];
+
+  for (const comment of comments) {
+    const id = pickSingleLineText(comment?.id, comment?.commentId, comment?.comment_id) ||
+      hashXiaohongshuComment(`${xiaohongshuCommentAuthor(comment).userId || ""}|${comment?.createTime || ""}|${comment?.content || ""}`);
+
+    if (!id || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    deduped.push(comment);
+  }
+
+  return deduped;
+}
+
+function hashXiaohongshuComment(value) {
+  let hash = 5381;
+
+  for (const character of String(value || "")) {
+    hash = ((hash << 5) + hash) ^ character.charCodeAt(0);
+  }
+
+  return Math.abs(hash >>> 0).toString(36);
+}
+
+function randomXiaohongshuTraceId(value) {
+  const hash = hashXiaohongshuComment(`${Date.now()}|${value}|${Math.random()}`);
+
+  return hash.padStart(16, "0").slice(0, 16);
 }
 
 function xiaohongshuAssetsFromNote(note, filenameBase, mediaHeaders) {

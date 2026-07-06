@@ -79,6 +79,126 @@ npm run build
 npm run start
 ```
 
+## 🐳 Docker 和 NAS 部署
+
+项目根目录提供了一份可直接用于 NAS 或服务器部署的 `compose.yaml`。当前 Docker Hub 镜像按芯片架构拆分 tag，请根据你的设备架构选择镜像：
+
+| 设备芯片架构 | compose 镜像 tag |
+| --- | --- |
+| x86_64 / amd64，例如绿联 DXP 6800 Plus、常见 Intel/AMD NAS | `k21vin/linkmigo:latest-amd64` |
+| ARM64 / aarch64，例如部分 ARM NAS、树莓派 64 位系统 | `k21vin/linkmigo:latest-arm64` |
+
+默认 `compose.yaml` 使用的是 x86_64 / amd64 版本：
+
+```yaml
+services:
+  linkmigo:
+    image: k21vin/linkmigo:latest-amd64
+    container_name: linkmigo
+    restart: unless-stopped
+    ports:
+      - 3000:3000
+    environment:
+      NODE_ENV: production
+      YTDL_NO_DEBUG_FILE: "1"
+      SOCIAL_CACHE_DIR: /data/social-downloader
+      SOCIAL_CACHE_TTL_SECONDS: "7200"
+      SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS: "300"
+      SOCIAL_MEDIA_TIMEOUT_SECONDS: "600"
+      SOCIAL_RESOLVE_CONCURRENCY: "4"
+      SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY: "1"
+      SOCIAL_ASSET_DOWNLOAD_CONCURRENCY: "1"
+      SOCIAL_PROFILE_ZIP_CONCURRENCY: "1"
+      SOCIAL_MAX_ASSET_BYTES: "10737418240"
+      SOCIAL_AUTO_SYSTEM_PROXY: "0"
+      # SOCIAL_INSTAGRAM_COOKIE: 你的INS
+      # SOCIAL_PROXY_URL: "http://host.docker.internal:7890" # 代理
+    volumes:
+      - ./social-downloader:/data/social-downloader
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+如果你的设备是 ARM64，把 `image` 改成：
+
+```yaml
+image: k21vin/linkmigo:latest-arm64
+```
+
+在 NAS 或服务器上部署：
+
+```bash
+mkdir -p social-downloader logs
+docker compose pull
+docker compose up -d
+```
+
+访问地址：
+
+```text
+http://<NAS IP>:3000
+```
+
+发布多架构镜像到 Docker Hub：
+
+```bash
+docker login
+npm run docker:buildx -- --image 你的DockerHub用户名/linkmigo --tags "latest"
+```
+
+Docker Desktop 通常已经内置跨架构构建支持。如果在普通 Linux 主机上构建并遇到 `exec format error` 或 arm64/amd64 仿真问题，可以先启用 binfmt/QEMU：
+
+```bash
+docker run --privileged --rm tonistiigi/binfmt --install all
+```
+
+同时发布版本号和 `latest`：
+
+```bash
+npm run docker:buildx -- --image 你的DockerHub用户名/linkmigo --tags "0.1.0 latest"
+```
+
+默认构建平台是：
+
+```text
+linux/amd64,linux/arm64
+```
+
+默认 Docker 镜像不内置 Chromium，避免构建时通过 apt 下载大量浏览器依赖导致失败。少数平台的渲染兜底能力会在容器内不可用，但主流程可以稳定打包和部署。如果确实需要内置 Chromium，可以显式开启：
+
+```bash
+npm run docker:buildx -- --image 你的DockerHub用户名/linkmigo --tags "latest" --install-chromium --apt-mirror http://mirrors.ustc.edu.cn
+```
+
+只想在本机试打当前架构镜像，不推送到 Docker Hub：
+
+```bash
+npm run docker:buildx:local
+```
+
+如果想把打包和推送拆开，可以先分别打出本地 `amd64` 和 `arm64` 镜像：
+
+```bash
+npm run docker:build:local-platforms -- --image 你的DockerHub用户名/linkmigo --tags "0.1.0 latest"
+```
+
+这会在本地生成这些标签：
+
+```text
+你的DockerHub用户名/linkmigo:0.1.0-amd64
+你的DockerHub用户名/linkmigo:0.1.0-arm64
+你的DockerHub用户名/linkmigo:latest-amd64
+你的DockerHub用户名/linkmigo:latest-arm64
+```
+
+确认本地镜像没问题后，再推送架构标签并创建多架构 manifest：
+
+```bash
+docker login
+npm run docker:push:manifest -- --image 你的DockerHub用户名/linkmigo --tags "0.1.0 latest"
+```
+
 
 
 ## 🧙‍♀️ 法师

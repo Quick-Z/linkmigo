@@ -75,6 +75,7 @@ export function getSocialDownloaderSettings() {
       "SOCIAL_MAX_ASSET_BYTES",
       intEnv("IG_MAX_ASSET_BYTES", DEFAULT_MAX_ASSET_BYTES),
     ),
+    publicBaseUrl: stringEnv("SOCIAL_PUBLIC_BASE_URL", stringEnv("LINKMIGO_PUBLIC_BASE_URL", "")),
     instagramCookie: stringEnv(
       "SOCIAL_INSTAGRAM_COOKIE",
       stringEnv("IG_COOKIE", stringEnv("INSTAGRAM_COOKIE", "")),

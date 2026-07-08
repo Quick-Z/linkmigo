@@ -79,6 +79,10 @@ npm run build
 npm run start
 ```
 
+## 🔌 API 调用
+
+项目提供 HTTP API，可用于其他项目提交解析任务、轮询进度、接收回调通知和下载资源。完整接口说明见 [docs/api.md](docs/api.md)。
+
 ## 🐳 Docker 和 NAS 部署
 
 项目根目录提供了一份可直接用于 NAS 或服务器部署的 `compose.yaml`。当前 Docker Hub 镜像按芯片架构拆分 tag，请根据你的设备架构选择镜像：

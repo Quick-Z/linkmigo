@@ -39,10 +39,12 @@ import {
 
 const XIAOHONGSHU_HEADERS = {
   ...PAGE_HEADERS,
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
   accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
   "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-  Referer: "https://www.xiaohongshu.com/",
+  Referer: "https://www.xiaohongshu.com/explore",
 };
 const XIAOHONGSHU_MOBILE_HEADERS = {
   ...XIAOHONGSHU_HEADERS,
@@ -646,6 +648,27 @@ function xiaohongshuRestrictedError(details = {}) {
 }
 
 function extractXiaohongshuInitialState(text) {
+  const scripts = xiaohongshuScriptTexts(text);
+  const candidates = scripts.length > 0 ? scripts.reverse() : [String(text || "")];
+
+  for (const scriptText of candidates) {
+    const state = extractXiaohongshuInitialStateFromScript(scriptText);
+
+    if (state) {
+      return state;
+    }
+  }
+
+  return null;
+}
+
+function xiaohongshuScriptTexts(text) {
+  return Array.from(String(text || "").matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi))
+    .map((match) => htmlUnescape(match[1]).trim())
+    .filter((script) => /^window\.__INITIAL_STATE__\s*=/i.test(script));
+}
+
+function extractXiaohongshuInitialStateFromScript(text) {
   const assignment = /window\.__INITIAL_STATE__\s*=/i.exec(text);
 
   if (!assignment) {
@@ -710,6 +733,14 @@ function findXiaohongshuNote(initialState, noteId) {
 
   const detailMap = dig(initialState, "note", "noteDetailMap");
   const currentNoteId = dig(initialState, "note", "currentNoteId");
+  const mobileNote = dig(initialState, "noteData", "data", "noteData");
+
+  if (
+    isXiaohongshuNoteCandidate(mobileNote) &&
+    (!noteId || mobileNote.noteId === noteId || mobileNote.id === noteId)
+  ) {
+    return mobileNote;
+  }
 
   for (const key of [noteId, currentNoteId]) {
     const note = noteFromXiaohongshuMap(detailMap, key);
@@ -1781,12 +1812,13 @@ function mergeXiaohongshuNoteAndHtmlAssets({
 
 function xiaohongshuVideoUrls(container) {
   const stream = dig(container, "video", "media", "stream") || container?.stream;
+  const generated = xiaohongshuGeneratedVideoUrls(container);
 
   if (!stream || typeof stream !== "object") {
-    return [];
+    return generated;
   }
 
-  const candidates = [];
+  const candidates = [...generated];
 
   for (const codec of ["h264", "av1", "h265", "h266"]) {
     const items = Array.isArray(stream[codec]) ? stream[codec] : [];
@@ -1832,6 +1864,21 @@ function xiaohongshuVideoUrls(container) {
     });
 }
 
+function xiaohongshuGeneratedVideoUrls(container) {
+  const key = dig(container, "video", "consumer", "originVideoKey");
+
+  if (typeof key !== "string" || !key.trim()) {
+    return [];
+  }
+
+  return [{
+    url: `https://sns-video-bd.xhscdn.com/${key.trim()}`,
+    width: optionalInt(dig(container, "video", "media", "video", "width")),
+    height: optionalInt(dig(container, "video", "media", "video", "height")),
+    score: 1_000_000_000,
+  }];
+}
+
 function xiaohongshuVideoScore(item, codec) {
   const codecScore = codec === "h264" ? 30 : codec === "av1" ? 20 : 10;
   const width = optionalInt(item.width) || 0;
@@ -1862,12 +1909,24 @@ function xiaohongshuImageUrls(imageData) {
   add(imageData.url, 60);
   add(imageData.originalUrl, 90);
 
+  for (const url of [imageData.urlDefault, imageData.url, imageData.urlPre, imageData.originalUrl]) {
+    const tokenUrls = xiaohongshuImageTokenUrls(url);
+
+    tokenUrls.forEach((tokenUrl, index) => {
+      candidates.push([110 - index, tokenUrl]);
+    });
+  }
+
   if (Array.isArray(imageData.infoList)) {
     imageData.infoList.forEach((item) => {
       const scene = String(item?.imageScene || "");
       const sceneScore = /origin|original/i.test(scene) ? 95 : /wm/i.test(scene) ? 45 : 65;
 
       add(item?.url, sceneScore);
+
+      xiaohongshuImageTokenUrls(item?.url).forEach((tokenUrl, index) => {
+        candidates.push([110 - index, tokenUrl]);
+      });
     });
   }
 
@@ -1897,6 +1956,40 @@ function xiaohongshuImageUrls(imageData) {
       seen.add(url);
       return true;
     });
+}
+
+function xiaohongshuImageTokenUrls(value) {
+  const token = xiaohongshuImageToken(value);
+
+  if (!token) {
+    return [];
+  }
+
+  return [
+    `https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`,
+    `https://sns-img-bd.xhscdn.com/${token}`,
+  ];
+}
+
+function xiaohongshuImageToken(value) {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(htmlUnescape(value));
+    const parts = parsed.pathname.split("/").filter(Boolean);
+
+    if (parts.length <= 2) {
+      return "";
+    }
+
+    const token = parts.slice(2).join("/").split("!", 1)[0].replace(/^\/+/, "");
+
+    return token && !token.includes(".") ? token : "";
+  } catch {
+    return "";
+  }
 }
 
 function xiaohongshuNoWatermarkImageUrl(value) {

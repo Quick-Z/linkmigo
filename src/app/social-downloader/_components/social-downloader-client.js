@@ -927,7 +927,7 @@ const buttonThemes = {
   },
 };
 
-export function SocialDownloaderClient() {
+export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   const [language, setLanguage] = useState("zh");
   const [colorMode, setColorMode] = useState("light");
   const [url, setUrl] = useState("");
@@ -1446,7 +1446,7 @@ export function SocialDownloaderClient() {
                   }`}
                   style={{ color: inputDrivenTheme.titleText }}
                 >
-                  LinkMigo
+                  {appName}
                 </h1>
                 <p
                   className={`mx-auto max-w-2xl overflow-hidden transition-all duration-500 ${

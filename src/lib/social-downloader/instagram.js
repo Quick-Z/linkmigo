@@ -2857,7 +2857,7 @@ function upgradeInstagramAssetsFromText(assets, text) {
     return assets;
   }
 
-  return assets.map((asset) => {
+  const upgradedAssets = assets.map((asset) => {
     let best = asset;
     const assetKeys = new Set(instagramAssetMatchKeys(asset));
 
@@ -2880,6 +2880,36 @@ function upgradeInstagramAssetsFromText(assets, text) {
 
     return best;
   });
+
+  return supplementInstagramVideoAssets(upgradedAssets, candidates, text);
+}
+
+function supplementInstagramVideoAssets(assets, candidates, text) {
+  if (assets.some((asset) => asset?.media_type === "video") || !instagramTextSuggestsVideo(text)) {
+    return assets;
+  }
+
+  const videos = candidates
+    .filter((asset) => asset?.media_type === "video" && asset.source_url)
+    .sort((left, right) => compareInstagramAssets(right, left));
+
+  if (!videos.length) {
+    return assets;
+  }
+
+  if (assets.length === 1 && assets[0]?.media_type === "image") {
+    return [videos[0]];
+  }
+
+  return dedupeInstagramAssets([
+    ...assets,
+    ...videos.slice(0, Math.max(1, assets.length)),
+  ]);
+}
+
+function instagramTextSuggestsVideo(text) {
+  return /"is_video"\s*:\s*true|GraphVideo|VideoObject|"media_type"\s*:\s*2|"product_type"\s*:\s*"(?:clips|reels?)"/i
+    .test(String(text || ""));
 }
 
 async function upgradeInstagramAssetsFromRenderedPage(assets, shortcode, settings) {
@@ -3028,9 +3058,13 @@ function instagramRawMediaCandidates(text) {
   const candidates = [];
   const seen = new Set();
   const unescaped = htmlUnescape(String(text || ""))
+    .replace(/\\u003a/gi, ":")
+    .replace(/\\u002f/gi, "/")
+    .replace(/\\u003f/gi, "?")
     .replace(/\\u0025/gi, "%")
     .replace(/\\u0026/gi, "&")
     .replace(/\\u003d/gi, "=")
+    .replace(/\\u002e/gi, ".")
     .replace(/\\\//g, "/");
   const pattern =
     /https?:\\?\/\\?\/[^"'<>\\\s]+?(?:cdninstagram|fbcdn)[^"'<>\\\s]+?\.(?:jpe?g|png|webp|heic|mp4|mov|m4v)(?:\?[^"'<>\\\s]*)?/gi;

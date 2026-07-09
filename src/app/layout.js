@@ -1,9 +1,15 @@
 import "./globals.css";
 
-export const metadata = {
-  title: "LinkMigo",
-  description: "公开社媒资源下载工具",
-};
+import { getAppName } from "@/lib/app-config";
+
+export const dynamic = "force-dynamic";
+
+export async function generateMetadata() {
+  return {
+    title: getAppName(),
+    description: "公开社媒资源下载工具",
+  };
+}
 
 export default function RootLayout({ children }) {
   return (

@@ -1,10 +1,17 @@
 import { SocialDownloaderClient } from "./social-downloader/_components/social-downloader-client";
+import { getAppName } from "@/lib/app-config";
 
-export const metadata = {
-  title: "LinkMigo",
-  description: "解析公开 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、Reddit、V2EX、YouTube、Pornhub 链接并展示媒体资源。",
-};
+const metadataDescription = "解析公开 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、Reddit、V2EX、YouTube、Pornhub 链接并展示媒体资源。";
+
+export const dynamic = "force-dynamic";
+
+export async function generateMetadata() {
+  return {
+    title: getAppName(),
+    description: metadataDescription,
+  };
+}
 
 export default function Home() {
-  return <SocialDownloaderClient />;
+  return <SocialDownloaderClient appName={getAppName()} />;
 }

@@ -18,20 +18,21 @@ WORKDIR /app
 ARG APT_MIRROR=
 ARG INSTALL_CHROMIUM=0
 
-RUN if [ "$INSTALL_CHROMIUM" = "1" ]; then \
-      if [ -n "$APT_MIRROR" ]; then \
-        mirror="${APT_MIRROR%/}"; \
-        sed -i \
-          -e "s|http://deb.debian.org/debian-security|${mirror}/debian-security|g" \
-          -e "s|http://deb.debian.org/debian|${mirror}/debian|g" \
-          /etc/apt/sources.list.d/debian.sources; \
-      fi \
-      && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 update \
-      && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends chromium ca-certificates fonts-liberation \
-      && rm -rf /var/lib/apt/lists/*; \
+RUN if [ -n "$APT_MIRROR" ]; then \
+      mirror="${APT_MIRROR%/}"; \
+      sed -i \
+        -e "s|http://deb.debian.org/debian-security|${mirror}/debian-security|g" \
+        -e "s|http://deb.debian.org/debian|${mirror}/debian|g" \
+        /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 update \
+    && if [ "$INSTALL_CHROMIUM" = "1" ]; then \
+      apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends ca-certificates curl gosu chromium fonts-liberation; \
     else \
-      echo "Skipping Chromium install. Set INSTALL_CHROMIUM=1 to include /usr/bin/chromium."; \
-    fi
+      apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends ca-certificates curl gosu \
+      && echo "Skipping Chromium install. Set INSTALL_CHROMIUM=1 to include /usr/bin/chromium."; \
+    fi \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -47,7 +48,7 @@ COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/node_modules/ffmpeg-static ./node_modules/ffmpeg-static
 
-USER node
+USER root
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "mkdir -p /data/social-downloader /app/logs && if chown -R node:node /data/social-downloader /app/logs; then exec gosu node node server.js; else echo 'Warning: failed to chown data/log directories; running as root.'; exec node server.js; fi"]

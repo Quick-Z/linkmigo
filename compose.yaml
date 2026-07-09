@@ -7,6 +7,7 @@ services:
       - 3000:3000
     environment:
       NODE_ENV: production
+      LINKMIGO_APP_NAME: LinkMigo
       YTDL_NO_DEBUG_FILE: "1"
       SOCIAL_CACHE_DIR: /data/social-downloader
       SOCIAL_CACHE_TTL_SECONDS: "7200"

@@ -81,6 +81,8 @@ logs
 .env*
 .DS_Store
 docs
+*.tar
+*.tar.gz
 ```
 
 作用：
@@ -90,6 +92,7 @@ docs
 - 不把缓存 `.cache` 打进镜像。
 - 不把日志 `logs` 打进镜像。
 - 不把 `.env` 里的密钥、Cookie、代理配置打进镜像。
+- 不把 `docker save` 导出的旧镜像包打进新镜像；旧 tar 如果被 `COPY . .` 复制到 `/app`，只会让镜像体积异常变大，不代表应用更完整。
 
 ## 4. 新建 Dockerfile
 

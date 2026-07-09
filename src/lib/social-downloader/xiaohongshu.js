@@ -13,6 +13,7 @@ import {
   fetchTextResponse,
   fetchWithTimeout,
   firstPresentInt,
+  getProxyUrl,
   htmlUnescape,
   metaContents,
   optionalInt,
@@ -524,6 +525,12 @@ async function fetchXiaohongshuPageTextWithCurl({ url, headers, label, timeoutMs
 
   if (cookieHeader) {
     args.push("-H", `cookie: ${cookieHeader}`);
+  }
+
+  const proxyUrl = getProxyUrl();
+
+  if (proxyUrl) {
+    args.push("--proxy", proxyUrl);
   }
 
   args.push("--http1.1", url);

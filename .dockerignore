@@ -7,3 +7,5 @@ logs
 .env*
 .DS_Store
 docs
+*.tar
+*.tar.gz

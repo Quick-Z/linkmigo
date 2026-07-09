@@ -104,6 +104,7 @@ services:
       - 3000:3000
     environment:
       NODE_ENV: production
+      LINKMIGO_APP_NAME: LinkMigo
       YTDL_NO_DEBUG_FILE: "1"
       SOCIAL_CACHE_DIR: /data/social-downloader
       SOCIAL_CACHE_TTL_SECONDS: "7200"
@@ -143,6 +144,31 @@ docker compose up -d
 ```text
 http://<NAS IP>:3000
 ```
+
+常用环境变量：
+
+| 变量名 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LINKMIGO_APP_NAME` | `LinkMigo` | 自定义页面标题和首页主标题；Docker/NAS 部署时可在环境变量里改成自己的应用名。 |
+| `SOCIAL_CACHE_DIR` | `.cache/social-downloader`；Docker 示例为 `/data/social-downloader` | 服务端缓存已解析媒体资源的位置。Docker 部署时建议映射到 NAS/服务器持久化目录。 |
+| `SOCIAL_CACHE_TTL_SECONDS` | `7200` | 缓存资源保留时长，单位秒。 |
+| `SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS` | `300` | 过期缓存清理间隔，单位秒。 |
+| `SOCIAL_MEDIA_TIMEOUT_SECONDS` | `600` | 单个媒体下载超时时间，单位秒。 |
+| `SOCIAL_RESOLVE_CONCURRENCY` | `4` | 全局解析任务并发数。 |
+| `SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY` | `1` | 小红书解析并发数。 |
+| `SOCIAL_ASSET_DOWNLOAD_CONCURRENCY` | `1` | 单个解析任务内媒体下载并发数。 |
+| `SOCIAL_PROFILE_ZIP_CONCURRENCY` | `1` | Instagram 主页批量打包时的帖子解析并发数。 |
+| `SOCIAL_MAX_ASSET_BYTES` | `10737418240` | 单个资源最大下载体积，单位字节。 |
+| `SOCIAL_AUTO_SYSTEM_PROXY` | `1` | 是否自动读取系统代理；Docker/NAS 通常建议设为 `0`，并手动配置 `SOCIAL_PROXY_URL`。 |
+| `SOCIAL_PROXY_URL` | 空 | 服务端访问外部平台使用的代理，例如 `http://192.168.1.10:7890`。Docker 内不要填宿主机的 `127.0.0.1`。 |
+| `SOCIAL_INSTAGRAM_COOKIE` | 空 | Instagram 登录 Cookie，用于读取需要登录、年龄或地区限制的公开内容。 |
+| `SOCIAL_XIAOHONGSHU_COOKIE` | 空 | 小红书登录 Cookie，用于读取匿名公开页受限但登录后可访问的笔记。 |
+| `SOCIAL_REDDIT_CLIENT_ID` | 空 | Reddit OAuth app 的 client id。 |
+| `SOCIAL_REDDIT_CLIENT_SECRET` | 空 | Reddit OAuth app 的 secret，可选。 |
+| `SOCIAL_REDDIT_USER_AGENT` | `web:linkmigo:0.1.0 (by /u/linkmigo_user)` | Reddit API 使用的唯一 User-Agent。 |
+| `SOCIAL_PUBLIC_BASE_URL` | 自动从请求推断 | API 回调中生成绝对下载链接时使用的公网基础地址。 |
+
+本地开发时也可以把这些变量写入 `.env.local`。改完环境变量后需要重启开发服务或 Docker 容器。
 
 发布多架构镜像到 Docker Hub：
 
@@ -186,6 +212,8 @@ npm run docker:buildx:local
 ```bash
 npm run docker:build:local-platforms -- --image 你的DockerHub用户名/linkmigo --tags "0.1.0 latest"
 ```
+
+项目的 `.dockerignore` 已排除 `*.tar` 和 `*.tar.gz`。如果你先用 `docker save` 导出了旧镜像包，再重新构建新镜像，必须避免这些旧包进入 Docker build context；否则旧 tar 会被 `COPY . .` 复制到 `/app`，导致镜像体积异常变大，但不会让应用更完整。
 
 这会在本地生成这些标签：
 

@@ -1,5 +1,9 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { URL, URLSearchParams } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
@@ -60,6 +64,10 @@ const WEB_APP_ID = "936619743392459";
 const GQL_DOC_ID = "8845758582119845";
 const PROFILE_PAGE_SIZE = 50;
 const PROFILE_POST_LIMIT = 500;
+const PROFILE_PREFETCH_LIMIT = 60;
+const PROFILE_RENDER_SCROLL_ROUNDS = 18;
+const PROFILE_RENDER_SCROLL_IDLE_ROUNDS = 3;
+const PROFILE_RENDER_SCROLL_WAIT_MS = 1200;
 
 const COMMON_PAGE_HEADERS = {
   "user-agent":
@@ -360,27 +368,36 @@ export async function resolveInstagramProfile(normalized, settings) {
   const html = await fetchPublicPage(normalized.canonical_url, settings);
   const firstAttempt = await resolveInstagramProfileFromHtml(html, fallbackHandle, settings);
 
-  if (firstAttempt.posts.length > 0) {
+  if (firstAttempt.posts.length > 0 && !shouldEnhanceInstagramProfileSnapshot(firstAttempt)) {
     return firstAttempt;
   }
 
-  const renderedHtml = await fetchRenderedInstagramProfileHtml(normalized.canonical_url, settings);
+  const renderedHtml = await fetchRenderedInstagramProfileHtml(
+    normalized.canonical_url,
+    settings,
+    fallbackHandle,
+  );
 
   if (renderedHtml) {
     const renderedAttempt = await resolveInstagramProfileFromHtml(renderedHtml, fallbackHandle, settings, {
       preserveErrors: firstAttempt.profileErrors,
       fallbackUserId: firstAttempt.profile.user_id || "",
+      source: "instagram_rendered_profile_scroll",
     });
 
     if (renderedAttempt.posts.length > 0) {
-      return renderedAttempt;
+      return mergeInstagramProfileAttempts(firstAttempt, renderedAttempt);
     }
 
     const selectedRenderedError = selectInstagramProfileError(renderedAttempt.profileErrors);
 
-    if (selectedRenderedError) {
+    if (!firstAttempt.posts.length && selectedRenderedError) {
       throw selectedRenderedError;
     }
+  }
+
+  if (firstAttempt.posts.length > 0) {
+    return firstAttempt;
   }
 
   const selectedError = selectInstagramProfileError(firstAttempt.profileErrors);
@@ -396,7 +413,12 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
   const htmlProfile = parseInstagramProfileFromHtml(html, fallbackHandle);
   const username = normalizeCreatorHandle(htmlProfile.username || fallbackHandle);
   let apiUser = null;
-  let feedPosts = [];
+  let feedPage = {
+    posts: [],
+    nextCursor: "",
+    moreAvailable: false,
+    userId: "",
+  };
   const profileErrors = Array.isArray(options.preserveErrors) ? [...options.preserveErrors] : [];
 
   if (username) {
@@ -417,26 +439,41 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
     ...normalizeInstagramProfilePostsFromUser(apiUser, username),
     ...extractInstagramProfilePostsFromRenderedHtml(html, username),
   ]);
-  const userId = pickSingleLineText(
+  let userId = pickSingleLineText(
     apiUser?.id,
     apiUser?.pk,
     htmlProfile.user_id,
     options.fallbackUserId,
   );
 
+  if (!userId && initialPosts.length > 0) {
+    try {
+      userId = await requestInstagramUserIdFromPostShortcode(initialPosts[0].shortcode, settings);
+    } catch (error) {
+      profileErrors.push(error);
+    }
+  }
+
+  if (!userId && initialPosts.length > 0) {
+    try {
+      userId = await requestInstagramUserIdFromProfilePostCandidates(initialPosts, username, settings);
+    } catch (error) {
+      profileErrors.push(error);
+    }
+  }
+
   if (userId) {
     try {
-      feedPosts = await requestInstagramProfileFeedPosts(userId, settings, {
+      feedPage = await requestInstagramProfileFeedPosts(userId, settings, {
         creatorHandle: username || mergedProfile.username,
         initialShortcodes: initialPosts.map((post) => post.shortcode),
       });
     } catch (error) {
       profileErrors.push(error);
-      feedPosts = [];
     }
   }
 
-  const posts = dedupeInstagramProfilePosts([...initialPosts, ...feedPosts])
+  const posts = dedupeInstagramProfilePosts([...initialPosts, ...feedPage.posts])
     .sort(compareInstagramProfilePosts);
 
   if (!mergedProfile.username) {
@@ -452,6 +489,171 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
     creator_handle: mergedProfile.username,
     profile: mergedProfile,
     posts,
+    profile_pagination: {
+      source: feedPage.userId && (feedPage.posts.length > 0 || feedPage.nextCursor)
+        ? "instagram_mobile_feed"
+        : (options.source || "instagram_public_snapshot"),
+      user_id: feedPage.userId || userId,
+      next_cursor: feedPage.nextCursor,
+      has_more: Boolean(feedPage.moreAvailable && feedPage.nextCursor),
+    },
+    profileErrors,
+  };
+}
+
+async function requestInstagramUserIdFromPostShortcode(shortcode, settings) {
+  const safeShortcode = cleanSingleLineText(shortcode, { maxLength: 80 });
+
+  if (!SHORTCODE_RE.test(safeShortcode)) {
+    return "";
+  }
+
+  const mediaId = await getMediaId(safeShortcode, settings);
+
+  if (!mediaId) {
+    return "";
+  }
+
+  const mediaIdUserId = String(mediaId).split("_").at(1);
+
+  if (/^\d{3,}$/.test(mediaIdUserId || "")) {
+    return mediaIdUserId;
+  }
+
+  const mediaInfo = await requestMobileMediaInfo(mediaId, settings);
+
+  return pickSingleLineText(
+    mediaInfo?.user?.pk,
+    mediaInfo?.user?.id,
+    mediaInfo?.owner?.pk,
+    mediaInfo?.owner?.id,
+  );
+}
+
+async function requestInstagramUserIdFromProfilePostCandidates(posts, expectedHandle, settings) {
+  const handle = normalizeCreatorHandle(expectedHandle);
+  const knownShortcodes = new Set(
+    (Array.isArray(posts) ? posts : [])
+      .map((post) => cleanSingleLineText(post?.shortcode, { maxLength: 80 }))
+      .filter((shortcode) => SHORTCODE_RE.test(shortcode)),
+  );
+
+  for (const userId of instagramUserIdCandidatesFromProfilePosts(posts)) {
+    let page = null;
+
+    try {
+      page = await requestInstagramProfileFeedPage(userId, settings);
+    } catch {
+      page = null;
+    }
+
+    if (!page?.items?.length) {
+      continue;
+    }
+
+    const matchesHandle = handle && page.items.some((item) =>
+      normalizeCreatorHandle(item?.user?.username || item?.owner?.username) === handle,
+    );
+    const matchesKnownPost = page.items.some((item) =>
+      knownShortcodes.has(pickSingleLineText(item?.code, item?.shortcode)),
+    );
+
+    if (matchesHandle || matchesKnownPost) {
+      return userId;
+    }
+  }
+
+  return "";
+}
+
+function instagramUserIdCandidatesFromProfilePosts(posts) {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const post of Array.isArray(posts) ? posts : []) {
+    for (const url of [post?.preview_url, post?.post_info?.body, post?.post_info?.title]) {
+      for (const candidate of instagramUserIdCandidatesFromText(url)) {
+        if (seen.has(candidate)) {
+          continue;
+        }
+
+        seen.add(candidate);
+        candidates.push(candidate);
+      }
+    }
+  }
+
+  return candidates.slice(0, 12);
+}
+
+function instagramUserIdCandidatesFromText(value) {
+  const text = String(value || "");
+  const candidates = [];
+  const seen = new Set();
+
+  for (const match of text.matchAll(/\/([^/?#]+\.(?:jpe?g|png|webp|heic|mp4|mov|m4v))(?:[?#]|$)/gi)) {
+    const filename = match[1] || "";
+    const parts = filename.match(/\d{5,}/g) || [];
+
+    for (const candidate of parts.slice(1)) {
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        candidates.push(candidate);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function shouldEnhanceInstagramProfileSnapshot(attempt) {
+  if (isDisabledValue(process.env.SOCIAL_RENDERED_INSTAGRAM_FALLBACK)) {
+    return false;
+  }
+
+  const posts = Array.isArray(attempt?.posts) ? attempt.posts : [];
+  const pagination = attempt?.profile_pagination || {};
+
+  if (pagination.has_more || pagination.source === "instagram_mobile_feed") {
+    return false;
+  }
+
+  const knownPostCount = optionalInt(attempt?.profile?.post_count);
+
+  if (knownPostCount !== null) {
+    return knownPostCount > posts.length;
+  }
+
+  return posts.length < PROFILE_PREFETCH_LIMIT;
+}
+
+function mergeInstagramProfileAttempts(baseAttempt, extraAttempt) {
+  const basePosts = Array.isArray(baseAttempt?.posts) ? baseAttempt.posts : [];
+  const extraPosts = Array.isArray(extraAttempt?.posts) ? extraAttempt.posts : [];
+  const posts = dedupeInstagramProfilePosts([...basePosts, ...extraPosts])
+    .sort(compareInstagramProfilePosts);
+  const extraPagination = extraAttempt?.profile_pagination || {};
+  const basePagination = baseAttempt?.profile_pagination || {};
+  const profile = mergeInstagramProfile(baseAttempt?.profile, extraAttempt?.profile);
+  const profileErrors = [
+    ...(Array.isArray(baseAttempt?.profileErrors) ? baseAttempt.profileErrors : []),
+    ...(Array.isArray(extraAttempt?.profileErrors) ? extraAttempt.profileErrors : []),
+  ];
+
+  return {
+    mode: "profile",
+    creator_handle: profile.username || baseAttempt?.creator_handle || extraAttempt?.creator_handle || "",
+    profile,
+    posts,
+    profile_pagination: {
+      source: extraPagination.source || basePagination.source || "instagram_public_snapshot",
+      user_id: extraPagination.user_id || basePagination.user_id || profile.user_id || "",
+      next_cursor: extraPagination.next_cursor || basePagination.next_cursor || "",
+      has_more: Boolean(
+        (extraPagination.has_more && extraPagination.next_cursor) ||
+        (basePagination.has_more && basePagination.next_cursor),
+      ),
+    },
     profileErrors,
   };
 }
@@ -836,37 +1038,55 @@ function extractInstagramProfileHandle(parts) {
 }
 
 async function requestInstagramWebProfileInfo(username, settings) {
-  const url = new URL("https://i.instagram.com/api/v1/users/web_profile_info/");
+  const urls = [
+    new URL("https://www.instagram.com/api/v1/users/web_profile_info/"),
+    new URL("https://i.instagram.com/api/v1/users/web_profile_info/"),
+  ];
+  let firstError = null;
 
-  url.searchParams.set("username", username);
+  for (const url of urls) {
+    url.searchParams.set("username", username);
 
-  const response = await fetchWithTimeout(
-    url,
-    {
-      headers: instagramRequestHeaders(
+    try {
+      const response = await fetchWithTimeout(
+        url,
         {
-          ...COMMON_PAGE_HEADERS,
-          "x-ig-app-id": WEB_APP_ID,
-          "x-requested-with": "XMLHttpRequest",
+          headers: instagramRequestHeaders(
+            {
+              ...COMMON_PAGE_HEADERS,
+              "x-ig-app-id": WEB_APP_ID,
+              "x-requested-with": "XMLHttpRequest",
+            },
+            settings,
+          ),
+          cache: "no-store",
         },
-        settings,
-      ),
-      cache: "no-store",
-    },
-    settings.httpTimeoutMs,
-  );
-  const data = await instagramResponseJson(response);
-  const accessError = instagramAccessError(data, response);
+        settings.httpTimeoutMs,
+      );
+      const data = await instagramResponseJson(response);
+      const accessError = instagramAccessError(data, response);
 
-  if (accessError) {
-    throw accessError;
+      if (accessError) {
+        throw accessError;
+      }
+
+      const user = data && typeof data === "object"
+        ? (dig(data, "data", "user") || data.user || null)
+        : null;
+
+      if (user && typeof user === "object") {
+        return user;
+      }
+    } catch (error) {
+      firstError ??= error;
+    }
   }
 
-  const user = data && typeof data === "object"
-    ? (dig(data, "data", "user") || data.user || null)
-    : null;
+  if (firstError) {
+    throw firstError;
+  }
 
-  return user && typeof user === "object" ? user : null;
+  return null;
 }
 
 async function requestInstagramProfileFeedPosts(userId, settings, options = {}) {
@@ -877,12 +1097,16 @@ async function requestInstagramProfileFeedPosts(userId, settings, options = {}) 
       .filter(Boolean),
   );
   const posts = [];
-  let cursor = "";
+  let cursor = pickSingleLineText(options.cursor);
+  const limit = Math.max(1, Math.min(PROFILE_POST_LIMIT, Number(options.limit) || PROFILE_PREFETCH_LIMIT));
+  let moreAvailable = false;
 
-  while (posts.length < PROFILE_POST_LIMIT) {
+  while (posts.length < limit) {
     const page = await requestInstagramProfileFeedPage(userId, settings, cursor);
 
     if (!page || !page.items.length) {
+      cursor = "";
+      moreAvailable = false;
       break;
     }
 
@@ -896,19 +1120,61 @@ async function requestInstagramProfileFeedPosts(userId, settings, options = {}) 
       seen.add(post.shortcode);
       posts.push(post);
 
-      if (posts.length >= PROFILE_POST_LIMIT) {
+      if (posts.length >= limit) {
         break;
       }
     }
 
     if (!page.nextCursor || !page.moreAvailable) {
+      cursor = "";
+      moreAvailable = false;
+      break;
+    }
+
+    if (page.nextCursor === cursor) {
+      cursor = "";
+      moreAvailable = false;
       break;
     }
 
     cursor = page.nextCursor;
+    moreAvailable = true;
   }
 
-  return posts;
+  return {
+    posts,
+    nextCursor: cursor,
+    moreAvailable,
+    userId,
+  };
+}
+
+export async function resolveInstagramProfilePostsPage(options = {}, settings = {}) {
+  const username = normalizeCreatorHandle(options.username || options.creatorHandle);
+  let userId = pickSingleLineText(options.userId);
+
+  if (!userId && username) {
+    const apiUser = await requestInstagramWebProfileInfo(username, settings);
+    userId = pickSingleLineText(apiUser?.id, apiUser?.pk);
+  }
+
+  if (!userId) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "暂时无法读取这个 Instagram 主页的下一页帖子。", 404);
+  }
+
+  const page = await requestInstagramProfileFeedPosts(userId, settings, {
+    cursor: options.cursor,
+    creatorHandle: username,
+    initialShortcodes: options.initialShortcodes,
+    limit: options.limit || PROFILE_PAGE_SIZE,
+  });
+
+  return {
+    posts: page.posts,
+    user_id: page.userId,
+    next_cursor: page.nextCursor,
+    has_more: Boolean(page.moreAvailable && page.nextCursor),
+  };
 }
 
 async function requestInstagramProfileFeedPage(userId, settings, cursor = "") {
@@ -936,20 +1202,32 @@ async function requestInstagramProfileFeedPage(userId, settings, cursor = "") {
   }
 
   const items = Array.isArray(data?.items) ? data.items : [];
-  const nextCursor = pickSingleLineText(
+  const explicitNextCursor = pickSingleLineText(
     data?.next_max_id,
     data?.next_cursor,
     data?.max_id,
   );
+  const fallbackNextCursor = pickSingleLineText(
+    items.at(-1)?.id,
+    items.at(-1)?.pk,
+  );
+  const nextCursor = explicitNextCursor || fallbackNextCursor;
+  const moreAvailable = explicitNextCursor
+    ? Boolean(data?.more_available !== false)
+    : Boolean(nextCursor && data?.more_available !== false && items.length >= 1);
 
   return {
     items,
     nextCursor,
-    moreAvailable: Boolean(data?.more_available && nextCursor),
+    moreAvailable,
   };
 }
 
 function parseInstagramProfileFromHtml(html, fallbackHandle = "") {
+  const description = pickText(
+    metaContents(html, ["og:description", "description"]),
+  );
+  const textStats = parseInstagramProfileStatsFromText(description);
   const embeddedObjects = instagramEmbeddedObjectsFromHtml(html, [
     "window._sharedData",
     "__additionalDataLoaded",
@@ -968,10 +1246,7 @@ function parseInstagramProfileFromHtml(html, fallbackHandle = "") {
       creatorHandleFromText(htmlTitle(html)),
     ),
   );
-  const biography = pickText(
-    profileUser?.biography,
-    metaContents(html, ["og:description", "description"]),
-  );
+  const biography = pickText(profileUser?.biography, description);
   const fullName = pickSingleLineText(
     profileUser?.full_name,
     profileUser?.username,
@@ -987,19 +1262,109 @@ function parseInstagramProfileFromHtml(html, fallbackHandle = "") {
       profileUser?.edge_owner_to_timeline_media?.count,
       profileUser?.edge_felix_video_timeline?.count,
       profileUser?.media_count,
+      textStats.post_count,
     ),
     follower_count: firstPresentInt(
       profileUser?.edge_followed_by?.count,
       profileUser?.follower_count,
+      textStats.follower_count,
     ),
     following_count: firstPresentInt(
       profileUser?.edge_follow?.count,
       profileUser?.following_count,
+      textStats.following_count,
     ),
     is_private: Boolean(profileUser?.is_private),
     is_verified: Boolean(profileUser?.is_verified),
-    user_id: pickSingleLineText(profileUser?.id, profileUser?.pk),
+    user_id: pickSingleLineText(
+      profileUser?.id,
+      profileUser?.pk,
+      profileUser?.pk_id,
+      extractInstagramProfileUserIdFromHtml(html, username),
+    ),
   };
+}
+
+function extractInstagramProfileUserIdFromHtml(html, username = "") {
+  const text = String(html || "");
+  const handle = normalizeCreatorHandle(username);
+  const patterns = [
+    /"profile_id"\s*:\s*"(\d{3,})"/i,
+    /"profile_id"\s*:\s*(\d{3,})/i,
+    /"user_id"\s*:\s*"(\d{3,})"/i,
+    /"user_id"\s*:\s*(\d{3,})/i,
+    /"owner"\s*:\s*\{[^{}]*"id"\s*:\s*"(\d{3,})"/i,
+    /"owner"\s*:\s*\{[^{}]*"pk"\s*:\s*"(\d{3,})"/i,
+    /"target_user_id"\s*:\s*"(\d{3,})"/i,
+    /"target_user_id"\s*:\s*(\d{3,})/i,
+  ];
+
+  if (handle) {
+    patterns.unshift(
+      new RegExp(`"username"\\s*:\\s*"${escapeRegExp(handle)}"[\\s\\S]{0,500}?"(?:id|pk|pk_id)"\\s*:\\s*"?([0-9]{3,})"?`, "i"),
+      new RegExp(`"(?:id|pk|pk_id)"\\s*:\\s*"?([0-9]{3,})"?[\\s\\S]{0,500}?"username"\\s*:\\s*"${escapeRegExp(handle)}"`, "i"),
+    );
+  }
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return "";
+}
+
+function parseInstagramProfileStatsFromText(text) {
+  return {
+    follower_count: compactCountFromText(text, [
+      /([\d,.]+)\s*([KMB万億亿]?)\s*(?:followers?|位粉丝|粉丝)/i,
+    ]),
+    following_count: compactCountFromText(text, [
+      /(?:following|已关注)\s*([\d,.]+)\s*([KMB万億亿]?)/i,
+      /([\d,.]+)\s*([KMB万億亿]?)\s*(?:following|人)/i,
+    ]),
+    post_count: compactCountFromText(text, [
+      /([\d,.]+)\s*([KMB万億亿]?)\s*(?:posts?|篇帖子|帖子)/i,
+    ]),
+  };
+}
+
+function compactCountFromText(text, patterns) {
+  const source = String(text || "");
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(source);
+
+    if (!match) {
+      continue;
+    }
+
+    const value = Number.parseFloat(String(match[1] || "").replaceAll(",", ""));
+    const suffix = String(match[2] || "").toLowerCase();
+
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+
+    const multiplier = suffix === "k"
+      ? 1_000
+      : suffix === "m"
+        ? 1_000_000
+        : suffix === "b"
+          ? 1_000_000_000
+          : suffix === "万"
+            ? 10_000
+            : suffix === "億" || suffix === "亿"
+              ? 100_000_000
+              : 1;
+
+    return Math.round(value * multiplier);
+  }
+
+  return null;
 }
 
 function normalizeInstagramProfileUser(user, fallbackHandle = "") {
@@ -1026,7 +1391,7 @@ function normalizeInstagramProfileUser(user, fallbackHandle = "") {
     ),
     is_private: Boolean(user.is_private),
     is_verified: Boolean(user.is_verified),
-    user_id: pickSingleLineText(user.id, user.pk),
+    user_id: pickSingleLineText(user.id, user.pk, user.pk_id, user.profile_id),
   };
 }
 
@@ -1238,7 +1603,7 @@ function instagramProfileMediaType(rawPost) {
 }
 
 function instagramProfilePreviewUrl(rawPost) {
-  return pickSingleLineText(
+  return pickInstagramUrl(
     rawPost?.display_url,
     rawPost?.thumbnail_src,
     rawPost?.thumbnail_url,
@@ -1252,6 +1617,18 @@ function instagramProfilePreviewUrl(rawPost) {
   );
 }
 
+function pickInstagramUrl(...values) {
+  for (const value of values.flat()) {
+    const url = cleanSingleLineText(decodeJsonString(value || ""), { maxLength: 4096 });
+
+    if (url) {
+      return url;
+    }
+  }
+
+  return "";
+}
+
 function extractInstagramProfilePostsFromRenderedHtml(html, fallbackHandle = "") {
   if (!html) {
     return [];
@@ -1259,11 +1636,11 @@ function extractInstagramProfilePostsFromRenderedHtml(html, fallbackHandle = "")
 
   const posts = [];
   const seen = new Set();
-  const pattern = /<a\b[^>]*href="\/([^"/?#]+)\/(p|reel)\/([A-Za-z0-9_-]{4,64})\/"[^>]*>([\s\S]*?)<\/a>/gi;
+  const pattern = /<a\b[^>]*href=(["'])(?:https?:\/\/(?:www\.)?instagram\.com)?\/(?:(?!p\/|reel\/)([^"'/?#]+)\/)?(p|reel)\/([A-Za-z0-9_-]{4,64})(?:\/|[?#])?[^"']*\1[^>]*>([\s\S]*?)<\/a>/gi;
   let match;
 
   while ((match = pattern.exec(html))) {
-    const [, rawHandle, rawKind, shortcode, anchorHtml] = match;
+    const [, , rawHandle, rawKind, shortcode, anchorHtml] = match;
     const creatorHandle = normalizeCreatorHandle(rawHandle || fallbackHandle);
 
     if (!creatorHandle || seen.has(shortcode)) {
@@ -1272,7 +1649,7 @@ function extractInstagramProfilePostsFromRenderedHtml(html, fallbackHandle = "")
 
     seen.add(shortcode);
 
-    const previewUrl = pickSingleLineText(
+    const previewUrl = pickInstagramUrl(
       matchAttribute(anchorHtml, "src"),
       matchAttribute(anchorHtml, "srcset")?.split(",").at(-1)?.trim().split(/\s+/)[0],
     );
@@ -2965,7 +3342,7 @@ async function fetchRenderedInstagramHtml(shortcode, settings) {
   }
 }
 
-async function fetchRenderedInstagramProfileHtml(profileUrl, settings) {
+async function fetchRenderedInstagramProfileHtml(profileUrl, settings, fallbackHandle = "") {
   if (isDisabledValue(process.env.SOCIAL_RENDERED_INSTAGRAM_FALLBACK)) {
     return "";
   }
@@ -2976,8 +3353,130 @@ async function fetchRenderedInstagramProfileHtml(profileUrl, settings) {
     return "";
   }
 
-  const timeoutMs = Math.min(Math.max(settings.httpTimeoutMs * 2, 20_000), 45_000);
+  const timeoutMs = Math.min(Math.max(settings.httpTimeoutMs * 3, 30_000), 70_000);
 
+  const scrolledHtml = await fetchScrolledRenderedInstagramProfileHtml(
+    chromePath,
+    profileUrl,
+    timeoutMs,
+    settings,
+    fallbackHandle,
+  );
+
+  if (scrolledHtml) {
+    return scrolledHtml;
+  }
+
+  return await fetchDumpedRenderedInstagramProfileHtml(chromePath, profileUrl, timeoutMs);
+}
+
+async function fetchScrolledRenderedInstagramProfileHtml(chromePath, profileUrl, timeoutMs, settings, fallbackHandle = "") {
+  let userDataDir = "";
+  let chromeProcess = null;
+  let session = null;
+
+  try {
+    const port = await findFreePort();
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "linkmigo-ig-profile-"));
+    chromeProcess = spawn(
+      chromePath,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--disable-extensions",
+        "--mute-audio",
+        "--remote-allow-origins=*",
+        `--remote-debugging-port=${port}`,
+        `--user-data-dir=${userDataDir}`,
+        "about:blank",
+      ],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    const pageInfo = await openChromeDevToolsPage(port, timeoutMs);
+    session = await openChromeDevToolsSession(pageInfo.webSocketDebuggerUrl, timeoutMs);
+
+    await session.send("Runtime.enable", {}, 5000);
+    await session.send("Network.enable", {}, 5000);
+    await session.send("Page.enable", {}, 5000);
+    await setChromeInstagramCookies(session, profileUrl, settings);
+    await session.send("Page.navigate", { url: profileUrl }, 5000);
+    await delay(3000);
+
+    const deadline = Date.now() + timeoutMs;
+    const postsByShortcode = new Map();
+    let idleRounds = 0;
+    let scrollRounds = 0;
+
+    while (
+      Date.now() < deadline &&
+      idleRounds < PROFILE_RENDER_SCROLL_IDLE_ROUNDS &&
+      scrollRounds < PROFILE_RENDER_SCROLL_ROUNDS
+    ) {
+      scrollRounds += 1;
+      const beforeSize = postsByShortcode.size;
+      const result = await evaluateChromeRuntime(
+        session,
+        renderedProfileCollectExpression(fallbackHandle),
+        Math.min(10_000, Math.max(1000, deadline - Date.now())),
+      );
+      const rows = Array.isArray(result?.anchors) ? result.anchors : [];
+
+      for (const row of rows) {
+        const shortcode = cleanSingleLineText(row?.shortcode, { maxLength: 80 });
+        const kind = row?.kind === "reel" ? "reel" : "p";
+
+        if (!SHORTCODE_RE.test(shortcode) || postsByShortcode.has(shortcode)) {
+          continue;
+        }
+
+        postsByShortcode.set(shortcode, {
+          shortcode,
+          kind,
+          handle: normalizeCreatorHandle(row?.handle || fallbackHandle),
+          previewUrl: pickInstagramUrl(row?.previewUrl, row?.srcsetUrl),
+          alt: cleanDisplayText(row?.alt, { maxLength: 4000 }),
+        });
+      }
+
+      idleRounds = postsByShortcode.size === beforeSize ? idleRounds + 1 : 0;
+
+      if (postsByShortcode.size >= PROFILE_POST_LIMIT && idleRounds > 0) {
+        break;
+      }
+
+      await delay(PROFILE_RENDER_SCROLL_WAIT_MS);
+    }
+
+    const outerHtml = await evaluateChromeRuntime(
+      session,
+      "document.documentElement.outerHTML",
+      Math.min(10_000, Math.max(1000, deadline - Date.now())),
+    ).catch(() => "");
+
+    return renderedProfileRowsToHtml([...postsByShortcode.values()], fallbackHandle, outerHtml);
+  } catch {
+    return "";
+  } finally {
+    if (session) {
+      session.close();
+    }
+
+    await stopChromeProcess(chromeProcess);
+
+    if (userDataDir) {
+      await fs.rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+async function fetchDumpedRenderedInstagramProfileHtml(chromePath, profileUrl, timeoutMs) {
   try {
     const { stdout } = await execFileAsync(
       chromePath,
@@ -2999,6 +3498,409 @@ async function fetchRenderedInstagramProfileHtml(profileUrl, settings) {
   } catch {
     return "";
   }
+}
+
+async function setChromeInstagramCookies(session, profileUrl, settings = {}) {
+  const cookieHeader = instagramCookieHeader(settings);
+  const cookieEntries = instagramCookieEntries(cookieHeader);
+
+  await session.send(
+    "Network.setExtraHTTPHeaders",
+    {
+      headers: {
+        "accept-language": "en-US,en;q=0.9",
+        referer: "https://www.instagram.com/",
+      },
+    },
+    5000,
+  ).catch(() => {});
+
+  if (!cookieEntries.length) {
+    return;
+  }
+
+  for (const cookie of cookieEntries) {
+    for (const domain of ["instagram.com", ".instagram.com"]) {
+      await session.send(
+        "Network.setCookie",
+        {
+          name: cookie.name,
+          value: cookie.value,
+          domain,
+          path: "/",
+          secure: true,
+          httpOnly: false,
+          sameSite: "None",
+          url: profileUrl,
+        },
+        5000,
+      ).catch(() => {});
+    }
+  }
+}
+
+function instagramCookieEntries(cookieHeader) {
+  const entries = [];
+  const seen = new Set();
+
+  for (const part of String(cookieHeader || "").split(";")) {
+    const [rawName, ...rawValue] = part.split("=");
+    const name = rawName?.trim();
+    const value = rawValue.join("=").trim();
+
+    if (!name || !value || seen.has(name)) {
+      continue;
+    }
+
+    seen.add(name);
+    entries.push({ name, value });
+  }
+
+  return entries;
+}
+
+function renderedProfileCollectExpression(fallbackHandle = "") {
+  const safeFallbackHandle = JSON.stringify(normalizeCreatorHandle(fallbackHandle));
+
+  return `(() => {
+    const fallbackHandle = ${safeFallbackHandle};
+    const shortcodePattern = /^[A-Za-z0-9_-]{4,64}$/;
+    const instagramHostPattern = /(^|\\.)instagram\\.com$/i;
+    const lastSrcsetUrl = (srcset) => String(srcset || "")
+      .split(",")
+      .map((part) => part.trim().split(/\\s+/)[0])
+      .filter(Boolean)
+      .at(-1) || "";
+    const cleanHandle = (value) => String(value || "")
+      .trim()
+      .replace(/^@+/, "")
+      .replace(/[^A-Za-z0-9._]/g, "")
+      .slice(0, 120);
+    const anchors = Array.from(document.querySelectorAll("a[href]"))
+      .map((anchor) => {
+        let parsed;
+
+        try {
+          parsed = new URL(anchor.getAttribute("href") || "", location.href);
+        } catch {
+          return null;
+        }
+
+        if (!instagramHostPattern.test(parsed.hostname)) {
+          return null;
+        }
+
+        const parts = parsed.pathname.split("/").filter(Boolean);
+        let handle = fallbackHandle;
+        let kind = "";
+        let shortcode = "";
+
+        if ((parts[0] === "p" || parts[0] === "reel") && parts[1]) {
+          kind = parts[0];
+          shortcode = parts[1];
+        } else if (parts.length >= 3 && (parts[1] === "p" || parts[1] === "reel")) {
+          handle = cleanHandle(parts[0]) || fallbackHandle;
+          kind = parts[1];
+          shortcode = parts[2];
+        }
+
+        if (!kind || !shortcodePattern.test(shortcode)) {
+          return null;
+        }
+
+        const image = anchor.querySelector("img");
+        const srcset = image?.getAttribute("srcset") || "";
+
+        return {
+          handle,
+          kind,
+          shortcode,
+          previewUrl: image?.currentSrc || image?.src || image?.getAttribute("src") || "",
+          srcsetUrl: lastSrcsetUrl(srcset),
+          alt: image?.getAttribute("alt") || anchor.getAttribute("aria-label") || anchor.textContent || "",
+        };
+      })
+      .filter(Boolean);
+    const scrollHeight = Math.max(
+      document.body?.scrollHeight || 0,
+      document.documentElement?.scrollHeight || 0
+    );
+
+    window.scrollTo(0, scrollHeight);
+
+    return {
+      anchors,
+      scrollHeight,
+      scrollY: window.scrollY,
+      readyState: document.readyState,
+      title: document.title,
+      url: location.href,
+    };
+  })()`;
+}
+
+function renderedProfileRowsToHtml(rows, fallbackHandle = "", baseHtml = "") {
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  if (!safeRows.length && !baseHtml) {
+    return "";
+  }
+
+  const anchors = safeRows
+    .map((row) => {
+      const handle = normalizeCreatorHandle(row.handle || fallbackHandle);
+      const kind = row.kind === "reel" ? "reel" : "p";
+      const shortcode = cleanSingleLineText(row.shortcode, { maxLength: 80 });
+
+      if (!handle || !SHORTCODE_RE.test(shortcode)) {
+        return "";
+      }
+
+      const previewUrl = escapeHtmlAttribute(row.previewUrl || "");
+      const alt = escapeHtmlAttribute(row.alt || "");
+
+      return `<a href="/${handle}/${kind}/${shortcode}/"><img src="${previewUrl}" alt="${alt}"></a>`;
+    })
+    .filter(Boolean)
+    .join("");
+
+  if (!baseHtml) {
+    return anchors ? `<html><body>${anchors}</body></html>` : "";
+  }
+
+  if (!anchors) {
+    return baseHtml;
+  }
+
+  return /<\/body>/i.test(baseHtml)
+    ? baseHtml.replace(/<\/body>/i, `<div data-linkmigo-rendered-profile-posts>${anchors}</div></body>`)
+    : `${baseHtml}<div data-linkmigo-rendered-profile-posts>${anchors}</div>`;
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+async function findFreePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+
+      server.close(() => {
+        if (port) {
+          resolve(port);
+        } else {
+          reject(new Error("Unable to allocate Chrome debugging port."));
+        }
+      });
+    });
+  });
+}
+
+async function openChromeDevToolsPage(port, timeoutMs) {
+  await waitForChromeDevTools(port, timeoutMs);
+
+  const response = await fetchLocalChrome(
+    `http://127.0.0.1:${port}/json/new?${encodeURIComponent("about:blank")}`,
+    {
+      method: "PUT",
+      cache: "no-store",
+    },
+    Math.min(timeoutMs, 5000),
+  );
+  const pageInfo = await response.json();
+
+  if (pageInfo?.webSocketDebuggerUrl) {
+    return pageInfo;
+  }
+
+  throw new Error("Chrome DevTools did not return a page websocket URL.");
+}
+
+async function waitForChromeDevTools(port, timeoutMs) {
+  const startedAt = Date.now();
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetchLocalChrome(
+        `http://127.0.0.1:${port}/json/version`,
+        {
+          cache: "no-store",
+        },
+        1000,
+      );
+
+      if (response.ok) {
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    await delay(150);
+  }
+
+  throw lastError || new Error("Timed out waiting for Chrome DevTools.");
+}
+
+async function fetchLocalChrome(url, init = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: init.signal ?? controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function openChromeDevToolsSession(webSocketUrl, timeoutMs) {
+  if (!webSocketUrl || typeof WebSocket !== "function") {
+    throw new Error("Chrome DevTools websocket is unavailable.");
+  }
+
+  const socket = new WebSocket(webSocketUrl);
+  const pending = new Map();
+  let nextId = 1;
+
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("Timed out connecting to Chrome DevTools websocket."));
+    }, Math.min(timeoutMs, 5000));
+
+    socket.addEventListener("open", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+    socket.addEventListener("error", () => {
+      clearTimeout(timer);
+      reject(new Error("Failed to connect to Chrome DevTools websocket."));
+    }, { once: true });
+  });
+
+  socket.addEventListener("message", (event) => {
+    const text = typeof event.data === "string" ? event.data : String(event.data || "");
+    let message;
+
+    try {
+      message = JSON.parse(text);
+    } catch {
+      return;
+    }
+
+    if (!message?.id || !pending.has(message.id)) {
+      return;
+    }
+
+    const entry = pending.get(message.id);
+    pending.delete(message.id);
+    clearTimeout(entry.timer);
+
+    if (message.error) {
+      entry.reject(new Error(message.error.message || "Chrome DevTools command failed."));
+      return;
+    }
+
+    entry.resolve(message.result);
+  });
+
+  socket.addEventListener("close", () => {
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error("Chrome DevTools websocket closed."));
+    }
+
+    pending.clear();
+  });
+
+  return {
+    send(method, params = {}, commandTimeoutMs = 10_000) {
+      const id = nextId;
+      nextId += 1;
+
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`Chrome DevTools command timed out: ${method}`));
+        }, commandTimeoutMs);
+
+        pending.set(id, { resolve, reject, timer });
+        socket.send(JSON.stringify({ id, method, params }));
+      });
+    },
+    close() {
+      try {
+        socket.close();
+      } catch {
+        // Best-effort cleanup.
+      }
+    },
+  };
+}
+
+async function evaluateChromeRuntime(session, expression, timeoutMs) {
+  const result = await session.send(
+    "Runtime.evaluate",
+    {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      timeout: timeoutMs,
+    },
+    timeoutMs + 1000,
+  );
+
+  if (result?.exceptionDetails) {
+    throw new Error("Chrome runtime evaluation failed.");
+  }
+
+  return result?.result?.value || null;
+}
+
+async function stopChromeProcess(chromeProcess) {
+  if (!chromeProcess || chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) {
+    return;
+  }
+
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      try {
+        chromeProcess.kill("SIGKILL");
+      } catch {
+        // Best-effort cleanup.
+      }
+
+      resolve();
+    }, 1000);
+
+    chromeProcess.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+
+    try {
+      chromeProcess.kill("SIGTERM");
+    } catch {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function execFileAsync(file, args, options) {

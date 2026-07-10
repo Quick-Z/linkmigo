@@ -5,7 +5,7 @@ import path from "node:path";
 import { CacheStore } from "./cache";
 import { AppError, ErrorCode } from "./errors";
 import { downloadMedia, estimateMediaDownloadSize, extensionForAsset } from "./downloader";
-import { resolveInstagramProfile } from "./instagram";
+import { resolveInstagramProfile, resolveInstagramProfilePostsPage } from "./instagram";
 import { getSocialDownloaderSettings } from "./settings";
 import { createPostInfo } from "./post-info";
 import { normalizeSocialUrl, resolveSocialPost } from "./social";
@@ -16,7 +16,9 @@ import { writeUserActionLog } from "../user-action-logger";
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
 const mediaCacheVersion = 37;
-const profileCacheVersion = 1;
+const profileCacheVersion = 10;
+const profileInitialPostsPageSize = 30;
+const profileMaxPostsPageSize = 60;
 let sharpFactoryPromise = null;
 
 export function getCacheStore() {
@@ -220,6 +222,55 @@ export async function getProfileZipFile(requestId, options = {}) {
     filePath: zipPath,
     filename: `${filenameBase}${zipSuffix}.zip`,
   };
+}
+
+export async function getProfilePostsPage(requestId, options = {}) {
+  const cache = getCacheStore();
+  const settings = getSocialDownloaderSettings();
+  const profileRecord = await cache.getRecord(requestId);
+
+  if (!isUsableCachedProfileRecord(profileRecord)) {
+    throw new AppError(ErrorCode.CACHE_EXPIRED, "主页帖子列表缓存不存在或已过期。", 404);
+  }
+
+  const cachedPage = profilePostsPage(profileRecord, {
+    cursor: options.cursor,
+    limit: options.limit,
+  });
+
+  if (cachedPage.posts.length > 0 || !cachedPage.page.needs_live_fetch) {
+    return cachedPage;
+  }
+
+  const livePage = await resolveInstagramProfilePostsPage(
+    {
+      cursor: cachedPage.page.live_cursor,
+      creatorHandle: profileRecord.creator_handle || profileRecord.profile?.username,
+      userId: profileRecord.profile_pagination?.user_id || profileRecord.profile?.user_id,
+      initialShortcodes: profileRecord.posts.map((post) => post.shortcode),
+      limit: clampProfilePostsLimit(options.limit),
+    },
+    settings,
+  );
+  const livePosts = normalizeProfilePostsForCache(livePage.posts);
+  const updatedRecord = {
+    ...profileRecord,
+    posts: mergeProfilePostsForCache(profileRecord.posts, livePosts),
+    profile_pagination: {
+      ...(profileRecord.profile_pagination || {}),
+      source: "instagram_mobile_feed",
+      user_id: livePage.user_id || profileRecord.profile_pagination?.user_id || profileRecord.profile?.user_id || "",
+      next_cursor: livePage.next_cursor || "",
+      has_more: Boolean(livePage.has_more && livePage.next_cursor),
+    },
+  };
+
+  await cache.saveRecord(updatedRecord);
+
+  return profilePostsPage(updatedRecord, {
+    cursor: String(profileRecord.posts.length),
+    limit: options.limit,
+  });
 }
 
 async function downloadAndCacheAssets({ settings, cache, normalized, parsedAssets, metrics, creatorHandle, postInfo, onProgress }) {
@@ -513,6 +564,10 @@ function resolveResponse(record) {
 }
 
 function resolveProfileResponse(record) {
+  const page = profilePostsPage(record, {
+    limit: profileInitialPostsPageSize,
+  });
+
   return {
     mode: "profile",
     request_id: record.request_id,
@@ -522,9 +577,93 @@ function resolveProfileResponse(record) {
     platform: "instagram",
     creator_handle: record.creator_handle || record.profile?.username || "",
     profile: record.profile,
-    posts: record.posts,
+    posts: page.posts,
+    profile_posts_page: page.page,
     expires_at: record.expires_at,
   };
+}
+
+function profilePostsPage(record, options = {}) {
+  const safePosts = Array.isArray(record?.posts) ? record.posts : [];
+  const cursor = parseProfilePostsCursor(options.cursor);
+  const start = cursor.type === "offset" ? cursor.offset : safePosts.length;
+  const limit = clampProfilePostsLimit(options.limit);
+  const end = Math.min(safePosts.length, start + limit);
+  const pagePosts = safePosts.slice(start, end);
+  const hasCachedMore = end < safePosts.length;
+  const liveCursor = cursor.type === "live"
+    ? cursor.value
+    : start >= safePosts.length
+      ? record?.profile_pagination?.next_cursor || ""
+      : "";
+  const hasLiveMore = Boolean(record?.profile_pagination?.has_more && (record?.profile_pagination?.next_cursor || cursor.type === "live"));
+  const paginationSource = String(record?.profile_pagination?.source || "");
+  const isSnapshotSource = paginationSource !== "instagram_mobile_feed";
+  const knownPostCount = Number(record?.profile?.post_count) || 0;
+  const snapshotIsPartial = !hasCachedMore && !hasLiveMore && (
+    knownPostCount > safePosts.length ||
+    (isSnapshotSource && safePosts.length > 0)
+  );
+  const canTryLiveFromSnapshot = Boolean(
+    snapshotIsPartial &&
+    isSnapshotSource &&
+    (record?.profile_pagination?.user_id || record?.profile?.user_id),
+  );
+  const shouldTryLiveFromSnapshot = canTryLiveFromSnapshot && pagePosts.length === 0 && !hasCachedMore;
+  const needsLiveFetch = pagePosts.length === 0 && !hasCachedMore && (
+    (hasLiveMore && liveCursor) ||
+    shouldTryLiveFromSnapshot
+  );
+  const liveNextCursor = hasLiveMore && record?.profile_pagination?.next_cursor
+    ? `live:${record.profile_pagination.next_cursor}`
+    : canTryLiveFromSnapshot
+      ? "live:"
+      : null;
+
+  return {
+    posts: pagePosts,
+    page: {
+      total_count: Math.max(Number(record?.profile?.post_count) || 0, safePosts.length),
+      loaded_count: end,
+      next_cursor: hasCachedMore
+        ? String(end)
+        : liveNextCursor,
+      has_more: hasCachedMore || hasLiveMore || canTryLiveFromSnapshot,
+      is_partial_snapshot: snapshotIsPartial,
+      needs_live_fetch: Boolean(needsLiveFetch),
+      live_cursor: liveCursor,
+    },
+  };
+}
+
+function parseProfilePostsCursor(value) {
+  const rawValue = String(value ?? "").trim();
+
+  if (rawValue.startsWith("live:")) {
+    return {
+      type: "live",
+      value: rawValue.slice(5),
+      offset: 0,
+    };
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+
+  return {
+    type: "offset",
+    value: "",
+    offset: Number.isFinite(parsed) && parsed > 0 ? parsed : 0,
+  };
+}
+
+function clampProfilePostsLimit(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return profileInitialPostsPageSize;
+  }
+
+  return Math.min(profileMaxPostsPageSize, parsed);
 }
 
 function assetResponse(record, asset) {
@@ -696,6 +835,7 @@ async function saveProfileRecord({ cache, normalized, parsedProfile, settings })
     ),
     profile,
     posts,
+    profile_pagination: normalizeProfilePaginationForCache(parsedProfile.profile_pagination, profile),
   };
 
   await cache.saveRecord(record);
@@ -726,6 +866,33 @@ function normalizeProfilePostsForCache(posts) {
       .map((post) => normalizeProfilePostForCache(post))
       .filter(Boolean)
     : [];
+}
+
+function normalizeProfilePaginationForCache(pagination, profile = {}) {
+  const safePagination = pagination && typeof pagination === "object" ? pagination : {};
+
+  return {
+    source: String(safePagination.source || "instagram_public_snapshot"),
+    user_id: String(safePagination.user_id || profile.user_id || "").trim(),
+    next_cursor: String(safePagination.next_cursor || "").trim(),
+    has_more: Boolean(safePagination.has_more && safePagination.next_cursor),
+  };
+}
+
+function mergeProfilePostsForCache(currentPosts, nextPosts) {
+  const merged = [];
+  const seen = new Set();
+
+  for (const post of [...normalizeProfilePostsForCache(currentPosts), ...normalizeProfilePostsForCache(nextPosts)]) {
+    if (!post.shortcode || seen.has(post.shortcode)) {
+      continue;
+    }
+
+    seen.add(post.shortcode);
+    merged.push(post);
+  }
+
+  return merged;
 }
 
 function normalizeProfilePostForCache(post) {

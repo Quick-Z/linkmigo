@@ -71,8 +71,10 @@ const copyByLanguage = {
     copyFailed: "复制失败，请手动复制",
     copyTitle: "复制标题",
     loadMoreComments: "加载更多评论",
+    loadMorePosts: "加载更多帖子",
     loadingComments: "正在加载评论...",
     loadingMoreComments: "正在加载更多...",
+    loadingMorePosts: "正在加载更多帖子...",
     noContent: "暂无正文内容",
     noComments: "暂无评论",
     noTags: "暂无 tag",
@@ -123,6 +125,9 @@ const copyByLanguage = {
     profilePosts: "主页帖子",
     posts: "帖子",
     postsCount: (count) => `${count} 个帖子`,
+    postsEnd: "已加载当前可展示的主页帖子",
+    postsPartial: "当前公开快照只返回了这些帖子",
+    postsVisibleCount: (loaded, total) => `已显示 ${loaded} / ${total}`,
     publicPlatform: "公开平台",
     reset: "重置",
     resourcesCount: (count) => `${count} 个资源`,
@@ -180,8 +185,10 @@ const copyByLanguage = {
     copyFailed: "Copy failed. Please copy manually.",
     copyTitle: "Copy title",
     loadMoreComments: "Load more comments",
+    loadMorePosts: "Load more posts",
     loadingComments: "Loading comments...",
     loadingMoreComments: "Loading more...",
+    loadingMorePosts: "Loading more posts...",
     noContent: "No caption available",
     noComments: "No comments",
     noTags: "No tags",
@@ -232,6 +239,9 @@ const copyByLanguage = {
     profilePosts: "Profile Posts",
     posts: "Posts",
     postsCount: (count) => `${count} ${count === 1 ? "Post" : "Posts"}`,
+    postsEnd: "Loaded available profile posts",
+    postsPartial: "The current public snapshot only returned these posts",
+    postsVisibleCount: (loaded, total) => `Showing ${loaded} / ${total}`,
     publicPlatform: "Public platform",
     reset: "Reset",
     resourcesCount: (count) => `${count} ${count === 1 ? "Resource" : "Resources"}`,
@@ -941,9 +951,11 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
   const [selectedPostIds, setSelectedPostIds] = useState([]);
   const [isProfileDownloadPending, setIsProfileDownloadPending] = useState(false);
+  const [isLoadingMoreProfilePosts, setIsLoadingMoreProfilePosts] = useState(false);
   const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
   const [postInfoInitialAssetIndex, setPostInfoInitialAssetIndex] = useState(0);
   const resolveRunRef = useRef(0);
+  const profilePostsLoadingRef = useRef(false);
 
   const normalizedUrl = extractUrlCandidate(url);
   const canSubmit = Boolean(normalizedUrl) && isValidHttpUrl(normalizedUrl);
@@ -956,6 +968,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   const inputDrivenTheme = normalizedUrl ? inputTheme : getButtonTheme("", colorMode);
   const hasOutput = Boolean(isLoading || result || error);
   const isProfileResult = result?.mode === "profile";
+  const resultSelectionKey = result ? `${result.mode || "post"}:${result.request_id || result.canonical_url || ""}` : "";
   const selectedAssets = !isProfileResult && result
     ? result.assets.filter((asset) => selectedAssetIds.includes(asset.id))
     : [];
@@ -995,6 +1008,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
       setSelectedAssetIds([]);
       setSelectedPostIds([]);
       setIsProfileDownloadPending(false);
+      setIsLoadingMoreProfilePosts(false);
+      profilePostsLoadingRef.current = false;
       setIsPostInfoOpen(false);
       setPostInfoInitialAssetIndex(0);
       return;
@@ -1003,6 +1018,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     if (result.mode === "profile") {
       setSelectedAssetIds([]);
       setSelectedPostIds(result.posts.map((post) => post.id));
+      setIsLoadingMoreProfilePosts(false);
+      profilePostsLoadingRef.current = false;
       setIsPostInfoOpen(false);
       setPostInfoInitialAssetIndex(0);
       return;
@@ -1010,8 +1027,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
 
     setSelectedAssetIds(result.assets.map((asset) => asset.id));
     setSelectedPostIds([]);
+    setIsLoadingMoreProfilePosts(false);
+    profilePostsLoadingRef.current = false;
     setPostInfoInitialAssetIndex(0);
-  }, [result]);
+  }, [resultSelectionKey]);
 
   async function onSubmit(event) {
     event?.preventDefault();
@@ -1039,6 +1058,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     setSelectedAssetIds([]);
     setSelectedPostIds([]);
     setIsProfileDownloadPending(false);
+    setIsLoadingMoreProfilePosts(false);
+    profilePostsLoadingRef.current = false;
 
     try {
       const response = await fetch("/api/v1/instagram/resolve/jobs", {
@@ -1155,6 +1176,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     setSelectedAssetIds([]);
     setSelectedPostIds([]);
     setIsProfileDownloadPending(false);
+    setIsLoadingMoreProfilePosts(false);
+    profilePostsLoadingRef.current = false;
   }
 
   function clearUrl() {
@@ -1276,6 +1299,72 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
 
       return next;
     });
+  }
+
+  async function loadMoreProfilePosts() {
+    if (!isProfileResult || profilePostsLoadingRef.current) {
+      return;
+    }
+
+    const page = result.profile_posts_page ?? {};
+    const canTryPartialSnapshot = Boolean(page.is_partial_snapshot && result.posts.length < (Number(page.total_count) || result.posts.length + 1));
+    const cursor = page.next_cursor || (canTryPartialSnapshot ? String(result.posts.length) : "");
+
+    if ((!page.has_more && !canTryPartialSnapshot) || !cursor) {
+      return;
+    }
+
+    const shouldSelectNewPosts = allPostsSelected;
+
+    profilePostsLoadingRef.current = true;
+    setIsLoadingMoreProfilePosts(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/v1/instagram/profile-requests/${encodeURIComponent(result.request_id)}/posts?cursor=${encodeURIComponent(cursor)}&limit=30`,
+        {
+          cache: "no-store",
+        },
+      );
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw payload;
+      }
+
+      const nextPosts = normalizeProfilePostList(payload.posts);
+
+      setResult((current) => {
+        if (current?.mode !== "profile" || current.request_id !== result.request_id) {
+          return current;
+        }
+
+        return {
+          ...current,
+          posts: mergeProfilePosts(current.posts, nextPosts),
+          profile_posts_page: payload.page ?? current.profile_posts_page,
+        };
+      });
+
+      if (shouldSelectNewPosts) {
+        setSelectedPostIds((current) => mergeUniqueIds(current, nextPosts.map((post) => post.id)));
+      }
+    } catch (caught) {
+      setError(getApiError(caught));
+    } finally {
+      profilePostsLoadingRef.current = false;
+      setIsLoadingMoreProfilePosts(false);
+    }
+  }
+
+  function onProfilePostsScroll(event) {
+    const viewport = event.currentTarget;
+    const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+
+    if (remaining < 180) {
+      loadMoreProfilePosts();
+    }
   }
 
   function openPostInfoModal(assetIndex = 0) {
@@ -1590,9 +1679,11 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                 copy={copy}
                 expiryText={expiryText}
                 isDownloading={isProfileDownloadPending}
+                isLoadingMore={isLoadingMoreProfilePosts}
                 language={language}
                 onDownloadSelected={downloadSelectedPosts}
                 onInvertSelection={invertProfileSelection}
+                onPostsScroll={onProfilePostsScroll}
                 onToggleAll={toggleAllProfilePosts}
                 onTogglePost={toggleProfilePost}
                 result={result}
@@ -1704,9 +1795,11 @@ function ProfileResultSection({
   copy,
   expiryText,
   isDownloading,
+  isLoadingMore,
   language,
   onDownloadSelected,
   onInvertSelection,
+  onPostsScroll,
   onToggleAll,
   onTogglePost,
   result,
@@ -1715,8 +1808,10 @@ function ProfileResultSection({
   theme,
 }) {
   const profile = result.profile ?? {};
+  const page = result.profile_posts_page ?? {};
   const statItems = createProfileMetricItems(profile, copy);
   const avatarUrl = instagramAvatarProxyUrl(profile.avatar_url);
+  const totalPosts = Math.max(Number(page.total_count) || 0, result.posts.length);
 
   return (
     <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(theme)} aria-label={copy.resultAria}>
@@ -1732,7 +1827,7 @@ function ProfileResultSection({
           >
             <span className="truncate">{copy.openProfile}</span>
           </a>
-          <GlassChip theme={theme}>{copy.postsCount(result.posts.length)}</GlassChip>
+          <GlassChip theme={theme}>{copy.postsVisibleCount(result.posts.length, totalPosts)}</GlassChip>
           <GlassChip theme={theme}>{copy.selectedPostsCount(selectedPostIds.length)}</GlassChip>
         </div>
 
@@ -1807,9 +1902,12 @@ function ProfileResultSection({
         </div>
       </div>
 
-      <FloatingScrollArea theme={theme}>
+      <FloatingScrollArea onScroll={onPostsScroll} theme={theme}>
         <ProfilePostGrid
           copy={copy}
+          hasMore={Boolean(page.has_more)}
+          isLoadingMore={isLoadingMore}
+          isPartialSnapshot={Boolean(page.is_partial_snapshot)}
           language={language}
           posts={result.posts}
           selectedPostIds={selectedPostIds}
@@ -1821,13 +1919,14 @@ function ProfileResultSection({
   );
 }
 
-function ProfilePostGrid({ copy, language, onTogglePost, posts, selectedPostIds, theme }) {
+function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, language, onTogglePost, posts, selectedPostIds, theme }) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]">
       {posts.map((post) => {
         const isSelected = selectedPostIds.includes(post.id);
         const excerpt = profilePostExcerpt(post);
         const dateText = formatProfilePostDate(post.taken_at, language);
+        const previewUrl = instagramImageProxyUrl(post.preview_url);
 
         return (
           <article
@@ -1846,8 +1945,8 @@ function ProfilePostGrid({ copy, language, onTogglePost, posts, selectedPostIds,
             tabIndex={0}
           >
             <div className="relative aspect-square overflow-hidden rounded-[1rem] border" style={{ borderColor: theme.panelBorder, background: theme.previewGradient }}>
-              {post.preview_url ? (
-                <img alt={post.post_info?.title || post.shortcode} className="h-full w-full object-cover" src={post.preview_url} />
+              {previewUrl ? (
+                <img alt={post.post_info?.title || post.shortcode} className="h-full w-full object-cover" src={previewUrl} />
               ) : (
                 <div className="grid h-full w-full place-items-center text-sm font-semibold" style={{ color: theme.mutedText }}>
                   Instagram
@@ -1900,6 +1999,9 @@ function ProfilePostGrid({ copy, language, onTogglePost, posts, selectedPostIds,
           </article>
         );
       })}
+      <div className="col-span-full grid min-h-12 place-items-center px-3 py-2 text-center text-sm font-semibold" style={{ color: theme.mutedText }}>
+        {isLoadingMore ? copy.loadingMorePosts : hasMore ? copy.loadMorePosts : isPartialSnapshot ? copy.postsPartial : copy.postsEnd}
+      </div>
     </div>
   );
 }
@@ -1954,6 +2056,14 @@ function instagramAvatarProxyUrl(sourceUrl) {
   }
 
   return apiUrl(`/api/v1/instagram/avatar?url=${encodeURIComponent(sourceUrl)}`);
+}
+
+function instagramImageProxyUrl(sourceUrl) {
+  if (!sourceUrl) {
+    return "";
+  }
+
+  return apiUrl(`/api/v1/instagram/image?url=${encodeURIComponent(sourceUrl)}`);
 }
 
 function PreferenceControls({
@@ -3656,6 +3766,44 @@ function canOpenPostComments(result) {
   return Boolean(result?.platform && result?.canonical_url);
 }
 
+function normalizeProfilePostList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((post) => post && typeof post === "object" && post.id)
+    .map((post) => ({
+      ...post,
+      id: String(post.id),
+    }));
+}
+
+function mergeProfilePosts(currentPosts, nextPosts) {
+  const merged = [];
+  const seen = new Set();
+
+  for (const post of [...normalizeProfilePostList(currentPosts), ...normalizeProfilePostList(nextPosts)]) {
+    if (seen.has(post.id)) {
+      continue;
+    }
+
+    seen.add(post.id);
+    merged.push(post);
+  }
+
+  return merged;
+}
+
+function mergeUniqueIds(currentIds, nextIds) {
+  return [
+    ...new Set([
+      ...(Array.isArray(currentIds) ? currentIds : []),
+      ...(Array.isArray(nextIds) ? nextIds : []),
+    ].map((id) => String(id || "").trim()).filter(Boolean)),
+  ];
+}
+
 function normalizeCommentList(value) {
   return Array.isArray(value)
     ? value.filter((comment) => comment && typeof comment === "object")
@@ -3914,6 +4062,19 @@ function buildResultShellStyle(theme) {
     backgroundImage: theme.resultGradient,
     borderColor: theme.panelBorder,
     boxShadow: theme.panelShadow,
+    transition: themeTransition,
+  };
+}
+
+function buildAssetCardStyle(theme, isSelected) {
+  return {
+    color: theme.bodyText,
+    backgroundColor: isSelected
+      ? hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.18 : 0.1)
+      : theme.cardBackground,
+    backgroundImage: theme.cardGradient,
+    borderColor: isSelected ? theme.borderStrong : theme.cardBorder,
+    boxShadow: isSelected ? theme.selectedShadow : theme.cardShadow,
     transition: themeTransition,
   };
 }

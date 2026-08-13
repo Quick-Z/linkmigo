@@ -1,0 +1,76 @@
+services:
+  linkmigo:
+    image: k21vin/linkmigo:0.1.8-amd64 # 根据你设备芯片架构来调整，如果是arm架构可以改成 image: k21vin/linkmigo:0.1.8-arm64
+    platform: linux/amd64
+    container_name: linkmigo
+    hostname: linkmigo
+    restart: unless-stopped
+    init: true
+
+    ports:
+      - "3000:3000"
+
+    environment:
+      # 基础配置
+      TZ: Asia/Shanghai
+      NODE_ENV: production
+      LINKMIGO_APP_NAME: LinkMigo
+      YTDL_NO_DEBUG_FILE: "1"
+
+      # 下载资源和缓存配置
+      SOCIAL_CACHE_DIR: /data/social-downloader
+      SOCIAL_CACHE_TTL_SECONDS: "7200"
+      SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS: "300"
+      SOCIAL_MEDIA_TIMEOUT_SECONDS: "600"
+      SOCIAL_MAX_ASSET_BYTES: "10737418240"
+
+      # DXP4800 Plus 并发配置
+      SOCIAL_RESOLVE_CONCURRENCY: "4"
+      SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY: "1"
+      SOCIAL_ASSET_DOWNLOAD_CONCURRENCY: "1"
+      SOCIAL_PROFILE_ZIP_CONCURRENCY: "1"
+
+      # NAS 容器不会自动继承电脑或路由器的系统代理。
+      # 不使用代理时保持空字符串；需要代理时填写局域网代理地址，
+      # 例如 http://192.168.1.2:7890，不能填写 127.0.0.1。
+      SOCIAL_AUTO_SYSTEM_PROXY: "0"
+      SOCIAL_PROXY_URL: ""
+
+      # 对外通过域名或反向代理访问时填写完整公网地址，
+      # 例如 https://linkmigo.example.com；仅局域网使用时保持为空。
+      SOCIAL_PUBLIC_BASE_URL: ""
+
+      # 以下登录凭据均为可选项。公开内容解析正常时保持为空。
+      SOCIAL_INSTAGRAM_COOKIE: ""
+      SOCIAL_XIAOHONGSHU_COOKIE: ""
+      SOCIAL_YOUTUBE_COOKIE: ""
+
+      # Reddit OAuth 配置，可选。
+      SOCIAL_REDDIT_CLIENT_ID: ""
+      SOCIAL_REDDIT_CLIENT_SECRET: ""
+      SOCIAL_REDDIT_REFRESH_TOKEN: ""
+      SOCIAL_REDDIT_USER_AGENT: "web:linkmigo:0.1.8 (by /u/your_reddit_username)"
+
+      # V2EX Personal Access Token，可选。
+      SOCIAL_V2EX_TOKEN: ""
+
+    volumes:
+      # 解析、预览、下载及 ZIP 资源导出目录。
+      - /volume1/docker/linkmigo/downloads:/data/social-downloader
+
+      # 用户操作和错误日志导出目录。
+      - /volume1/docker/linkmigo/logs:/app/logs
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+

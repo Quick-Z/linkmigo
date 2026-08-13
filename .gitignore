@@ -20,6 +20,8 @@
 
 # production
 /build
+*.tar
+*.tar.gz
 
 # misc
 .DS_Store

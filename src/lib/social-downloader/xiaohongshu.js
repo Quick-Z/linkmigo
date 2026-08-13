@@ -2332,6 +2332,8 @@ export function isXiaohongshuHost(host) {
     "m.xiaohongshu.com",
     "xhslink.com",
     "www.xhslink.com",
+    "xhslink.cn",
+    "www.xhslink.cn",
     "xhs.cn",
     "www.xhs.cn",
     "rednote.com",
@@ -2340,5 +2342,12 @@ export function isXiaohongshuHost(host) {
 }
 
 function isXiaohongshuShortHost(host) {
-  return ["xhslink.com", "www.xhslink.com", "xhs.cn", "www.xhs.cn"].includes(host);
+  return [
+    "xhslink.com",
+    "www.xhslink.com",
+    "xhslink.cn",
+    "www.xhslink.cn",
+    "xhs.cn",
+    "www.xhs.cn",
+  ].includes(host);
 }

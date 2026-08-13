@@ -5472,7 +5472,7 @@ function detectPlatform(value) {
       return "xiaoyuzhou";
     }
 
-    if (hostname === "xiaohongshu.com" || hostname.endsWith(".xiaohongshu.com") || hostname === "xhslink.com" || hostname.endsWith(".xhslink.com") || hostname === "xhs.cn" || hostname.endsWith(".xhs.cn") || hostname === "rednote.com" || hostname.endsWith(".rednote.com")) {
+    if (hostname === "xiaohongshu.com" || hostname.endsWith(".xiaohongshu.com") || hostname === "xhslink.com" || hostname.endsWith(".xhslink.com") || hostname === "xhslink.cn" || hostname.endsWith(".xhslink.cn") || hostname === "xhs.cn" || hostname.endsWith(".xhs.cn") || hostname === "rednote.com" || hostname.endsWith(".rednote.com")) {
       return "xiaohongshu";
     }
   } catch {

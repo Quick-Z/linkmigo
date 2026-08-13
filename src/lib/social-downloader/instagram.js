@@ -110,8 +110,14 @@ const EMBED_HEADERS = {
   "user-agent": PAGE_HEADERS["user-agent"],
 };
 
-function instagramRequestHeaders(baseHeaders, settings = {}) {
+function instagramRequestHeaders(baseHeaders, settings = {}, options = {}) {
   const headers = { ...baseHeaders };
+  const includeCookie = options.includeCookie !== false;
+
+  if (!includeCookie) {
+    return headers;
+  }
+
   const cookie = instagramCookieHeader(settings);
 
   if (cookie) {
@@ -127,12 +133,9 @@ function instagramRequestHeaders(baseHeaders, settings = {}) {
   return headers;
 }
 
-function instagramMediaRequestHeaders(settings = {}) {
-  const cookie = instagramCookieHeader(settings);
-
+function instagramMediaRequestHeaders() {
   return {
     referer: "https://www.instagram.com/",
-    ...(cookie ? { cookie } : {}),
   };
 }
 
@@ -285,7 +288,47 @@ export function isInstagramHost(host) {
 }
 
 export async function resolveInstagramPost(normalized, settings) {
-  await ensureInstagramNetwork(settings);
+  const attempts = [
+    await collectInstagramPostSources(normalized, settings, { includeCookie: false }),
+  ];
+  let merged = mergeInstagramResolverPosts(attempts.flatMap((attempt) => attempt.posts));
+
+  // Follow cobalt's anonymous-first strategy. A stale login cookie must not
+  // poison public endpoints that work without authentication.
+  if (merged.assets.length === 0 && instagramCookieHeader(settings)) {
+    attempts.push(await collectInstagramPostSources(normalized, settings, { includeCookie: true }));
+    merged = mergeInstagramResolverPosts(attempts.flatMap((attempt) => attempt.posts));
+  }
+
+  const htmlText = attempts.map((attempt) => attempt.htmlText).filter(Boolean).join("\n");
+  merged.assets = upgradeInstagramAssetsFromText(merged.assets, htmlText);
+  merged.assets = await upgradeInstagramAssetsFromRenderedPage(merged.assets, normalized.shortcode, settings);
+
+  if (merged.assets.length > 0) {
+    return merged;
+  }
+
+  const renderedPost = await resolveFromRenderedPage(normalized.shortcode, settings);
+
+  if (renderedPost.assets.length > 0) {
+    return mergeInstagramResolverPosts([merged, renderedPost]);
+  }
+
+  const htmlError = attempts.map((attempt) => attempt.htmlError).find(Boolean);
+  const resolverError = attempts.map((attempt) => attempt.resolverError).find(Boolean);
+
+  if (htmlError) {
+    throw htmlError;
+  }
+
+  if (resolverError) {
+    throw resolverError;
+  }
+
+  return merged;
+}
+
+async function collectInstagramPostSources(normalized, settings, options = {}) {
 
   const resolvedPosts = [];
   let resolverError = null;
@@ -299,7 +342,7 @@ export async function resolveInstagramPost(normalized, settings) {
     let post;
 
     try {
-      post = await resolver(normalized.shortcode, settings);
+      post = await resolver(normalized.shortcode, settings, options);
     } catch (error) {
       if (error instanceof AppError) {
         resolverError ??= error;
@@ -317,7 +360,7 @@ export async function resolveInstagramPost(normalized, settings) {
   let htmlError = null;
 
   try {
-    const html = await fetchPublicPage(normalized.canonical_url, settings);
+    const html = await fetchPublicPage(normalized.canonical_url, settings, options);
     const metrics = parseMetricsFromHtml(html);
     const creatorHandle = parseCreatorFromHtml(html);
 
@@ -336,29 +379,12 @@ export async function resolveInstagramPost(normalized, settings) {
     htmlError = error;
   }
 
-  const merged = mergeInstagramResolverPosts(resolvedPosts);
-  merged.assets = upgradeInstagramAssetsFromText(merged.assets, htmlText);
-  merged.assets = await upgradeInstagramAssetsFromRenderedPage(merged.assets, normalized.shortcode, settings);
-
-  if (merged.assets.length > 0) {
-    return merged;
-  }
-
-  const renderedPost = await resolveFromRenderedPage(normalized.shortcode, settings);
-
-  if (renderedPost.assets.length > 0) {
-    return mergeInstagramResolverPosts([merged, renderedPost]);
-  }
-
-  if (htmlError) {
-    throw htmlError;
-  }
-
-  if (resolverError) {
-    throw resolverError;
-  }
-
-  return merged;
+  return {
+    posts: resolvedPosts,
+    htmlText,
+    htmlError,
+    resolverError,
+  };
 }
 
 export async function resolveInstagramProfile(normalized, settings) {
@@ -731,14 +757,14 @@ async function ensureInstagramNetwork(settings) {
   }
 }
 
-export async function fetchPublicPage(canonicalUrl, settings) {
+export async function fetchPublicPage(canonicalUrl, settings, options = {}) {
   let response;
 
   try {
     response = await fetchWithTimeout(
       canonicalUrl,
       {
-        headers: instagramRequestHeaders(COMMON_PAGE_HEADERS, settings),
+        headers: instagramRequestHeaders(COMMON_PAGE_HEADERS, settings, options),
         cache: "no-store",
       },
       settings.httpTimeoutMs,
@@ -1760,14 +1786,14 @@ function findInstagramProfileUser(data, depth = 0) {
   return null;
 }
 
-async function resolveFromMobileApi(shortcode, settings) {
-  const mediaId = await getMediaId(shortcode, settings);
+async function resolveFromMobileApi(shortcode, settings, options = {}) {
+  const mediaId = await getMediaId(shortcode, settings, options);
 
   if (!mediaId) {
     return { assets: [], metrics: createMetrics(), creator_handle: "" };
   }
 
-  const data = await requestMobileMediaInfo(mediaId, settings);
+  const data = await requestMobileMediaInfo(mediaId, settings, options);
   const metrics = parseMetricsFromInstagramData(data);
   const creatorHandle = parseCreatorFromInstagramData(data);
 
@@ -1779,7 +1805,7 @@ async function resolveFromMobileApi(shortcode, settings) {
   };
 }
 
-async function getMediaId(shortcode, settings) {
+async function getMediaId(shortcode, settings, options = {}) {
   try {
     const url = new URL("https://i.instagram.com/api/v1/oembed/");
 
@@ -1787,7 +1813,7 @@ async function getMediaId(shortcode, settings) {
 
     const response = await fetchWithTimeout(
       url,
-      { headers: instagramRequestHeaders(MOBILE_HEADERS, settings), cache: "no-store" },
+      { headers: instagramRequestHeaders(MOBILE_HEADERS, settings, options), cache: "no-store" },
       settings.httpTimeoutMs,
     );
     const data = await instagramResponseJson(response);
@@ -1829,11 +1855,11 @@ function mediaIdFromShortcode(shortcode) {
   return mediaId > 0n ? mediaId.toString() : "";
 }
 
-async function requestMobileMediaInfo(mediaId, settings) {
+async function requestMobileMediaInfo(mediaId, settings, options = {}) {
   try {
     const response = await fetchWithTimeout(
       `https://i.instagram.com/api/v1/media/${encodeURIComponent(mediaId)}/info/`,
-      { headers: instagramRequestHeaders(MOBILE_HEADERS, settings), cache: "no-store" },
+      { headers: instagramRequestHeaders(MOBILE_HEADERS, settings, options), cache: "no-store" },
       settings.httpTimeoutMs,
     );
     const data = await instagramResponseJson(response);
@@ -2407,11 +2433,11 @@ function hashInstagramComment(value) {
   return Math.abs(hash >>> 0).toString(36);
 }
 
-async function resolveFromEmbedContext(shortcode, settings) {
+async function resolveFromEmbedContext(shortcode, settings, options = {}) {
   try {
     const response = await fetchWithTimeout(
       `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/embed/captioned/`,
-      { headers: instagramRequestHeaders(EMBED_HEADERS, settings), cache: "no-store" },
+      { headers: instagramRequestHeaders(EMBED_HEADERS, settings, options), cache: "no-store" },
       settings.httpTimeoutMs,
     );
 
@@ -2453,8 +2479,8 @@ async function resolveFromEmbedContext(shortcode, settings) {
   }
 }
 
-async function resolveFromWebGraphql(shortcode, settings) {
-  const gqlData = await requestWebGraphqlPostData(shortcode, settings);
+async function resolveFromWebGraphql(shortcode, settings, options = {}) {
+  const gqlData = await requestWebGraphqlPostData(shortcode, settings, options);
 
   if (!gqlData) {
     return { assets: [], metrics: createMetrics(), creator_handle: "" };
@@ -2494,8 +2520,8 @@ async function resolveFromRenderedPage(shortcode, settings) {
   };
 }
 
-async function requestWebGraphqlPostData(shortcode, settings) {
-  const params = await getGraphqlParams(shortcode, settings);
+async function requestWebGraphqlPostData(shortcode, settings, options = {}) {
+  const params = await getGraphqlParams(shortcode, settings, options);
 
   if (!params) {
     return null;
@@ -2523,7 +2549,7 @@ async function requestWebGraphqlPostData(shortcode, settings) {
         method: "POST",
         cache: "no-store",
         headers: {
-          ...instagramRequestHeaders(EMBED_HEADERS, settings),
+          ...instagramRequestHeaders(EMBED_HEADERS, settings, options),
           ...headers,
           "content-type": "application/x-www-form-urlencoded",
           "x-fb-friendly-name": "PolarisPostActionLoadPostQueryQuery",
@@ -2951,11 +2977,11 @@ function htmlTitle(html) {
 }
 
 
-async function getGraphqlParams(shortcode, settings) {
+async function getGraphqlParams(shortcode, settings, options = {}) {
   try {
     const response = await fetchWithTimeout(
       `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/`,
-      { headers: instagramRequestHeaders(EMBED_HEADERS, settings), cache: "no-store" },
+      { headers: instagramRequestHeaders(EMBED_HEADERS, settings, options), cache: "no-store" },
       settings.httpTimeoutMs,
     );
 
@@ -2977,7 +3003,7 @@ async function getGraphqlParams(shortcode, settings) {
     const lsd = objectFromEntries("LSD", html)?.token || randomToken(8);
     const csrf = objectFromEntries("InstagramSecurityConfig", html)?.csrf_token;
     const bloks = objectFromEntries("WebBloksVersioningID", html)?.versioningID;
-    const authCookie = instagramCookieHeader(settings);
+    const authCookie = options.includeCookie === false ? "" : instagramCookieHeader(settings);
     const anonCookie = [
       csrf ? `csrftoken=${csrf}` : "",
       polarisSiteData.device_id ? `ig_did=${polarisSiteData.device_id}` : "",

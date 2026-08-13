@@ -125,6 +125,12 @@ textarea {
   }
 }
 
+@keyframes lm-profile-card-flow {
+  to {
+    background-position: 220% 50%, 0 0;
+  }
+}
+
 .lm-themed-action:not(:disabled) {
   transform: translateY(0) scale(1);
   will-change: background-color, border-color, box-shadow, transform;
@@ -144,6 +150,17 @@ textarea {
   border-color: var(--lm-action-hover-border) !important;
   box-shadow: var(--lm-action-active-shadow) !important;
   transform: translateY(0) scale(0.985) !important;
+}
+
+.lm-profile-post-card {
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  border-color: transparent;
+}
+
+.lm-profile-post-card-downloading {
+  animation: lm-profile-card-flow 1.45s linear infinite;
+  background-size: 260% 100%, 100% 100%;
 }
 
 .lm-page[data-color-mode="dark"] .lm-themed-action:disabled {

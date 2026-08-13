@@ -75,6 +75,7 @@ const copyByLanguage = {
     loadingComments: "正在加载评论...",
     loadingMoreComments: "正在加载更多...",
     loadingMorePosts: "正在加载更多帖子...",
+    loadingPostDetails: "正在读取帖子详情...",
     noContent: "暂无正文内容",
     noComments: "暂无评论",
     noTags: "暂无 tag",
@@ -123,6 +124,12 @@ const copyByLanguage = {
     previous: "上一张",
     progress: "播放进度",
     profilePosts: "主页帖子",
+    profileDownloadDownloading: "正在下载",
+    profileDownloadFailed: "整帖失败",
+    profileDownloadPartialFailed: "部分失败",
+    profileDownloadQueued: "等待下载",
+    profileDownloadSuccess: "已下载",
+    profileDownloadProgress: (done, total) => `下载中 ${done} / ${total}`,
     posts: "帖子",
     postsCount: (count) => `${count} 个帖子`,
     postsEnd: "已加载当前可展示的主页帖子",
@@ -135,9 +142,11 @@ const copyByLanguage = {
     search: "搜索",
     selectedPostsCount: (count) => `已选 ${count} 个帖子`,
     selectedCount: (count) => `已选 ${count} 个`,
+    selectPost: "选中帖子",
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
     urlPlaceholder: "支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
+    unselectPost: "取消选中帖子",
     video: "视频",
     audio: "音频",
     volume: "音量",
@@ -189,6 +198,7 @@ const copyByLanguage = {
     loadingComments: "Loading comments...",
     loadingMoreComments: "Loading more...",
     loadingMorePosts: "Loading more posts...",
+    loadingPostDetails: "Loading post details...",
     noContent: "No caption available",
     noComments: "No comments",
     noTags: "No tags",
@@ -237,6 +247,12 @@ const copyByLanguage = {
     previous: "Previous",
     progress: "Playback progress",
     profilePosts: "Profile Posts",
+    profileDownloadDownloading: "Downloading",
+    profileDownloadFailed: "Failed",
+    profileDownloadPartialFailed: "Partial",
+    profileDownloadQueued: "Queued",
+    profileDownloadSuccess: "Downloaded",
+    profileDownloadProgress: (done, total) => `Downloading ${done} / ${total}`,
     posts: "Posts",
     postsCount: (count) => `${count} ${count === 1 ? "Post" : "Posts"}`,
     postsEnd: "Loaded available profile posts",
@@ -249,9 +265,11 @@ const copyByLanguage = {
     search: "Search",
     selectedPostsCount: (count) => `${count} Posts Selected`,
     selectedCount: (count) => `${count} Selected`,
+    selectPost: "Select post",
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
     urlPlaceholder: "Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
+    unselectPost: "Unselect post",
     video: "Video",
     audio: "Audio",
     volume: "Volume",
@@ -951,11 +969,21 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
   const [selectedPostIds, setSelectedPostIds] = useState([]);
   const [isProfileDownloadPending, setIsProfileDownloadPending] = useState(false);
+  const [profileDownloadJob, setProfileDownloadJob] = useState(null);
   const [isLoadingMoreProfilePosts, setIsLoadingMoreProfilePosts] = useState(false);
   const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
+  const [profilePostDetail, setProfilePostDetail] = useState({
+    isOpen: false,
+    isLoading: false,
+    result: null,
+    error: null,
+    post: null,
+  });
   const [postInfoInitialAssetIndex, setPostInfoInitialAssetIndex] = useState(0);
   const resolveRunRef = useRef(0);
   const profilePostsLoadingRef = useRef(false);
+  const profileDownloadPollRef = useRef(null);
+  const profilePostDetailRunRef = useRef(0);
 
   const normalizedUrl = extractUrlCandidate(url);
   const canSubmit = Boolean(normalizedUrl) && isValidHttpUrl(normalizedUrl);
@@ -1003,14 +1031,22 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     window.localStorage.setItem("linkmigo-color-mode", colorMode);
   }, [colorMode]);
 
+  useEffect(() => () => {
+    clearProfileDownloadPolling();
+  }, []);
+
   useEffect(() => {
     if (!result) {
       setSelectedAssetIds([]);
       setSelectedPostIds([]);
       setIsProfileDownloadPending(false);
+      setProfileDownloadJob(null);
+      clearProfileDownloadPolling();
       setIsLoadingMoreProfilePosts(false);
       profilePostsLoadingRef.current = false;
       setIsPostInfoOpen(false);
+      profilePostDetailRunRef.current += 1;
+      setProfilePostDetail(emptyProfilePostDetail());
       setPostInfoInitialAssetIndex(0);
       return;
     }
@@ -1018,17 +1054,25 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     if (result.mode === "profile") {
       setSelectedAssetIds([]);
       setSelectedPostIds(result.posts.map((post) => post.id));
+      setProfileDownloadJob(null);
+      clearProfileDownloadPolling();
       setIsLoadingMoreProfilePosts(false);
       profilePostsLoadingRef.current = false;
       setIsPostInfoOpen(false);
+      profilePostDetailRunRef.current += 1;
+      setProfilePostDetail(emptyProfilePostDetail());
       setPostInfoInitialAssetIndex(0);
       return;
     }
 
     setSelectedAssetIds(result.assets.map((asset) => asset.id));
     setSelectedPostIds([]);
+    setProfileDownloadJob(null);
+    clearProfileDownloadPolling();
     setIsLoadingMoreProfilePosts(false);
     profilePostsLoadingRef.current = false;
+    profilePostDetailRunRef.current += 1;
+    setProfilePostDetail(emptyProfilePostDetail());
     setPostInfoInitialAssetIndex(0);
   }, [resultSelectionKey]);
 
@@ -1155,6 +1199,13 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     return null;
   }
 
+  function clearProfileDownloadPolling() {
+    if (profileDownloadPollRef.current) {
+      window.clearTimeout(profileDownloadPollRef.current);
+      profileDownloadPollRef.current = null;
+    }
+  }
+
   function reset() {
     logClientAction("reset_button_clicked", {
       had_url: Boolean(url.trim()),
@@ -1176,8 +1227,12 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     setSelectedAssetIds([]);
     setSelectedPostIds([]);
     setIsProfileDownloadPending(false);
+    setProfileDownloadJob(null);
+    clearProfileDownloadPolling();
     setIsLoadingMoreProfilePosts(false);
     profilePostsLoadingRef.current = false;
+    profilePostDetailRunRef.current += 1;
+    setProfilePostDetail(emptyProfilePostDetail());
   }
 
   function clearUrl() {
@@ -1374,6 +1429,111 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     setIsPostInfoOpen(true);
   }
 
+  async function openProfilePostDetail(post) {
+    if (!post?.canonical_url) {
+      return;
+    }
+
+    const runId = profilePostDetailRunRef.current + 1;
+
+    profilePostDetailRunRef.current = runId;
+    setProfilePostDetail({
+      isOpen: true,
+      isLoading: true,
+      result: null,
+      error: null,
+      post,
+    });
+
+    logClientAction("profile_post_detail_clicked", {
+      request_id: result?.request_id,
+      post_id: post.id,
+      canonical_url: post.canonical_url,
+    });
+
+    try {
+      const response = await fetch("/api/v1/instagram/resolve/jobs", {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ url: post.canonical_url }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw payload;
+      }
+
+      const immediateResult = profilePostDetailPayloadResult(payload);
+      const detailResult = immediateResult || await pollProfilePostDetailJob(payload.job_id, runId);
+
+      if (profilePostDetailRunRef.current !== runId) {
+        return;
+      }
+
+      setProfilePostDetail({
+        isOpen: true,
+        isLoading: false,
+        result: detailResult,
+        error: null,
+        post,
+      });
+    } catch (caught) {
+      if (profilePostDetailRunRef.current !== runId) {
+        return;
+      }
+
+      setProfilePostDetail({
+        isOpen: true,
+        isLoading: false,
+        result: null,
+        error: getApiError(caught),
+        post,
+      });
+    }
+  }
+
+  async function pollProfilePostDetailJob(jobId, runId) {
+    if (!jobId) {
+      throw new Error("帖子详情任务创建失败，请稍后重试。");
+    }
+
+    let delayMs = 250;
+
+    while (profilePostDetailRunRef.current === runId) {
+      await sleep(delayMs);
+      delayMs = 600;
+
+      const response = await fetch(`/api/v1/instagram/resolve/jobs/${encodeURIComponent(jobId)}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw payload;
+      }
+
+      const resultPayload = profilePostDetailPayloadResult(payload);
+
+      if (resultPayload) {
+        return resultPayload;
+      }
+
+      if (payload?.status === "failed") {
+        throw { error: payload.error };
+      }
+    }
+
+    return null;
+  }
+
+  function closeProfilePostDetail() {
+    profilePostDetailRunRef.current += 1;
+    setProfilePostDetail(emptyProfilePostDetail());
+  }
+
   function downloadCurrentAsset(asset) {
     if (!asset) {
       return;
@@ -1407,6 +1567,23 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     triggerBrowserDownload(apiUrl(`/api/v1/instagram/requests/${result.request_id}/download.zip`));
   }
 
+  function downloadAllAssetsFromResult(targetResult, source = "post_info_modal") {
+    if (!targetResult || !Array.isArray(targetResult.assets) || targetResult.assets.length === 0) {
+      return;
+    }
+
+    logClientAction("bulk_asset_download_clicked", {
+      request_id: targetResult.request_id,
+      platform: targetResult.platform,
+      shortcode: targetResult.shortcode,
+      selected_asset_ids: targetResult.assets.map((asset) => asset.id),
+      selected_count: targetResult.assets.length,
+      source,
+    });
+
+    triggerBrowserDownload(apiUrl(`/api/v1/instagram/requests/${targetResult.request_id}/download.zip`));
+  }
+
   function downloadSelected() {
     if (!result || selectedAssets.length === 0) {
       return;
@@ -1437,6 +1614,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     }
 
     setIsProfileDownloadPending(true);
+    setProfileDownloadJob(createLocalProfileDownloadJob(selectedPosts));
     setError(null);
 
     logClientAction("profile_post_download_clicked", {
@@ -1447,7 +1625,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     });
 
     try {
-      const response = await fetch(`/api/v1/instagram/profile-requests/${encodeURIComponent(result.request_id)}/download.zip`, {
+      const response = await fetch(`/api/v1/instagram/profile-requests/${encodeURIComponent(result.request_id)}/download-jobs`, {
         method: "POST",
         cache: "no-store",
         headers: {
@@ -1470,15 +1648,59 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
         throw payload || new Error("Download failed");
       }
 
-      const blob = await response.blob();
-      const filename = filenameFromDisposition(response.headers.get("content-disposition")) ||
-        `${result.creator_handle || "instagram-profile"}.zip`;
+      const payload = await response.json();
 
-      triggerBrowserBlobDownload(blob, filename);
+      setProfileDownloadJob(payload);
+      pollProfileDownloadJob(payload.job_id, result.request_id);
     } catch (caught) {
       setError(getApiError(caught));
-    } finally {
       setIsProfileDownloadPending(false);
+    }
+  }
+
+  async function pollProfileDownloadJob(jobId, requestId) {
+    if (!jobId || !requestId) {
+      setIsProfileDownloadPending(false);
+      return;
+    }
+
+    clearProfileDownloadPolling();
+
+    try {
+      const response = await fetch(
+        `/api/v1/instagram/profile-requests/${encodeURIComponent(requestId)}/download-jobs/${encodeURIComponent(jobId)}`,
+        { cache: "no-store" },
+      );
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw payload;
+      }
+
+      setProfileDownloadJob(payload);
+
+      if (payload.status === "completed") {
+        setIsProfileDownloadPending(false);
+
+        if (payload.result?.download_url) {
+          triggerBrowserDownload(apiUrl(payload.result.download_url));
+        }
+
+        return;
+      }
+
+      if (payload.status === "failed") {
+        setIsProfileDownloadPending(false);
+        setError(getApiError({ error: payload.error }));
+        return;
+      }
+
+      profileDownloadPollRef.current = window.setTimeout(() => {
+        pollProfileDownloadJob(jobId, requestId);
+      }, 700);
+    } catch (caught) {
+      setIsProfileDownloadPending(false);
+      setError(getApiError(caught));
     }
   }
 
@@ -1682,10 +1904,12 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                 isLoadingMore={isLoadingMoreProfilePosts}
                 language={language}
                 onDownloadSelected={downloadSelectedPosts}
+                onOpenPostDetail={openProfilePostDetail}
                 onInvertSelection={invertProfileSelection}
                 onPostsScroll={onProfilePostsScroll}
                 onToggleAll={toggleAllProfilePosts}
                 onTogglePost={toggleProfilePost}
+                profileDownloadJob={profileDownloadJob}
                 result={result}
                 selectedPostIds={selectedPostIds}
                 selectedPosts={selectedPosts}
@@ -1693,8 +1917,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
               />
             ) : (
               <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(resultTheme)} aria-label={copy.resultAria}>
-                <div className="grid shrink-0 gap-3 border-b px-3 pb-1 pt-3 sm:px-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center" style={{ borderColor: resultTheme.panelBorder }}>
-                  <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-5 pt-1">
+                <div className="grid shrink-0 gap-2 border-b px-3 pb-2 pt-3 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-center" style={{ borderColor: resultTheme.panelBorder }}>
+                  <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-2 pt-1">
                     <GlassChip theme={resultTheme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
                     <a
                       className="lm-themed-action inline-flex h-9 max-w-full shrink-0 cursor-pointer items-center rounded-full border px-3 text-[13px] font-semibold transition"
@@ -1710,7 +1934,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                   </div>
 
                   {expiryText ? (
-                    <div className="justify-self-start xl:justify-self-end">
+                    <div className="justify-self-start min-[600px]:justify-self-end">
                       <GlassChip alignRight theme={resultTheme}>
                         {copy.expiredAt} {expiryText}
                       </GlassChip>
@@ -1718,8 +1942,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                   ) : null}
                 </div>
 
-                <div className="grid shrink-0 gap-3 border-b px-3 py-3 sm:px-5 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start" style={{ borderColor: resultTheme.panelBorder }}>
-                  <div className="-mt-1 flex min-w-0 flex-wrap items-center gap-2.5 overflow-visible pb-1 pt-1">
+                <div className="grid shrink-0 gap-2 border-b px-3 py-2 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-start" style={{ borderColor: resultTheme.panelBorder }}>
+                  <div className="lm-inline-scroll flex min-w-0 flex-wrap items-center gap-2 overflow-visible min-[600px]:flex-nowrap min-[600px]:overflow-x-auto">
                     <button
                       className="lm-themed-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
                       onClick={() => openPostInfoModal(0)}
@@ -1737,7 +1961,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                     ))}
                   </div>
 
-                  <div className="flex shrink-0 flex-wrap items-center gap-2 2xl:flex-nowrap 2xl:justify-end">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 min-[600px]:flex-nowrap min-[600px]:justify-end">
                     <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={toggleAll} style={resultSecondaryButtonStyle} type="button">
                       {allSelected ? copy.none : copy.all}
                     </button>
@@ -1786,7 +2010,80 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
           theme={resultTheme}
         />
   ) : null}
+      {profilePostDetail.isOpen && profilePostDetail.result ? (
+        <PostInfoModal
+          copy={copy}
+          initialAssetIndex={0}
+          language={language}
+          onClose={closeProfilePostDetail}
+          onDownloadAll={() => downloadAllAssetsFromResult(profilePostDetail.result, "profile_post_detail_modal")}
+          onDownloadAsset={downloadCurrentAsset}
+          result={profilePostDetail.result}
+          theme={getButtonTheme(profilePostDetail.result.platform, colorMode)}
+        />
+      ) : null}
+      {profilePostDetail.isOpen && !profilePostDetail.result ? (
+        <ProfilePostDetailStatusModal
+          copy={copy}
+          error={profilePostDetail.error}
+          isLoading={profilePostDetail.isLoading}
+          language={language}
+          onClose={closeProfilePostDetail}
+          onRetry={() => openProfilePostDetail(profilePostDetail.post)}
+          theme={resultTheme}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function ProfilePostDetailStatusModal({ copy, error, isLoading, language, onClose, onRetry, theme }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center px-6 py-6 backdrop-blur-[18px]"
+      onMouseDown={onClose}
+      role="presentation"
+      style={buildPostModalBackdropStyle(theme)}
+    >
+      <section
+        aria-label={copy.postDetails}
+        aria-modal="true"
+        className="grid w-[min(92vw,28rem)] gap-5 rounded-[1.3rem] border p-5 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        style={buildResultShellStyle(theme)}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="grid gap-1">
+            <div className="text-base font-bold" style={{ color: theme.titleText }}>
+              {copy.postDetails}
+            </div>
+            <div className="text-sm font-medium" style={{ color: theme.mutedText }}>
+              {isLoading ? copy.loadingPostDetails : error?.message || errorLabel(error || {}, language)}
+            </div>
+          </div>
+          <button
+            aria-label={copy.closeDetails}
+            className="grid size-9 shrink-0 cursor-pointer place-items-center rounded-full border"
+            onClick={onClose}
+            style={buildSecondaryButtonStyle(theme)}
+            type="button"
+          >
+            <ClearIcon />
+          </button>
+        </div>
+
+        {isLoading ? (
+          <div className="mc-skeleton h-2 overflow-hidden rounded-full" style={buildSkeletonStyle(theme)} />
+        ) : (
+          <div className="flex justify-end gap-2">
+            <button className={`${actionButtonBaseClass} h-9 px-4 text-[13px]`} onClick={onRetry} style={buildPrimaryButtonStyle(theme, false)} type="button">
+              {copy.retry}
+            </button>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -1799,9 +2096,11 @@ function ProfileResultSection({
   language,
   onDownloadSelected,
   onInvertSelection,
+  onOpenPostDetail,
   onPostsScroll,
   onToggleAll,
   onTogglePost,
+  profileDownloadJob,
   result,
   selectedPostIds,
   selectedPosts,
@@ -1815,8 +2114,8 @@ function ProfileResultSection({
 
   return (
     <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(theme)} aria-label={copy.resultAria}>
-      <div className="grid shrink-0 gap-3 border-b px-3 pb-1 pt-3 sm:px-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center" style={{ borderColor: theme.panelBorder }}>
-        <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-5 pt-1">
+      <div className="grid shrink-0 gap-2 border-b px-3 pb-2 pt-3 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-center" style={{ borderColor: theme.panelBorder }}>
+        <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-2 pt-1">
           <GlassChip theme={theme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
           <a
             className="lm-themed-action inline-flex h-9 max-w-full shrink-0 cursor-pointer items-center rounded-full border px-3 text-[13px] font-semibold transition"
@@ -1832,7 +2131,7 @@ function ProfileResultSection({
         </div>
 
         {expiryText ? (
-          <div className="justify-self-start xl:justify-self-end">
+          <div className="justify-self-start min-[600px]:justify-self-end">
             <GlassChip alignRight theme={theme}>
               {copy.expiredAt} {expiryText}
             </GlassChip>
@@ -1840,12 +2139,12 @@ function ProfileResultSection({
         ) : null}
       </div>
 
-      <div className="grid shrink-0 gap-3 border-b px-3 py-3 sm:px-5 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start" style={{ borderColor: theme.panelBorder }}>
-        <div className="flex min-w-0 items-start gap-3">
+      <div className="grid shrink-0 gap-2 border-b px-3 py-2 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-start" style={{ borderColor: theme.panelBorder }}>
+        <div className="flex min-w-0 items-start gap-3 min-[600px]:items-center">
           {avatarUrl ? (
             <img
               alt={profile.full_name || profile.username || result.creator_handle}
-              className="mt-0.5 size-14 shrink-0 rounded-2xl border object-cover shadow-[0_14px_28px_rgba(15,23,42,0.12)]"
+              className="mt-0.5 size-14 shrink-0 rounded-2xl border object-cover shadow-[0_14px_28px_rgba(15,23,42,0.12)] min-[600px]:size-12"
               src={avatarUrl}
               style={{
                 borderColor: theme.panelBorder,
@@ -1854,8 +2153,8 @@ function ProfileResultSection({
             />
           ) : null}
 
-          <div className="grid min-w-0 gap-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="grid min-w-0 gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 min-[600px]:flex-nowrap">
               <span className="truncate text-base font-semibold sm:text-lg" style={{ color: theme.titleText }}>
                 {profile.full_name || `@${profile.username || result.creator_handle}`}
               </span>
@@ -1869,13 +2168,7 @@ function ProfileResultSection({
               ) : null}
             </div>
 
-            {profile.biography ? (
-              <p className="line-clamp-3 text-sm leading-6 sm:text-[15px]" style={{ color: theme.mutedText }}>
-                {profile.biography}
-              </p>
-            ) : null}
-
-            <div className="-mt-1 flex min-w-0 flex-wrap items-center gap-2.5 overflow-visible pb-1 pt-1">
+            <div className="lm-inline-scroll flex min-w-0 flex-wrap items-center gap-2 overflow-visible min-[600px]:flex-nowrap min-[600px]:overflow-x-auto">
               {statItems.map((item) => (
                 <StatPill key={item.key} label={item.label} language={language} theme={theme} value={item.value} />
               ))}
@@ -1883,7 +2176,7 @@ function ProfileResultSection({
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2 2xl:flex-nowrap 2xl:justify-end">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 min-[600px]:flex-nowrap min-[600px]:justify-end">
           <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={onToggleAll} style={buildSecondaryButtonStyle(theme)} type="button">
             {allSelected ? copy.none : copy.all}
           </button>
@@ -1897,7 +2190,7 @@ function ProfileResultSection({
             style={buildPrimaryButtonStyle(theme, selectedPosts.length === 0 || isDownloading)}
             type="button"
           >
-            {isDownloading ? copy.pleaseWait : copy.downloadSelectedPosts}
+            {isDownloading ? profileDownloadButtonLabel(copy, profileDownloadJob) : copy.downloadSelectedPosts}
           </button>
         </div>
       </div>
@@ -1910,20 +2203,24 @@ function ProfileResultSection({
           isPartialSnapshot={Boolean(page.is_partial_snapshot)}
           language={language}
           posts={result.posts}
+          postDownloadStatuses={profileDownloadJob?.post_statuses}
           selectedPostIds={selectedPostIds}
           theme={theme}
           onTogglePost={onTogglePost}
+          onOpenPostDetail={onOpenPostDetail}
         />
       </FloatingScrollArea>
     </section>
   );
 }
 
-function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, language, onTogglePost, posts, selectedPostIds, theme }) {
+function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, language, onOpenPostDetail, onTogglePost, postDownloadStatuses, posts, selectedPostIds, theme }) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]">
       {posts.map((post) => {
         const isSelected = selectedPostIds.includes(post.id);
+        const downloadStatus = postDownloadStatuses?.[post.id] ?? null;
+        const normalizedDownloadStatus = normalizeProfileDownloadStatus(downloadStatus?.status);
         const excerpt = profilePostExcerpt(post);
         const dateText = formatProfilePostDate(post.taken_at, language);
         const previewUrl = instagramImageProxyUrl(post.preview_url);
@@ -1931,20 +2228,25 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
         return (
           <article
             aria-pressed={isSelected}
-            className="group grid min-w-0 cursor-pointer content-start gap-3 rounded-[1.2rem] border p-3 outline-none backdrop-blur-xl transition duration-300 focus:outline-none focus-visible:outline-none"
+            className={`lm-profile-post-card group grid min-w-0 content-start gap-3 rounded-[1.2rem] border p-3 outline-none backdrop-blur-xl transition duration-300 focus:outline-none focus-visible:outline-none ${profilePostDownloadCardClass(normalizedDownloadStatus)}`}
             key={post.id}
-            onClick={() => onTogglePost(post.id)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onTogglePost(post.id);
-              }
-            }}
-            role="button"
-            style={buildAssetCardStyle(theme, isSelected)}
-            tabIndex={0}
+            style={buildProfilePostCardStyle(theme, isSelected, normalizedDownloadStatus)}
           >
             <div className="relative aspect-square overflow-hidden rounded-[1rem] border" style={{ borderColor: theme.panelBorder, background: theme.previewGradient }}>
+              <button
+                aria-label={isSelected ? copy.unselectPost : copy.selectPost}
+                aria-pressed={isSelected}
+                className="absolute inset-0 z-10 cursor-pointer p-0 text-left"
+                onClick={() => onTogglePost(post.id)}
+                type="button"
+              >
+                <span className="sr-only">{isSelected ? copy.unselectPost : copy.selectPost}</span>
+              </button>
+
+              {downloadStatus ? (
+                <ProfilePostDownloadBadge copy={copy} status={downloadStatus} theme={theme} />
+              ) : null}
+
               {previewUrl ? (
                 <img alt={post.post_info?.title || post.shortcode} className="h-full w-full object-cover" src={previewUrl} />
               ) : (
@@ -1953,16 +2255,29 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
                 </div>
               )}
 
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-[linear-gradient(180deg,rgba(10,18,30,0)_0%,rgba(10,18,30,0.72)_100%)] px-3 pb-3 pt-8 text-white">
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-2 bg-[linear-gradient(180deg,rgba(10,18,30,0)_0%,rgba(10,18,30,0.72)_100%)] px-3 pb-3 pt-8 text-white">
                 <span className="truncate text-xs font-semibold uppercase tracking-[0.08em]">{post.kind}</span>
-                <span className="grid size-5 shrink-0 place-items-center rounded-full border border-white/60 bg-white/15 text-[10px] font-bold">
-                  {isSelected ? "✓" : ""}
-                </span>
               </div>
+
+              <button
+                aria-label={isSelected ? copy.unselectPost : copy.selectPost}
+                aria-pressed={isSelected}
+                className="absolute bottom-3 right-3 z-30 grid size-5 shrink-0 cursor-pointer place-items-center rounded-full border border-white/60 bg-white/15 text-[10px] font-bold text-white backdrop-blur-sm transition hover:scale-110"
+                onClick={() => onTogglePost(post.id)}
+                type="button"
+              >
+                  {isSelected ? "✓" : ""}
+              </button>
             </div>
 
             <div className="grid min-w-0 gap-2">
-              <div className="grid gap-1">
+              <button
+                aria-pressed={isSelected}
+                className="grid cursor-pointer gap-1 text-left"
+                onClick={() => onTogglePost(post.id)}
+                style={{ color: theme.bodyText }}
+                type="button"
+              >
                 <span className="truncate text-sm font-semibold" style={{ color: theme.bodyText }} title={post.post_info?.title || post.shortcode}>
                   {post.post_info?.title || `@${post.post_info?.author_handle || ""}`}
                 </span>
@@ -1971,7 +2286,7 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
                     {excerpt}
                   </span>
                 ) : null}
-              </div>
+              </button>
 
               <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                 {Number.isFinite(post.metrics?.like_count) ? <MiniMetric theme={theme} label={copy.likes} value={post.metrics.like_count} /> : null}
@@ -1984,16 +2299,14 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
                 <span className="truncate text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: theme.subtleText }}>
                   {post.media_type}
                 </span>
-                <a
+                <button
                   className="lm-themed-action inline-flex h-8 shrink-0 items-center rounded-full border px-3 text-[12px] font-semibold transition"
-                  href={post.canonical_url}
-                  onClick={(event) => event.stopPropagation()}
-                  rel="noreferrer"
+                  onClick={() => onOpenPostDetail(post)}
                   style={buildLinkChipStyle(theme)}
-                  target="_blank"
+                  type="button"
                 >
                   {copy.openPost}
-                </a>
+                </button>
               </div>
             </div>
           </article>
@@ -2021,6 +2334,24 @@ function MiniMetric({ label, theme, value }) {
         {value == null ? label : `${label} ${formatCompactNumber(value)}`}
       </span>
     </span>
+  );
+}
+
+function ProfilePostDownloadBadge({ copy, status, theme }) {
+  const normalizedStatus = normalizeProfileDownloadStatus(status?.status);
+  const label = profilePostDownloadStatusLabel(copy, normalizedStatus);
+
+  return (
+    <div
+      className="pointer-events-none absolute left-2 top-2 z-10 inline-flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold shadow-[0_12px_28px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+      style={buildProfilePostDownloadBadgeStyle(theme, normalizedStatus)}
+      title={status?.message || label}
+    >
+      {normalizedStatus === "downloading" ? (
+        <span className="block size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
+      ) : null}
+      <span className="truncate">{label}</span>
+    </div>
   );
 }
 
@@ -3804,6 +4135,107 @@ function mergeUniqueIds(currentIds, nextIds) {
   ];
 }
 
+function createLocalProfileDownloadJob(posts) {
+  const now = new Date().toISOString();
+  const postStatuses = Object.fromEntries(
+    normalizeProfilePostList(posts).map((post) => [
+      post.id,
+      {
+        post_id: post.id,
+        status: "queued",
+        message: "等待下载",
+        updated_at: now,
+      },
+    ]),
+  );
+
+  return {
+    job_id: "",
+    status: "queued",
+    phase: "queued",
+    progress: {
+      total_count: Object.keys(postStatuses).length,
+      completed_count: 0,
+      success_count: 0,
+      partial_failed_count: 0,
+      failed_count: 0,
+    },
+    post_statuses: postStatuses,
+  };
+}
+
+function emptyProfilePostDetail() {
+  return {
+    isOpen: false,
+    isLoading: false,
+    result: null,
+    error: null,
+    post: null,
+  };
+}
+
+function profilePostDetailPayloadResult(payload) {
+  if (payload?.status === "completed" && payload.result && payload.result.mode !== "profile") {
+    return payload.result;
+  }
+
+  return null;
+}
+
+function profileDownloadButtonLabel(copy, job) {
+  const progress = job?.progress ?? {};
+  const done = Number(progress.completed_count) || 0;
+  const total = Number(progress.total_count) || 0;
+
+  return total > 0 ? copy.profileDownloadProgress(done, total) : copy.pleaseWait;
+}
+
+function normalizeProfileDownloadStatus(value) {
+  return ["queued", "downloading", "success", "partial_failed", "failed"].includes(value)
+    ? value
+    : "queued";
+}
+
+function profilePostDownloadStatusLabel(copy, status) {
+  if (status === "success") {
+    return copy.profileDownloadSuccess;
+  }
+
+  if (status === "partial_failed") {
+    return copy.profileDownloadPartialFailed;
+  }
+
+  if (status === "failed") {
+    return copy.profileDownloadFailed;
+  }
+
+  if (status === "downloading") {
+    return copy.profileDownloadDownloading;
+  }
+
+  return copy.profileDownloadQueued;
+}
+
+function profilePostDownloadCardClass(status) {
+  if (status === "downloading") {
+    return "lm-profile-post-card-downloading";
+  }
+
+  if (status === "success") {
+    return "lm-profile-post-card-success";
+  }
+
+  if (status === "partial_failed") {
+    return "lm-profile-post-card-partial";
+  }
+
+  if (status === "failed") {
+    return "lm-profile-post-card-failed";
+  }
+
+  return "";
+}
+
 function normalizeCommentList(value) {
   return Array.isArray(value)
     ? value.filter((comment) => comment && typeof comment === "object")
@@ -4076,6 +4508,81 @@ function buildAssetCardStyle(theme, isSelected) {
     borderColor: isSelected ? theme.borderStrong : theme.cardBorder,
     boxShadow: isSelected ? theme.selectedShadow : theme.cardShadow,
     transition: themeTransition,
+  };
+}
+
+function buildProfilePostCardStyle(theme, isSelected, status) {
+  const base = buildAssetCardStyle(theme, isSelected);
+
+  if (status === "success") {
+    return {
+      ...base,
+      "--lm-profile-post-flow-border": theme.colorMode === "dark" ? "rgba(134, 239, 172, 0.95)" : "rgba(34, 197, 94, 0.78)",
+      "--lm-profile-post-flow-glow": theme.colorMode === "dark" ? "rgba(34, 197, 94, 0.24)" : "rgba(34, 197, 94, 0.18)",
+      backgroundImage: `${theme.cardGradient}, linear-gradient(135deg, rgba(34, 197, 94, 0.72), rgba(187, 247, 208, 0.92), rgba(34, 197, 94, 0.62))`,
+      borderColor: "transparent",
+      boxShadow: `${base.boxShadow}, 0 0 0 1px ${theme.colorMode === "dark" ? "rgba(134, 239, 172, 0.22)" : "rgba(34, 197, 94, 0.18)"}, 0 18px 38px ${theme.colorMode === "dark" ? "rgba(34, 197, 94, 0.18)" : "rgba(34, 197, 94, 0.12)"}`,
+    };
+  }
+
+  if (status === "partial_failed") {
+    return {
+      ...base,
+      borderColor: theme.colorMode === "dark" ? "rgba(253, 230, 138, 0.74)" : "rgba(245, 158, 11, 0.6)",
+    };
+  }
+
+  if (status === "failed") {
+    return {
+      ...base,
+      borderColor: theme.colorMode === "dark" ? "rgba(251, 113, 133, 0.76)" : "rgba(244, 63, 94, 0.62)",
+    };
+  }
+
+  if (status === "downloading") {
+    return {
+      ...base,
+      "--lm-profile-post-flow-border": theme.colorMode === "dark" ? "rgba(244, 114, 182, 0.95)" : "rgba(214, 41, 118, 0.76)",
+      "--lm-profile-post-flow-border-soft": theme.colorMode === "dark" ? "rgba(192, 132, 252, 0.78)" : "rgba(216, 180, 254, 0.74)",
+      "--lm-profile-post-flow-glow": theme.colorMode === "dark" ? "rgba(214, 41, 118, 0.26)" : "rgba(214, 41, 118, 0.16)",
+      backgroundImage: `${theme.cardGradient}, linear-gradient(90deg, var(--lm-profile-post-flow-border-soft), var(--lm-profile-post-flow-border), var(--lm-profile-post-flow-border-soft), var(--lm-profile-post-flow-border))`,
+      borderColor: "transparent",
+      boxShadow: `${base.boxShadow}, 0 20px 44px ${theme.colorMode === "dark" ? "rgba(214, 41, 118, 0.16)" : "rgba(214, 41, 118, 0.1)"}`,
+    };
+  }
+
+  return base;
+}
+
+function buildProfilePostDownloadBadgeStyle(theme, status) {
+  if (status === "success") {
+    return {
+      color: theme.colorMode === "dark" ? "#D7FBE8" : "#12633A",
+      backgroundColor: theme.colorMode === "dark" ? "rgba(21, 128, 61, 0.78)" : "rgba(220, 252, 231, 0.92)",
+      borderColor: theme.colorMode === "dark" ? "rgba(187, 247, 208, 0.36)" : "rgba(34, 197, 94, 0.34)",
+    };
+  }
+
+  if (status === "partial_failed") {
+    return {
+      color: theme.colorMode === "dark" ? "#FEF3C7" : "#8A4B08",
+      backgroundColor: theme.colorMode === "dark" ? "rgba(180, 83, 9, 0.78)" : "rgba(254, 243, 199, 0.94)",
+      borderColor: theme.colorMode === "dark" ? "rgba(253, 230, 138, 0.38)" : "rgba(245, 158, 11, 0.36)",
+    };
+  }
+
+  if (status === "failed") {
+    return {
+      color: theme.colorMode === "dark" ? "#FFE4E6" : "#9F1239",
+      backgroundColor: theme.colorMode === "dark" ? "rgba(190, 18, 60, 0.8)" : "rgba(255, 228, 230, 0.94)",
+      borderColor: theme.colorMode === "dark" ? "rgba(251, 113, 133, 0.4)" : "rgba(244, 63, 94, 0.36)",
+    };
+  }
+
+  return {
+    color: theme.accentText,
+    backgroundColor: hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.68 : 0.16),
+    borderColor: theme.border,
   };
 }
 

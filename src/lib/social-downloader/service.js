@@ -168,6 +168,7 @@ export async function getZipFile(requestId, options = {}) {
 export async function getProfileZipFile(requestId, options = {}) {
   const cache = getCacheStore();
   const settings = getSocialDownloaderSettings();
+  const onPostProgress = typeof options.onPostProgress === "function" ? options.onPostProgress : null;
   const profileRecord = await cache.getRecord(requestId);
 
   if (!isUsableCachedProfileRecord(profileRecord)) {
@@ -185,25 +186,64 @@ export async function getProfileZipFile(requestId, options = {}) {
     const entries = [];
     const postEntryResults = new Array(selectedPosts.length);
     const postTasks = selectedPosts.map((post, postIndex) => async () => {
-      const resolved = await resolveUrl(post.canonical_url);
+      onPostProgress?.({
+        post,
+        post_id: post.id,
+        post_index: postIndex,
+        status: "downloading",
+        message: "正在下载",
+      });
 
-      if (!resolved?.request_id || resolved?.mode === "profile") {
+      try {
+        const resolved = await resolveUrl(post.canonical_url);
+
+        if (!resolved?.request_id || resolved?.mode === "profile") {
+          postEntryResults[postIndex] = [];
+          onPostProgress?.({
+            post,
+            post_id: post.id,
+            post_index: postIndex,
+            status: "failed",
+            message: "帖子解析失败",
+          });
+          return;
+        }
+
+        const postRecord = await cache.getRecord(resolved.request_id);
+        const postFolder = profileZipPostFolderName(postIndex, post);
+        const postEntries = [];
+
+        for (const asset of postRecord.assets) {
+          postEntries.push({
+            name: `${filenameBase}/${postFolder}/${asset.filename}`,
+            path: await cache.assetPath(postRecord, asset),
+          });
+        }
+
+        postEntryResults[postIndex] = postEntries;
+        onPostProgress?.({
+          post,
+          post_id: post.id,
+          post_index: postIndex,
+          status: isPartiallyDownloadedPostRecord(postRecord) ? "partial_failed" : "success",
+          asset_count: postRecord.assets.length,
+          expected_asset_count: Number(postRecord.asset_count) || postRecord.assets.length,
+          message: isPartiallyDownloadedPostRecord(postRecord) ? "部分资源失败" : "下载成功",
+        });
+      } catch (error) {
         postEntryResults[postIndex] = [];
+        onPostProgress?.({
+          post,
+          post_id: post.id,
+          post_index: postIndex,
+          status: "failed",
+          message: "整帖下载失败",
+          error: error instanceof AppError
+            ? { code: error.code, message: error.message, status: error.status }
+            : { message: error?.message || "下载失败" },
+        });
         return;
       }
-
-      const postRecord = await cache.getRecord(resolved.request_id);
-      const postFolder = profileZipPostFolderName(postIndex, post);
-      const postEntries = [];
-
-      for (const asset of postRecord.assets) {
-        postEntries.push({
-          name: `${filenameBase}/${postFolder}/${asset.filename}`,
-          path: await cache.assetPath(postRecord, asset),
-        });
-      }
-
-      postEntryResults[postIndex] = postEntries;
     });
 
     await runConcurrent(postTasks, settings.profileZipConcurrency);
@@ -403,6 +443,7 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
       created_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
       assets: downloadedAssets,
+      asset_count: parsedAssets.length,
       metrics: normalizedMetrics,
       post_info: createPostInfo(postInfo, {
         metrics: normalizedMetrics,
@@ -523,6 +564,13 @@ function isUsableCachedRecord(record, normalized) {
   }
 
   return Number(record.media_version || 0) >= mediaCacheVersion;
+}
+
+function isPartiallyDownloadedPostRecord(record) {
+  const expectedAssetCount = Number(record?.asset_count) || 0;
+  const downloadedAssetCount = Array.isArray(record?.assets) ? record.assets.length : 0;
+
+  return expectedAssetCount > 0 && downloadedAssetCount > 0 && downloadedAssetCount < expectedAssetCount;
 }
 
 function isUsableCachedProfileRecord(record, normalized = null) {

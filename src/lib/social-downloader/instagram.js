@@ -388,11 +388,23 @@ async function collectInstagramPostSources(normalized, settings, options = {}) {
 }
 
 export async function resolveInstagramProfile(normalized, settings) {
-  await ensureInstagramNetwork(settings);
-
   const fallbackHandle = normalizeCreatorHandle(normalized?.creator_handle);
-  const html = await fetchPublicPage(normalized.canonical_url, settings);
-  const firstAttempt = await resolveInstagramProfileFromHtml(html, fallbackHandle, settings);
+  const attempts = [
+    await collectInstagramProfileSources(normalized, fallbackHandle, settings, {
+      includeCookie: false,
+    }),
+  ];
+  let firstAttempt = mergeInstagramProfileAttempts(...attempts);
+  const shouldTryCookie = instagramCookieHeader(settings) && (
+    firstAttempt.posts.length === 0 || shouldEnhanceInstagramProfileSnapshot(firstAttempt)
+  );
+
+  if (shouldTryCookie) {
+    attempts.push(await collectInstagramProfileSources(normalized, fallbackHandle, settings, {
+      includeCookie: true,
+    }));
+    firstAttempt = mergeInstagramProfileAttempts(...attempts);
+  }
 
   if (firstAttempt.posts.length > 0 && !shouldEnhanceInstagramProfileSnapshot(firstAttempt)) {
     return firstAttempt;
@@ -435,6 +447,22 @@ export async function resolveInstagramProfile(normalized, settings) {
   throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有在这个 Instagram 主页里发现可下载的帖子。", 404);
 }
 
+async function collectInstagramProfileSources(normalized, fallbackHandle, settings, requestOptions = {}) {
+  let html = "";
+  const profileErrors = [];
+
+  try {
+    html = await fetchPublicPage(normalized.canonical_url, settings, requestOptions);
+  } catch (error) {
+    profileErrors.push(error);
+  }
+
+  return await resolveInstagramProfileFromHtml(html, fallbackHandle, settings, {
+    preserveErrors: profileErrors,
+    requestOptions,
+  });
+}
+
 async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, options = {}) {
   const htmlProfile = parseInstagramProfileFromHtml(html, fallbackHandle);
   const username = normalizeCreatorHandle(htmlProfile.username || fallbackHandle);
@@ -449,7 +477,7 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
 
   if (username) {
     try {
-      apiUser = await requestInstagramWebProfileInfo(username, settings);
+      apiUser = await requestInstagramWebProfileInfo(username, settings, options.requestOptions);
     } catch (error) {
       profileErrors.push(error);
       apiUser = null;
@@ -474,7 +502,11 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
 
   if (!userId && initialPosts.length > 0) {
     try {
-      userId = await requestInstagramUserIdFromPostShortcode(initialPosts[0].shortcode, settings);
+      userId = await requestInstagramUserIdFromPostShortcode(
+        initialPosts[0].shortcode,
+        settings,
+        options.requestOptions,
+      );
     } catch (error) {
       profileErrors.push(error);
     }
@@ -482,7 +514,12 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
 
   if (!userId && initialPosts.length > 0) {
     try {
-      userId = await requestInstagramUserIdFromProfilePostCandidates(initialPosts, username, settings);
+      userId = await requestInstagramUserIdFromProfilePostCandidates(
+        initialPosts,
+        username,
+        settings,
+        options.requestOptions,
+      );
     } catch (error) {
       profileErrors.push(error);
     }
@@ -493,6 +530,7 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
       feedPage = await requestInstagramProfileFeedPosts(userId, settings, {
         creatorHandle: username || mergedProfile.username,
         initialShortcodes: initialPosts.map((post) => post.shortcode),
+        requestOptions: options.requestOptions,
       });
     } catch (error) {
       profileErrors.push(error);
@@ -527,14 +565,14 @@ async function resolveInstagramProfileFromHtml(html, fallbackHandle, settings, o
   };
 }
 
-async function requestInstagramUserIdFromPostShortcode(shortcode, settings) {
+async function requestInstagramUserIdFromPostShortcode(shortcode, settings, requestOptions = {}) {
   const safeShortcode = cleanSingleLineText(shortcode, { maxLength: 80 });
 
   if (!SHORTCODE_RE.test(safeShortcode)) {
     return "";
   }
 
-  const mediaId = await getMediaId(safeShortcode, settings);
+  const mediaId = await getMediaId(safeShortcode, settings, requestOptions);
 
   if (!mediaId) {
     return "";
@@ -546,7 +584,7 @@ async function requestInstagramUserIdFromPostShortcode(shortcode, settings) {
     return mediaIdUserId;
   }
 
-  const mediaInfo = await requestMobileMediaInfo(mediaId, settings);
+  const mediaInfo = await requestMobileMediaInfo(mediaId, settings, requestOptions);
 
   return pickSingleLineText(
     mediaInfo?.user?.pk,
@@ -556,7 +594,12 @@ async function requestInstagramUserIdFromPostShortcode(shortcode, settings) {
   );
 }
 
-async function requestInstagramUserIdFromProfilePostCandidates(posts, expectedHandle, settings) {
+async function requestInstagramUserIdFromProfilePostCandidates(
+  posts,
+  expectedHandle,
+  settings,
+  requestOptions = {},
+) {
   const handle = normalizeCreatorHandle(expectedHandle);
   const knownShortcodes = new Set(
     (Array.isArray(posts) ? posts : [])
@@ -568,7 +611,7 @@ async function requestInstagramUserIdFromProfilePostCandidates(posts, expectedHa
     let page = null;
 
     try {
-      page = await requestInstagramProfileFeedPage(userId, settings);
+      page = await requestInstagramProfileFeedPage(userId, settings, "", requestOptions);
     } catch {
       page = null;
     }
@@ -1063,7 +1106,7 @@ function extractInstagramProfileHandle(parts) {
   return candidate;
 }
 
-async function requestInstagramWebProfileInfo(username, settings) {
+async function requestInstagramWebProfileInfo(username, settings, requestOptions = {}) {
   const urls = [
     new URL("https://www.instagram.com/api/v1/users/web_profile_info/"),
     new URL("https://i.instagram.com/api/v1/users/web_profile_info/"),
@@ -1084,6 +1127,7 @@ async function requestInstagramWebProfileInfo(username, settings) {
               "x-requested-with": "XMLHttpRequest",
             },
             settings,
+            requestOptions,
           ),
           cache: "no-store",
         },
@@ -1128,7 +1172,12 @@ async function requestInstagramProfileFeedPosts(userId, settings, options = {}) 
   let moreAvailable = false;
 
   while (posts.length < limit) {
-    const page = await requestInstagramProfileFeedPage(userId, settings, cursor);
+    const page = await requestInstagramProfileFeedPage(
+      userId,
+      settings,
+      cursor,
+      options.requestOptions,
+    );
 
     if (!page || !page.items.length) {
       cursor = "";
@@ -1180,7 +1229,7 @@ export async function resolveInstagramProfilePostsPage(options = {}, settings = 
   let userId = pickSingleLineText(options.userId);
 
   if (!userId && username) {
-    const apiUser = await requestInstagramWebProfileInfo(username, settings);
+    const apiUser = await requestInstagramWebProfileInfoAnonymousFirst(username, settings);
     userId = pickSingleLineText(apiUser?.id, apiUser?.pk);
   }
 
@@ -1188,7 +1237,7 @@ export async function resolveInstagramProfilePostsPage(options = {}, settings = 
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "暂时无法读取这个 Instagram 主页的下一页帖子。", 404);
   }
 
-  const page = await requestInstagramProfileFeedPosts(userId, settings, {
+  const page = await requestInstagramProfileFeedPostsAnonymousFirst(userId, settings, {
     cursor: options.cursor,
     creatorHandle: username,
     initialShortcodes: options.initialShortcodes,
@@ -1203,7 +1252,66 @@ export async function resolveInstagramProfilePostsPage(options = {}, settings = 
   };
 }
 
-async function requestInstagramProfileFeedPage(userId, settings, cursor = "") {
+async function requestInstagramWebProfileInfoAnonymousFirst(username, settings) {
+  let anonymousError = null;
+
+  try {
+    const user = await requestInstagramWebProfileInfo(username, settings, { includeCookie: false });
+
+    if (user || !instagramCookieHeader(settings)) {
+      return user;
+    }
+  } catch (error) {
+    anonymousError = error;
+  }
+
+  if (instagramCookieHeader(settings)) {
+    return await requestInstagramWebProfileInfo(username, settings, { includeCookie: true });
+  }
+
+  if (anonymousError) {
+    throw anonymousError;
+  }
+
+  return null;
+}
+
+async function requestInstagramProfileFeedPostsAnonymousFirst(userId, settings, options = {}) {
+  let anonymousError = null;
+
+  try {
+    const page = await requestInstagramProfileFeedPosts(userId, settings, {
+      ...options,
+      requestOptions: { includeCookie: false },
+    });
+
+    if (page.posts.length > 0 || page.nextCursor || !instagramCookieHeader(settings)) {
+      return page;
+    }
+  } catch (error) {
+    anonymousError = error;
+  }
+
+  if (instagramCookieHeader(settings)) {
+    return await requestInstagramProfileFeedPosts(userId, settings, {
+      ...options,
+      requestOptions: { includeCookie: true },
+    });
+  }
+
+  if (anonymousError) {
+    throw anonymousError;
+  }
+
+  return {
+    posts: [],
+    nextCursor: "",
+    moreAvailable: false,
+    userId,
+  };
+}
+
+async function requestInstagramProfileFeedPage(userId, settings, cursor = "", requestOptions = {}) {
   const url = new URL(`https://i.instagram.com/api/v1/feed/user/${encodeURIComponent(userId)}/`);
 
   url.searchParams.set("count", String(PROFILE_PAGE_SIZE));
@@ -1215,7 +1323,7 @@ async function requestInstagramProfileFeedPage(userId, settings, cursor = "") {
   const response = await fetchWithTimeout(
     url,
     {
-      headers: instagramRequestHeaders(MOBILE_HEADERS, settings),
+      headers: instagramRequestHeaders(MOBILE_HEADERS, settings, requestOptions),
       cache: "no-store",
     },
     settings.httpTimeoutMs,

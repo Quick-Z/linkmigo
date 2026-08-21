@@ -9,3 +9,4 @@ logs
 docs
 *.tar
 *.tar.gz
+dist/docker-images/

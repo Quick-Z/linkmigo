@@ -14,6 +14,7 @@ import {
   extractEmbeddedJsonObjects,
   fetchWithTimeout,
   firstPresentInt,
+  getProxyUrl,
   htmlUnescape,
   metaContents,
   optionalInt,
@@ -3460,6 +3461,7 @@ async function fetchRenderedInstagramHtml(shortcode, settings) {
         "--headless=new",
         "--disable-gpu",
         "--no-sandbox",
+        ...chromeProxyArgs(),
         "--dump-dom",
         "--virtual-time-budget=7000",
         `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/`,
@@ -3524,6 +3526,7 @@ async function fetchScrolledRenderedInstagramProfileHtml(chromePath, profileUrl,
         "--disable-extensions",
         "--mute-audio",
         "--remote-allow-origins=*",
+        ...chromeProxyArgs(),
         `--remote-debugging-port=${port}`,
         `--user-data-dir=${userDataDir}`,
         "about:blank",
@@ -3618,6 +3621,7 @@ async function fetchDumpedRenderedInstagramProfileHtml(chromePath, profileUrl, t
         "--headless=new",
         "--disable-gpu",
         "--no-sandbox",
+        ...chromeProxyArgs(),
         "--dump-dom",
         "--virtual-time-budget=9000",
         profileUrl,
@@ -4067,6 +4071,12 @@ function resolveChromePath() {
     candidate.length > 0 &&
     existsSync(candidate),
   ) || "";
+}
+
+function chromeProxyArgs() {
+  const proxyUrl = getProxyUrl();
+
+  return proxyUrl ? [`--proxy-server=${proxyUrl}`] : [];
 }
 
 function instagramUpgradeCandidatesFromText(text) {

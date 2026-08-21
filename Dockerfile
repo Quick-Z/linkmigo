@@ -16,7 +16,7 @@ FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
 
 ARG APT_MIRROR=
-ARG INSTALL_CHROMIUM=0
+ARG INSTALL_CHROMIUM=1
 
 RUN if [ -n "$APT_MIRROR" ]; then \
       mirror="${APT_MIRROR%/}"; \
@@ -40,6 +40,7 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV YTDL_NO_DEBUG_FILE=1
 ENV SOCIAL_CACHE_DIR=/data/social-downloader
+ENV CHROME_PATH=/usr/bin/chromium
 
 RUN mkdir -p /data/social-downloader /app/logs && chown -R node:node /data /app/logs
 

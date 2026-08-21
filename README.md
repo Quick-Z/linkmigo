@@ -195,7 +195,7 @@ npm run docker:buildx -- --image 你的DockerHub用户名/linkmigo --tags "0.1.0
 linux/amd64,linux/arm64
 ```
 
-默认 Docker 镜像不内置 Chromium，避免构建时通过 apt 下载大量浏览器依赖导致失败。少数平台的渲染兜底能力会在容器内不可用，但主流程可以稳定打包和部署。如果确实需要内置 Chromium，可以显式开启：
+默认 Docker 镜像内置 Chromium，用于 Instagram 主页等需要浏览器渲染的解析兜底。构建时可以指定 Debian 镜像源以提高 Chromium 依赖下载稳定性：
 
 ```bash
 npm run docker:buildx -- --image 你的DockerHub用户名/linkmigo --tags "latest" --install-chromium --apt-mirror http://mirrors.ustc.edu.cn

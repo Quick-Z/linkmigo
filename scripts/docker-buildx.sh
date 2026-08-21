@@ -14,7 +14,7 @@ Options:
   --platforms <list>    Target platforms. Default: DOCKER_PLATFORMS or linux/amd64,linux/arm64
   --builder <name>      buildx builder name. Default: DOCKER_BUILDER or linkmigo-builder
   --base-image <image>  Node base image. Default: DOCKER_BASE_IMAGE or node:22-bookworm-slim
-  --install-chromium    Include Debian chromium in the image. Disabled by default.
+  --install-chromium    Include Debian Chromium in the image. Enabled by default.
   --apt-mirror <url>    Optional Debian mirror root, such as http://mirrors.ustc.edu.cn
   --registry-mirror <url>
                        Optional Docker Hub registry mirror for BuildKit.
@@ -48,7 +48,7 @@ TAGS="${DOCKER_TAGS:-${DOCKER_TAG:-latest}}"
 PLATFORMS="${DOCKER_PLATFORMS:-linux/amd64,linux/arm64}"
 BUILDER="${DOCKER_BUILDER:-linkmigo-builder}"
 BASE_IMAGE="${DOCKER_BASE_IMAGE:-node:22-bookworm-slim}"
-INSTALL_CHROMIUM="${INSTALL_CHROMIUM:-0}"
+INSTALL_CHROMIUM="${INSTALL_CHROMIUM:-1}"
 APT_MIRROR="${APT_MIRROR:-}"
 REGISTRY_MIRROR="${DOCKER_REGISTRY_MIRROR:-}"
 PUSH="${DOCKER_PUSH:-1}"

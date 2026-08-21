@@ -20,7 +20,7 @@ Options:
   --tags <tags>         Space-separated tags. Default: DOCKER_TAGS, DOCKER_TAG, or latest
   --platforms <list>    Target platforms. Default: linux/amd64,linux/arm64
   --base-image <image>  Node base image. Default: DOCKER_BASE_IMAGE or node:22-bookworm-slim
-  --install-chromium    Include Debian chromium in the image. Disabled by default.
+  --install-chromium    Include Debian Chromium in the image. Enabled by default.
   --apt-mirror <url>    Optional Debian mirror root, such as http://mirrors.ustc.edu.cn
   --proxy <url>         Proxy build args for npm and apt inside Dockerfile RUN steps.
   --no-proxy <list>     Comma-separated proxy bypass list.
@@ -48,7 +48,7 @@ IMAGE="${DOCKER_IMAGE:-k21vin/linkmigo}"
 TAGS="${DOCKER_TAGS:-${DOCKER_TAG:-latest}}"
 PLATFORMS="${DOCKER_PLATFORMS:-linux/amd64,linux/arm64}"
 BASE_IMAGE="${DOCKER_BASE_IMAGE:-node:22-bookworm-slim}"
-INSTALL_CHROMIUM="${INSTALL_CHROMIUM:-0}"
+INSTALL_CHROMIUM="${INSTALL_CHROMIUM:-1}"
 APT_MIRROR="${APT_MIRROR:-}"
 PROXY="${DOCKER_PROXY:-}"
 NO_PROXY_VALUE="${DOCKER_NO_PROXY:-}"

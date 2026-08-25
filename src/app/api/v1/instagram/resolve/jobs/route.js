@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AppError, ErrorCode, errorPayload, getErrorDetail } from "@/lib/social-downloader/errors";
 import { startResolveJob } from "@/lib/social-downloader/jobs";
 import { writeUserActionLog } from "@/lib/user-action-logger";
+import { ensureXiaohongshuSession } from "@/lib/social-downloader/xiaohongshu-sessions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -100,6 +101,7 @@ export async function POST(request) {
   const job = startResolveJob(url, {
     callbackUrl,
     publicBaseUrl: resolvePublicBaseUrl(request),
+    session_id: ensureXiaohongshuSession(request),
   });
 
   await writeUserActionLog(

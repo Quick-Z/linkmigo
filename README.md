@@ -312,6 +312,8 @@ XHS_COOKIE='a1=...; web_session=...; webId=...'
 
 如果同一个账号在浏览器里也打不开该笔记，服务端无法解析，这是平台对该笔记本身的访问限制。
 
+小红书也支持在页面中点击“小红书扫码登录”。二维码登录只绑定当前浏览器：浏览器保存的是 LinkMigo 会话 Cookie，实际的小红书登录 Cookie 保存在服务端内存中，不会写入前端 `localStorage`，也不会在用户之间共享。扫码登录依赖服务器上可用的 Chromium/Google Chrome；如果服务器没有浏览器，可继续使用上面的环境变量方式。
+
 Reddit 现在经常拒绝未授权的 `.json` 公开请求。建议创建一个 Reddit app，并在 `.env.local` 配置 OAuth client id 和唯一 User-Agent：
 
 1. 打开 https://www.reddit.com/prefs/apps 并登录 Reddit。

@@ -6,12 +6,14 @@ import { CacheStore } from "./cache";
 import { AppError, ErrorCode } from "./errors";
 import { downloadMedia, estimateMediaDownloadSize, extensionForAsset } from "./downloader";
 import { resolveInstagramProfile, resolveInstagramProfilePostsPage } from "./instagram";
+import { resolveXiaohongshuProfile, resolveXiaohongshuProfilePostsPage } from "./xiaohongshu";
 import { getSocialDownloaderSettings } from "./settings";
 import { createPostInfo } from "./post-info";
 import { normalizeSocialUrl, resolveSocialPost } from "./social";
 import { safeFilenamePart } from "./shared";
 import { buildZipFile } from "./zip";
 import { writeUserActionLog } from "../user-action-logger";
+import { xiaohongshuSessionCookie } from "./xiaohongshu-sessions";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
@@ -44,7 +46,10 @@ export function getCacheStore() {
 
 export async function resolveUrl(rawUrl, options = {}) {
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
-  const settings = getSocialDownloaderSettings();
+  const baseSettings = getSocialDownloaderSettings();
+  const settings = options.sessionId
+    ? { ...baseSettings, xiaohongshuCookie: options.xiaohongshuCookie || xiaohongshuSessionCookie(options.sessionId) || "" }
+    : baseSettings;
   const cache = getCacheStore();
   const normalized = normalizeSocialUrl(rawUrl);
 
@@ -58,8 +63,9 @@ export async function resolveUrl(rawUrl, options = {}) {
 
   let cached = await cache.findByCanonical(normalized.canonical_url);
 
-  if (normalized.platform === "instagram" && normalized.mode === "profile") {
-    if (cached && isUsableCachedProfileRecord(cached, normalized)) {
+  if (normalized.mode === "profile") {
+    const sessionMatches = normalized.platform !== "xiaohongshu" || cached?.session_id === (options.sessionId || "");
+    if (cached && sessionMatches && isUsableCachedProfileRecord(cached, normalized)) {
       cached = await cache.touchRecord(cached);
 
       onProgress?.({
@@ -73,12 +79,15 @@ export async function resolveUrl(rawUrl, options = {}) {
       return resolveProfileResponse(cached);
     }
 
-    const parsedProfile = await resolveInstagramProfile(normalized, settings);
+    const parsedProfile = normalized.platform === "xiaohongshu"
+      ? await resolveXiaohongshuProfile(normalized, settings)
+      : await resolveInstagramProfile(normalized, settings);
     const profileRecord = await saveProfileRecord({
       cache,
       normalized,
       parsedProfile,
       settings,
+      sessionId: options.sessionId,
     });
 
     onProgress?.({
@@ -92,7 +101,8 @@ export async function resolveUrl(rawUrl, options = {}) {
     return resolveProfileResponse(profileRecord);
   }
 
-  if (cached && isUsableCachedRecord(cached, normalized)) {
+  const cachedSessionMatches = normalized.platform !== "xiaohongshu" || cached?.session_id === (options.sessionId || "");
+  if (cached && cachedSessionMatches && isUsableCachedRecord(cached, normalized)) {
     cached = await cache.touchRecord(cached);
 
     onProgress?.({
@@ -121,6 +131,7 @@ export async function resolveUrl(rawUrl, options = {}) {
     creatorHandle: parsedPost.creator_handle,
     postInfo: parsedPost.post_info,
     onProgress,
+    sessionId: options.sessionId,
   });
 
   return resolveResponse(record);
@@ -195,7 +206,13 @@ export async function getProfileZipFile(requestId, options = {}) {
       });
 
       try {
-        const resolved = await resolveUrl(post.canonical_url);
+        const normalizedPost = normalizeSocialUrl(post.canonical_url);
+        if (normalizedPost.mode === "profile") {
+          throw new AppError(ErrorCode.UNSUPPORTED_URL, "主页帖子链接无效，无法作为单帖下载。", 400);
+        }
+        const resolved = await resolveUrl(post.canonical_url, {
+          sessionId: profileRecord.session_id || "",
+        });
 
         if (!resolved?.request_id || resolved?.mode === "profile") {
           postEntryResults[postIndex] = [];
@@ -266,8 +283,11 @@ export async function getProfileZipFile(requestId, options = {}) {
 
 export async function getProfilePostsPage(requestId, options = {}) {
   const cache = getCacheStore();
-  const settings = getSocialDownloaderSettings();
   const profileRecord = await cache.getRecord(requestId);
+  const baseSettings = getSocialDownloaderSettings();
+  const settings = profileRecord.session_id
+    ? { ...baseSettings, xiaohongshuCookie: xiaohongshuSessionCookie(profileRecord.session_id) || "" }
+    : baseSettings;
 
   if (!isUsableCachedProfileRecord(profileRecord)) {
     throw new AppError(ErrorCode.CACHE_EXPIRED, "主页帖子列表缓存不存在或已过期。", 404);
@@ -282,11 +302,14 @@ export async function getProfilePostsPage(requestId, options = {}) {
     return cachedPage;
   }
 
-  const livePage = await resolveInstagramProfilePostsPage(
+  const livePage = await (profileRecord.platform === "xiaohongshu"
+    ? resolveXiaohongshuProfilePostsPage
+    : resolveInstagramProfilePostsPage)(
     {
       cursor: cachedPage.page.live_cursor,
       creatorHandle: profileRecord.creator_handle || profileRecord.profile?.username,
       userId: profileRecord.profile_pagination?.user_id || profileRecord.profile?.user_id,
+      pageUrl: profileRecord.canonical_url,
       initialShortcodes: profileRecord.posts.map((post) => post.shortcode),
       limit: clampProfilePostsLimit(options.limit),
     },
@@ -298,7 +321,7 @@ export async function getProfilePostsPage(requestId, options = {}) {
     posts: mergeProfilePostsForCache(profileRecord.posts, livePosts),
     profile_pagination: {
       ...(profileRecord.profile_pagination || {}),
-      source: "instagram_mobile_feed",
+      source: profileRecord.platform === "xiaohongshu" ? "xiaohongshu_profile_api" : "instagram_mobile_feed",
       user_id: livePage.user_id || profileRecord.profile_pagination?.user_id || profileRecord.profile?.user_id || "",
       next_cursor: livePage.next_cursor || "",
       has_more: Boolean(livePage.has_more && livePage.next_cursor),
@@ -313,7 +336,7 @@ export async function getProfilePostsPage(requestId, options = {}) {
   });
 }
 
-async function downloadAndCacheAssets({ settings, cache, normalized, parsedAssets, metrics, creatorHandle, postInfo, onProgress }) {
+async function downloadAndCacheAssets({ settings, cache, normalized, parsedAssets, metrics, creatorHandle, postInfo, onProgress, sessionId = "" }) {
   const requestId = crypto.randomUUID().replaceAll("-", "");
   const recordDir = cache.recordDir(requestId, normalized.platform);
   const downloadedAssets = [];
@@ -439,6 +462,7 @@ async function downloadAndCacheAssets({ settings, cache, normalized, parsedAsset
       shortcode: normalized.shortcode,
       kind: normalized.kind,
       platform: normalized.platform,
+      session_id: sessionId || "",
       creator_handle: creatorHandle || "",
       created_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
@@ -555,7 +579,7 @@ function emitDownloadProgress({
 }
 
 function isUsableCachedRecord(record, normalized) {
-  if (record?.record_type === "instagram_profile") {
+  if (record?.kind === "profile" || String(record?.record_type || "").endsWith("_profile")) {
     return false;
   }
 
@@ -574,7 +598,7 @@ function isPartiallyDownloadedPostRecord(record) {
 }
 
 function isUsableCachedProfileRecord(record, normalized = null) {
-  if (!record || record.record_type !== "instagram_profile") {
+  if (!record || !String(record.record_type || "").endsWith("_profile")) {
     return false;
   }
 
@@ -583,6 +607,10 @@ function isUsableCachedProfileRecord(record, normalized = null) {
   }
 
   if (normalized?.canonical_url && record.canonical_url !== normalized.canonical_url) {
+    return false;
+  }
+
+  if (normalized?.platform && record.platform !== normalized.platform) {
     return false;
   }
 
@@ -622,7 +650,7 @@ function resolveProfileResponse(record) {
     canonical_url: record.canonical_url,
     shortcode: "",
     kind: "profile",
-    platform: "instagram",
+    platform: record.platform ?? "instagram",
     creator_handle: record.creator_handle || record.profile?.username || "",
     profile: record.profile,
     posts: page.posts,
@@ -646,7 +674,7 @@ function profilePostsPage(record, options = {}) {
       : "";
   const hasLiveMore = Boolean(record?.profile_pagination?.has_more && (record?.profile_pagination?.next_cursor || cursor.type === "live"));
   const paginationSource = String(record?.profile_pagination?.source || "");
-  const isSnapshotSource = paginationSource !== "instagram_mobile_feed";
+  const isSnapshotSource = !["instagram_mobile_feed", "xiaohongshu_profile_api"].includes(paginationSource);
   const knownPostCount = Number(record?.profile?.post_count) || 0;
   const snapshotIsPartial = !hasCachedMore && !hasLiveMore && (
     knownPostCount > safePosts.length ||
@@ -850,7 +878,7 @@ function assetSelectionHash(assetIds) {
   return crypto.createHash("sha1").update(assetIds.join(",")).digest("hex").slice(0, 12);
 }
 
-async function saveProfileRecord({ cache, normalized, parsedProfile, settings }) {
+async function saveProfileRecord({ cache, normalized, parsedProfile, settings, sessionId = "" }) {
   const requestId = crypto.randomUUID().replaceAll("-", "");
   const now = new Date();
   const expiresAt = new Date(now.getTime() + settings.cacheTtlSeconds * 1000);
@@ -859,12 +887,13 @@ async function saveProfileRecord({ cache, normalized, parsedProfile, settings })
   const posts = normalizeProfilePostsForCache(parsedProfile.posts);
   const record = {
     request_id: requestId,
-    record_type: "instagram_profile",
+    record_type: `${normalized.platform}_profile`,
     profile_cache_version: profileCacheVersion,
     canonical_url: normalized.canonical_url,
     shortcode: "",
     kind: "profile",
     platform: normalized.platform,
+    session_id: sessionId || "",
     creator_handle: creatorHandle,
     created_at: now.toISOString(),
     expires_at: expiresAt.toISOString(),

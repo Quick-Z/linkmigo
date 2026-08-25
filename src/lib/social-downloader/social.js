@@ -76,6 +76,10 @@ export function normalizeSocialUrl(rawUrl) {
 }
 
 export async function resolveSocialPost(normalized, settings) {
+  if (normalized?.mode === "profile") {
+    throw new AppError(ErrorCode.UNSUPPORTED_URL, "这是小红书博主主页链接，请使用主页列表中的帖子进行下载。", 400);
+  }
+
   const handler = PLATFORM_HANDLERS.find((item) => item.platform === normalized.platform);
 
   if (!handler) {

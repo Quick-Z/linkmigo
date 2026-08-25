@@ -54,7 +54,7 @@ const XIAOHONGSHU_MOBILE_HEADERS = {
   accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
 const XIAOHONGSHU_RESTRICTED_HINT =
-  "已尝试桌面公开页和移动 H5 公开页。如果浏览器里能打开这条笔记，请在 .env.local 配置 SOCIAL_XIAOHONGSHU_COOKIE 为已登录小红书账号的 Cookie，重启服务后再试；如果浏览器账号也打不开，说明该笔记已被小红书限制访问或删除。";
+  "已尝试桌面公开页和移动 H5 公开页。如果浏览器里能打开这条笔记，请在页面点击“小红书扫码登录”，或在 .env.local 配置 SOCIAL_XIAOHONGSHU_COOKIE；如果浏览器账号也打不开，说明该笔记已被小红书限制访问或删除。";
 const XIAOHONGSHU_CURL_FALLBACK_ERRORS = [
   "ERR_HTTP2_STREAM_ERROR",
   "terminated",
@@ -67,6 +67,7 @@ const XIAOHONGSHU_COMMENT_PAGE_PATHS = [
   "/api/sns/web/v2/comment/page",
 ];
 const XIAOHONGSHU_COMMENT_SUB_PAGE_PATH = "/api/sns/web/v2/comment/sub/page";
+const XIAOHONGSHU_PROFILE_POSTS_PATH = "/api/sns/web/v1/user_posted";
 const XIAOHONGSHU_COMMENT_IMAGE_FORMATS = "jpg,webp,avif";
 const XIAOHONGSHU_RENDERED_COMMENT_BUDGET_MS = 12_000;
 
@@ -81,6 +82,27 @@ export function normalizeXiaohongshuUrl(parsed) {
       canonical_url: cleanUrl(parsed),
       shortcode: parts.join("-"),
       kind: "short",
+      platform: "xiaohongshu",
+    };
+  }
+
+  if (parts[0] === "user" && parts[1] === "profile" && parts[2]) {
+    const canonical = new URL(`https://www.xiaohongshu.com/user/profile/${parts[2]}`);
+
+    for (const key of ["xsec_token", "xsec_source"]) {
+      const value = parsed.searchParams.get(key);
+
+      if (value) {
+        canonical.searchParams.set(key, value);
+      }
+    }
+
+    return {
+      canonical_url: canonical.toString(),
+      creator_handle: parts[2],
+      profile_id: parts[2],
+      kind: "profile",
+      mode: "profile",
       platform: "xiaohongshu",
     };
   }
@@ -108,11 +130,198 @@ export function normalizeXiaohongshuUrl(parsed) {
       canonical_url: canonical.toString(),
       shortcode: noteId,
       kind: "note",
+      mode: "post",
       platform: "xiaohongshu",
     };
   }
 
-  throw new AppError(ErrorCode.UNSUPPORTED_URL, "仅支持小红书笔记或分享短链接。", 400);
+      throw new AppError(ErrorCode.UNSUPPORTED_URL, "仅支持小红书主页、笔记或分享短链接。", 400);
+}
+
+/** Resolve the public snapshot embedded in an XHS creator profile page. */
+export async function resolveXiaohongshuProfile(normalized, settings) {
+  const pageHeaders = xiaohongshuPageHeaders(settings);
+  const response = await fetchXiaohongshuPageTextWithMobileFallback({
+    pageUrl: normalized.canonical_url,
+    pageHeaders,
+    shortcode: "",
+    settings,
+  });
+  const state = extractXiaohongshuInitialState(response.text);
+  const profileId = String(normalized.profile_id || normalized.creator_handle || "").trim();
+  const profile = xiaohongshuProfileFromState(state, profileId, response.text);
+  let posts = xiaohongshuProfilePostsFromState(state, profile, normalized.canonical_url);
+  let pagination = { source: "xiaohongshu_public_snapshot", user_id: profile.user_id || profileId, next_cursor: "", has_more: false };
+
+  if (profile.user_id) {
+    const apiPage = await requestXiaohongshuProfilePostsPage({
+      userId: profile.user_id,
+      cursor: "",
+      pageUrl: normalized.canonical_url,
+      pageText: response.text,
+      settings,
+    }).catch(() => null);
+    if (apiPage?.posts?.length) {
+      posts = xiaohongshuProfilePostsFromState({ posts: apiPage.posts }, profile, normalized.canonical_url);
+      pagination = {
+        source: "xiaohongshu_profile_api",
+        user_id: profile.user_id,
+        next_cursor: apiPage.next_cursor,
+        has_more: Boolean(apiPage.has_more && apiPage.next_cursor),
+      };
+    }
+  }
+
+  if (!posts.length) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有在这个小红书主页里发现可下载的帖子。", 404);
+  }
+
+  return {
+    mode: "profile",
+    creator_handle: profile.username || profile.user_id || profileId,
+    profile,
+    posts,
+    profile_pagination: pagination,
+  };
+}
+
+export async function resolveXiaohongshuProfilePostsPage(options = {}, settings = {}) {
+  const userId = pickSingleLineText(options.userId);
+  if (!userId) return { posts: [], user_id: "", next_cursor: "", has_more: false };
+  const page = await requestXiaohongshuProfilePostsPage({
+    userId,
+    cursor: String(options.cursor || "").replace(/^live:/, ""),
+    pageUrl: options.pageUrl || "https://www.xiaohongshu.com/",
+    pageText: options.pageText || "",
+    settings,
+  });
+  const profile = { username: options.creatorHandle || "", user_id: userId };
+  const posts = xiaohongshuProfilePostsFromState({ posts: page.posts }, profile, options.pageUrl || "https://www.xiaohongshu.com/");
+  return { posts, user_id: userId, next_cursor: page.next_cursor, has_more: page.has_more };
+}
+
+async function requestXiaohongshuProfilePostsPage({ userId, cursor, pageUrl, pageText, settings }) {
+  const url = new URL(XIAOHONGSHU_PROFILE_POSTS_PATH, "https://www.xiaohongshu.com");
+  url.searchParams.set("user_id", userId);
+  url.searchParams.set("num", "30");
+  url.searchParams.set("cursor", cursor || "");
+  url.searchParams.set("image_formats", "jpg,webp,avif");
+  try {
+    const pageParsed = new URL(pageUrl);
+    for (const key of ["xsec_token", "xsec_source"]) {
+      const value = pageParsed.searchParams.get(key);
+      if (value) url.searchParams.set(key, value);
+    }
+  } catch {}
+  const headers = await xiaohongshuCommentApiHeaders({
+    pageUrl,
+    pageText,
+    pathWithQuery: `${url.pathname}${url.search}`,
+    cookieHeader: xiaohongshuCookieHeader(settings),
+    settings,
+  });
+  const response = await fetchWithTimeout(url.toString(), { headers, cache: "no-store" }, settings.httpTimeoutMs);
+  const text = await response.text();
+  if (response.status >= 400) throw new AppError(ErrorCode.UPSTREAM_BLOCKED, `小红书主页接口返回异常状态码 ${response.status}。`, 502);
+  let data;
+  try { data = JSON.parse(text); } catch { throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "小红书主页接口没有返回 JSON。", 502); }
+  const items = Array.isArray(data?.data?.notes) ? data.data.notes : Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.notes) ? data.notes : [];
+  const nextCursor = pickSingleLineText(data?.data?.cursor, data?.data?.next_cursor, data?.cursor, data?.next_cursor);
+  return { posts: items, next_cursor: nextCursor, has_more: Boolean(data?.data?.has_more ?? data?.has_more ?? nextCursor) };
+}
+
+function xiaohongshuProfileFromState(state, profileId, html) {
+  const candidate = findXiaohongshuProfileUser(state, profileId) || {};
+  const description = pickText(metaContents(html, ["og:description", "description"]));
+  const avatar = pickSingleLineText(
+    candidate.avatar,
+    candidate.avatarUrl,
+    candidate.avatar_url,
+    candidate.image,
+    candidate.images?.[0],
+  );
+  return {
+    username: pickSingleLineText(candidate.nickname, candidate.nickName, candidate.username, candidate.userId, profileId),
+    full_name: pickSingleLineText(candidate.nickname, candidate.nickName, candidate.username, profileId),
+    biography: pickText(candidate.desc, candidate.description, candidate.bio, description),
+    avatar_url: avatar,
+    post_count: firstPresentInt(candidate.noteCount, candidate.postCount, candidate.notesCount),
+    follower_count: firstPresentInt(candidate.fans, candidate.fansCount, candidate.followerCount, candidate.followers),
+    following_count: firstPresentInt(candidate.follows, candidate.followingCount, candidate.following),
+    is_private: Boolean(candidate.private || candidate.isPrivate),
+    is_verified: Boolean(candidate.verified || candidate.isVerified),
+    user_id: pickSingleLineText(candidate.userId, candidate.user_id, candidate.id, profileId),
+  };
+}
+
+function findXiaohongshuProfileUser(value, profileId, seen = new WeakSet(), depth = 0) {
+  if (!value || typeof value !== "object" || depth > 10 || seen.has(value)) return null;
+  seen.add(value);
+  if (!Array.isArray(value)) {
+    const id = pickSingleLineText(value.userId, value.user_id, value.uid, value.id);
+    const hasName = Boolean(value.nickname || value.nickName || value.username);
+    if (hasName && (!profileId || id === profileId || value.userId === profileId || value.user_id === profileId)) return value;
+  }
+  const children = Array.isArray(value) ? value : Object.values(value);
+  for (const child of children) {
+    const found = findXiaohongshuProfileUser(child, profileId, seen, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function xiaohongshuProfilePostsFromState(state, profile, profileUrl) {
+  const posts = [];
+  const seen = new Set();
+  const token = (() => { try { return new URL(profileUrl).searchParams.get("xsec_token") || ""; } catch { return ""; } })();
+  function visit(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 12) return;
+    if (Array.isArray(value) === false && value.note && typeof value.note === "object") {
+      visit(value.note, depth + 1);
+    }
+    if (!Array.isArray(value)) {
+      const rawNote = value.note_card || value.noteCard || value.note || value;
+      const noteId = pickSingleLineText(rawNote.noteId, rawNote.note_id, rawNote.id, value.noteId, value.note_id, value.id);
+      const hasMedia = Array.isArray(rawNote.imageList) || rawNote.image_list || rawNote.video || rawNote.cover || rawNote.coverUrl || rawNote.cover_url;
+      if (noteId && /^[A-Za-z0-9_-]{8,80}$/.test(noteId) && hasMedia && !seen.has(noteId)) {
+        const note = rawNote;
+        const user = note.user || note.author || {};
+        const imageList = Array.isArray(note.imageList) ? note.imageList : Array.isArray(note.image_list) ? note.image_list : [];
+        const media = imageList[0] || note.cover || note.image || note.cover_url || {};
+        const preview = pickSingleLineText(media.url, media.originUrl, media.origin_url, media.urlPre, media.url_default, note.coverUrl, note.cover_url);
+        const body = pickText(note.desc, note.description, note.content, note.display_title);
+        const metrics = metricsFromXiaohongshu(note);
+        const taken = firstPresentInt(note.time, note.createTime, note.createdAt, note.updateTime);
+        const canonical = new URL(`https://www.xiaohongshu.com/explore/${noteId}`);
+        const noteToken = pickSingleLineText(
+          note.xsecToken,
+          note.xsec_token,
+          value.xsecToken,
+          value.xsec_token,
+          token,
+        );
+        if (noteToken) canonical.searchParams.set("xsec_token", noteToken);
+        canonical.searchParams.set("xsec_source", pickSingleLineText(note.xsecSource, note.xsec_source, value.xsecSource, value.xsec_source, "pc_feed"));
+        seen.add(noteId);
+        posts.push({
+          id: noteId,
+          shortcode: noteId,
+          canonical_url: canonical.toString(),
+          kind: String(note.type || note.noteType || note.type_name || (note.video || note.video_url ? "video" : "image")),
+          media_type: note.video || note.videoUrl ? "video" : "image",
+          preview_url: preview,
+          preview_width: firstPresentInt(media.width, media.width_px),
+          preview_height: firstPresentInt(media.height, media.height_px),
+          taken_at: taken ? new Date(taken > 1e12 ? taken : taken * 1000).toISOString() : "",
+          metrics,
+          post_info: createPostInfo({ title: pickSingleLineText(note.title, titleFromBody(body)), author: pickSingleLineText(user.nickname, user.nickName, profile.username), author_handle: pickSingleLineText(user.userId, profile.user_id, profile.username), body, metrics, tags: xiaohongshuTags(note) }, { metrics, creatorHandle: profile.username, source: metrics.source }),
+        });
+      }
+    }
+    for (const child of (Array.isArray(value) ? value : Object.values(value))) visit(child, depth + 1);
+  }
+  visit(state);
+  return posts.sort((a, b) => (Date.parse(b.taken_at) || 0) - (Date.parse(a.taken_at) || 0));
 }
 
 export async function resolveXiaohongshuPost(normalized, settings) {

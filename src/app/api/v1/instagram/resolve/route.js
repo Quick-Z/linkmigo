@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AppError, ErrorCode, errorPayload, getErrorDetail, toAppError } from "@/lib/social-downloader/errors";
 import { resolveUrl } from "@/lib/social-downloader/service";
 import { writeUserActionLog } from "@/lib/user-action-logger";
+import { ensureXiaohongshuSession } from "@/lib/social-downloader/xiaohongshu-sessions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,7 +80,7 @@ export async function POST(request) {
       request,
     );
 
-    const payload = await resolveUrl(url);
+    const payload = await resolveUrl(url, { sessionId: ensureXiaohongshuSession(request) });
 
     await writeUserActionLog(
       {

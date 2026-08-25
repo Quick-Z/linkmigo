@@ -1,7 +1,7 @@
 import { SocialDownloaderClient } from "./_components/social-downloader-client";
 import { getAppName } from "@/lib/app-config";
 
-const metadataDescription = "解析公开 Instagram、TikTok、抖音、小红书、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、Reddit、V2EX、YouTube、Pornhub 链接并展示媒体资源。";
+const metadataDescription = "解析公开 Instagram、TikTok、抖音、小红书主页与笔记、快手、AcFun、Twitter/X、Bilibili、Facebook、Pinterest、Reddit、V2EX、YouTube、Pornhub 链接并展示媒体资源。";
 
 export const dynamic = "force-dynamic";
 

@@ -971,6 +971,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   const [isProfileDownloadPending, setIsProfileDownloadPending] = useState(false);
   const [profileDownloadJob, setProfileDownloadJob] = useState(null);
   const [isLoadingMoreProfilePosts, setIsLoadingMoreProfilePosts] = useState(false);
+  const [xiaohongshuAuth, setXiaohongshuAuth] = useState({ open: false, status: "anonymous", qr_data_url: null, error: null });
   const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
   const [profilePostDetail, setProfilePostDetail] = useState({
     isOpen: false,
@@ -984,6 +985,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   const profilePostsLoadingRef = useRef(false);
   const profileDownloadPollRef = useRef(null);
   const profilePostDetailRunRef = useRef(0);
+  const xiaohongshuAuthPollRef = useRef(null);
 
   const normalizedUrl = extractUrlCandidate(url);
   const canSubmit = Boolean(normalizedUrl) && isValidHttpUrl(normalizedUrl);
@@ -1033,6 +1035,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
 
   useEffect(() => () => {
     clearProfileDownloadPolling();
+    if (xiaohongshuAuthPollRef.current) window.clearTimeout(xiaohongshuAuthPollRef.current);
   }, []);
 
   useEffect(() => {
@@ -1135,6 +1138,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     } catch (caught) {
       if (resolveRunRef.current === runId) {
         setError(getApiError(caught));
+        const errorCode = caught?.error?.code || caught?.code;
+        if (inputPlatform === "xiaohongshu" && ["LOGIN_REQUIRED", "UPSTREAM_BLOCKED"].includes(errorCode)) {
+          openXiaohongshuLogin();
+        }
       }
     } finally {
       if (resolveRunRef.current === runId) {
@@ -1142,6 +1149,49 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
         setResolveProgress(null);
       }
     }
+  }
+
+  async function openXiaohongshuLogin() {
+    setXiaohongshuAuth((current) => ({ ...current, open: true, status: "pending", error: null }));
+    try {
+      const response = await fetch("/api/v1/xiaohongshu/auth/qr", { method: "POST", cache: "no-store" });
+      const payload = await readJsonResponse(response, "二维码接口没有返回有效响应");
+      setXiaohongshuAuth({ open: true, ...payload });
+      pollXiaohongshuLogin();
+    } catch (caught) {
+      setXiaohongshuAuth({ open: true, status: "error", qr_data_url: null, error: caught?.message || "二维码生成失败" });
+    }
+  }
+
+  async function pollXiaohongshuLogin() {
+    if (xiaohongshuAuthPollRef.current) window.clearTimeout(xiaohongshuAuthPollRef.current);
+    try {
+      const response = await fetch("/api/v1/xiaohongshu/auth/status", { cache: "no-store" });
+      const payload = await readJsonResponse(response, "登录状态接口没有返回有效响应");
+      setXiaohongshuAuth((current) => ({ ...current, ...payload }));
+      if (["pending"].includes(payload.status)) {
+        xiaohongshuAuthPollRef.current = window.setTimeout(pollXiaohongshuLogin, 1500);
+      }
+    } catch {
+      xiaohongshuAuthPollRef.current = window.setTimeout(pollXiaohongshuLogin, 2500);
+    }
+  }
+
+  async function readJsonResponse(response, fallbackMessage) {
+    const text = await response.text();
+    if (!text.trim()) {
+      throw new Error(`${fallbackMessage}（HTTP ${response.status}）`);
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`${fallbackMessage}（HTTP ${response.status}）`);
+    }
+  }
+
+  async function logoutXiaohongshu() {
+    await fetch("/api/v1/xiaohongshu/auth/logout", { method: "POST", cache: "no-store" }).catch(() => {});
+    setXiaohongshuAuth({ open: false, status: "anonymous", qr_data_url: null, error: null });
   }
 
   function onUrlChange(event) {
@@ -1406,7 +1456,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
         setSelectedPostIds((current) => mergeUniqueIds(current, nextPosts.map((post) => post.id)));
       }
     } catch (caught) {
-      setError(getApiError(caught));
+      // 保留已经展示的帖子；分页失败不应把整个主页结果替换成错误页。
+      console.warn("加载主页下一页帖子失败", caught);
     } finally {
       profilePostsLoadingRef.current = false;
       setIsLoadingMoreProfilePosts(false);
@@ -1849,6 +1900,16 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                   ) : null}
 
                   <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+                    {inputPlatform === "xiaohongshu" ? (
+                      <button
+                        className={`${actionButtonBaseClass} h-11 shrink-0 px-4 text-[13px]`}
+                        onClick={openXiaohongshuLogin}
+                        style={buildSecondaryButtonStyle(inputDrivenTheme)}
+                        type="button"
+                      >
+                        {xiaohongshuAuth.status === "authenticated" ? "小红书已登录" : "小红书扫码登录"}
+                      </button>
+                    ) : null}
                     <button
                       className={`${actionButtonBaseClass} h-11 w-full min-w-[6rem] px-6 sm:w-auto`}
                       disabled={!canSubmit || isLoading}
@@ -1998,6 +2059,16 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
         </div>
       </section>
 
+      {xiaohongshuAuth.open ? (
+        <XiaohongshuLoginModal
+          auth={xiaohongshuAuth}
+          onClose={() => setXiaohongshuAuth((current) => ({ ...current, open: false }))}
+          onLogout={logoutXiaohongshu}
+          onRetry={openXiaohongshuLogin}
+          theme={inputDrivenTheme}
+        />
+      ) : null}
+
       {result && isPostInfoOpen ? (
         <PostInfoModal
           copy={copy}
@@ -2034,6 +2105,29 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
         />
       ) : null}
     </main>
+  );
+}
+
+function XiaohongshuLoginModal({ auth, onClose, onRetry, onLogout, theme }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-5 backdrop-blur-xl" onMouseDown={onClose} role="presentation">
+      <section className="grid w-[min(92vw,28rem)] gap-5 rounded-[1.5rem] border p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" style={buildResultShellStyle(theme)}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold" style={{ color: theme.titleText }}>小红书扫码登录</h2>
+            <p className="mt-1 text-sm" style={{ color: theme.mutedText }}>
+              使用小红书 App 扫描二维码。登录状态只绑定当前浏览器。
+            </p>
+          </div>
+          <button className="grid size-8 place-items-center rounded-full border" onClick={onClose} style={buildSecondaryButtonStyle(theme)} type="button">×</button>
+        </div>
+        {auth.qr_data_url ? <img alt="小红书登录二维码" className="mx-auto aspect-square w-64 rounded-xl border bg-white object-contain p-2" src={auth.qr_data_url} /> : null}
+        <div className="text-center text-sm font-semibold" style={{ color: theme.mutedText }}>
+          {auth.status === "authenticated" ? "登录成功，可以开始解析。" : auth.status === "expired" ? "二维码已过期，请重新生成。" : auth.status === "error" ? auth.error || "二维码生成失败。" : "等待扫码确认…"}
+        </div>
+        {auth.status === "authenticated" ? <button className={`${actionButtonBaseClass} h-10 px-4 text-sm`} onClick={onLogout} style={buildSecondaryButtonStyle(theme)} type="button">退出小红书登录</button> : <button className={`${actionButtonBaseClass} h-10 px-4 text-sm`} onClick={onRetry} style={buildPrimaryButtonStyle(theme, false)} type="button">重新生成二维码</button>}
+      </section>
+    </div>
   );
 }
 
@@ -2109,7 +2203,7 @@ function ProfileResultSection({
   const profile = result.profile ?? {};
   const page = result.profile_posts_page ?? {};
   const statItems = createProfileMetricItems(profile, copy);
-  const avatarUrl = instagramAvatarProxyUrl(profile.avatar_url);
+  const avatarUrl = profileImageUrl(profile.avatar_url, result.platform, "avatar");
   const totalPosts = Math.max(Number(page.total_count) || 0, result.posts.length);
 
   return (
@@ -2203,6 +2297,7 @@ function ProfileResultSection({
           isPartialSnapshot={Boolean(page.is_partial_snapshot)}
           language={language}
           posts={result.posts}
+          platform={result.platform}
           postDownloadStatuses={profileDownloadJob?.post_statuses}
           selectedPostIds={selectedPostIds}
           theme={theme}
@@ -2214,7 +2309,7 @@ function ProfileResultSection({
   );
 }
 
-function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, language, onOpenPostDetail, onTogglePost, postDownloadStatuses, posts, selectedPostIds, theme }) {
+function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, language, onOpenPostDetail, onTogglePost, platform, postDownloadStatuses, posts, selectedPostIds, theme }) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]">
       {posts.map((post) => {
@@ -2223,7 +2318,7 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
         const normalizedDownloadStatus = normalizeProfileDownloadStatus(downloadStatus?.status);
         const excerpt = profilePostExcerpt(post);
         const dateText = formatProfilePostDate(post.taken_at, language);
-        const previewUrl = instagramImageProxyUrl(post.preview_url);
+        const previewUrl = profileImageUrl(post.preview_url, platform, "image");
 
         return (
           <article
@@ -2395,6 +2490,18 @@ function instagramImageProxyUrl(sourceUrl) {
   }
 
   return apiUrl(`/api/v1/instagram/image?url=${encodeURIComponent(sourceUrl)}`);
+}
+
+function profileImageUrl(sourceUrl, platform, kind) {
+  if (!sourceUrl) {
+    return "";
+  }
+
+  if (platform === "instagram") {
+    return kind === "avatar" ? instagramAvatarProxyUrl(sourceUrl) : instagramImageProxyUrl(sourceUrl);
+  }
+
+  return sourceUrl;
 }
 
 function PreferenceControls({

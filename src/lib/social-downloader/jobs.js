@@ -5,6 +5,7 @@ import { getSocialDownloaderSettings } from "./settings";
 import { resolveUrl } from "./service";
 import { normalizeSocialUrl } from "./social";
 import { writeUserActionLog } from "../user-action-logger";
+import { xiaohongshuSessionCookie } from "./xiaohongshu-sessions";
 
 const resolveJobsKey = "__linkmigoSocialResolveJobs";
 const resolveSchedulerKey = "__linkmigoSocialResolveScheduler";
@@ -41,7 +42,7 @@ export function startResolveJob(url, options = {}) {
   };
 
   getJobStore().set(job.job_id, job);
-  enqueueResolveJob(job.job_id, url, platform);
+  enqueueResolveJob(job.job_id, url, platform, options.session_id || "");
 
   return snapshotJob(job);
 }
@@ -58,7 +59,7 @@ export function getResolveJob(jobId) {
   return job ? snapshotJob(job) : null;
 }
 
-async function runResolveJob(jobId, url) {
+async function runResolveJob(jobId, url, sessionId = "") {
   updateJob(jobId, {
     status: "running",
     phase: "resolving",
@@ -76,6 +77,8 @@ async function runResolveJob(jobId, url) {
 
   try {
     const result = await resolveUrl(url, {
+      sessionId,
+      xiaohongshuCookie: sessionId ? xiaohongshuSessionCookie(sessionId) : "",
       onProgress: (progress) => {
         updateJobProgress(jobId, progress);
       },
@@ -130,10 +133,10 @@ async function runResolveJob(jobId, url) {
   }
 }
 
-function enqueueResolveJob(jobId, url, platform) {
+function enqueueResolveJob(jobId, url, platform, sessionId = "") {
   const scheduler = getScheduler();
 
-  scheduler.pending.push({ jobId, url, platform });
+  scheduler.pending.push({ jobId, url, platform, sessionId });
   updateQueuedJobs();
   queueMicrotask(drainResolveJobs);
 }
@@ -157,7 +160,7 @@ function drainResolveJobs() {
 
     scheduler.activeCount += 1;
     incrementActivePlatform(next.platform);
-    runResolveJob(next.jobId, next.url).finally(() => {
+    runResolveJob(next.jobId, next.url, next.sessionId).finally(() => {
       scheduler.activeCount = Math.max(0, scheduler.activeCount - 1);
       decrementActivePlatform(next.platform);
       cleanupJobs();

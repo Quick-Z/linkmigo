@@ -73,14 +73,31 @@ export async function startXiaohongshuQrLogin(sessionId) {
     : process.env.LINKMIGO_XHS_HEADLESS === "0"
       ? false
       : process.platform !== "darwin";
-  const child = spawn(chromePath, [
-    ...(headless ? ["--headless=new"] : []), "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
+  const configuredXvfb = process.env.LINKMIGO_XHS_XVFB === "1";
+  const xvfbPath = resolveXvfbPath();
+  if (configuredXvfb && !xvfbPath) {
+    session.status = "error";
+    session.error = "Docker 镜像缺少 xvfb-run。请重新构建包含 xvfb 和 xauth 的镜像，或暂时设置 LINKMIGO_XHS_XVFB=0。";
+    return xiaohongshuSessionSnapshot(session.id);
+  }
+  const useXvfb = configuredXvfb && Boolean(xvfbPath);
+  const launchCommand = useXvfb ? xvfbPath : chromePath;
+  const launchArgs = useXvfb
+    ? ["-a", "--server-args=-screen 0 1280x1000x24", chromePath]
+    : [];
+  const effectiveHeadless = useXvfb ? false : headless;
+  const child = spawn(launchCommand, [...launchArgs, ...[
+    ...(effectiveHeadless ? ["--headless=new"] : []), "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
     "--disable-background-networking", "--disable-sync", "--disable-extensions",
     "--disable-blink-features=AutomationControlled", "--lang=zh-CN",
     "--window-size=1280,1000", "--remote-allow-origins=*", `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`, "about:blank",
-  ], { stdio: "ignore" });
+  ]], { stdio: "ignore" });
   session.browser = { child, port, userDataDir };
+  let launchError = null;
+  child.once("error", (error) => {
+    launchError = error;
+  });
   session.status = "pending";
   session.error = null;
   session.qrExpiresAt = Date.now() + 5 * 60 * 1000;
@@ -88,6 +105,7 @@ export async function startXiaohongshuQrLogin(sessionId) {
 
   try {
     const page = await openDevToolsPage(port, 20_000);
+    if (launchError) throw launchError;
     session.cdp = await openDevToolsSession(page.webSocketDebuggerUrl, 20_000);
     await session.cdp.send("Page.enable");
     await session.cdp.send("Network.enable");
@@ -114,6 +132,113 @@ export async function logoutXiaohongshuSession(sessionId) {
   session.qrDataUrl = null;
   session.error = null;
   touch(session.id);
+}
+
+/**
+ * Render an XHS page in a temporary Chromium profile with the supplied
+ * authenticated cookie. This is used for pages whose comment list is loaded
+ * only after the browser executes the site's JavaScript.
+ */
+export async function renderXiaohongshuPage(url, cookieHeader, timeoutMs = 20_000) {
+  const chromePath = resolveChromePath();
+  if (!chromePath || !url) return "";
+
+  const port = await findFreePort();
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "linkmigo-xhs-render-"));
+  const child = spawn(chromePath, [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-sync",
+    "--disable-features=AutofillServerCommunication,MediaRouter,OptimizationGuideModelDownloading",
+    "--metrics-recording-only",
+    "--mute-audio",
+    "--no-first-run",
+    "--no-default-browser-check",
+    `--user-data-dir=${userDataDir}`,
+    `--remote-debugging-port=${port}`,
+    "about:blank",
+  ], { stdio: "ignore" });
+
+  let cdp = null;
+  try {
+    const page = await openDevToolsPage(port, timeoutMs, "https://www.xiaohongshu.com/explore");
+    cdp = await openDevToolsSession(page.webSocketDebuggerUrl, timeoutMs);
+    await cdp.send("Network.enable");
+    await cdp.send("Page.enable");
+
+    for (const { name, value } of parseCookieHeader(cookieHeader)) {
+      await cdp.send("Network.setCookie", {
+        name,
+        value,
+        domain: ".xiaohongshu.com",
+        path: "/",
+        secure: true,
+      }).catch(() => {});
+    }
+
+    await cdp.send("Page.navigate", { url });
+    const deadline = Date.now() + Math.max(1_000, timeoutMs);
+    let commentRegionSeenAt = 0;
+    while (Date.now() < deadline) {
+      const state = await cdp.send("Runtime.evaluate", {
+        expression: `(() => ({
+          ready: document.readyState,
+          comments: document.querySelectorAll('.parent-comment').length,
+          commentRegion: Boolean(document.querySelector('.comments-el')),
+        }))()`,
+        returnByValue: true,
+      }).catch(() => null);
+      const value = state?.result?.value || {};
+      if (value.comments > 0) {
+        break;
+      }
+      if (value.ready === "complete" && value.commentRegion) {
+        if (!commentRegionSeenAt) {
+          commentRegionSeenAt = Date.now();
+          await cdp.send("Runtime.evaluate", {
+            expression: `(() => {
+              const el = document.querySelector('.comments-el, .comments-container, .note-scroller');
+              if (!el) return;
+              el.scrollIntoView({ block: 'center' });
+              el.scrollTop = Math.min(240, el.scrollHeight);
+              el.dispatchEvent(new Event('scroll', { bubbles: true }));
+            })()`,
+          }).catch(() => {});
+        }
+        if (Date.now() - commentRegionSeenAt > 3_000) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    const html = await cdp.send("Runtime.evaluate", {
+      expression: "document.documentElement?.outerHTML || ''",
+      returnByValue: true,
+    });
+    return String(html?.result?.value || "");
+  } catch {
+    return "";
+  } finally {
+    try { cdp?.close?.(); } catch {}
+    try { child.kill?.(); } catch {}
+    await fs.rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function parseCookieHeader(value) {
+  return String(value || "")
+    .split(";")
+    .map((part) => part.trim())
+    .map((part) => {
+      const index = part.indexOf("=");
+      return index > 0 ? { name: part.slice(0, index).trim(), value: part.slice(index + 1).trim() } : null;
+    })
+    .filter((cookie) => cookie?.name && cookie.value);
 }
 
 function monitorLogin(sessionId) {
@@ -178,13 +303,13 @@ async function findFreePort() {
   });
 }
 
-async function openDevToolsPage(port, timeoutMs) {
+async function openDevToolsPage(port, timeoutMs, initialUrl = "https://www.xiaohongshu.com/explore") {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
       const version = await fetch(`http://127.0.0.1:${port}/json/version`);
       if (version.ok) {
-        const created = await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent("https://www.xiaohongshu.com/explore")}`, { method: "PUT" });
+        const created = await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(initialUrl)}`, { method: "PUT" });
         const page = await created.json();
         if (page?.webSocketDebuggerUrl) return page;
       }
@@ -276,5 +401,10 @@ function resolveChromePath() {
     }
   })();
   const candidates = [process.env.CHROME_PATH, process.env.GOOGLE_CHROME_PATH, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser", ...rodCandidates];
+  return candidates.find((candidate) => candidate && existsSync(candidate)) || "";
+}
+
+function resolveXvfbPath() {
+  const candidates = [process.env.XVFB_RUN_PATH, "/usr/bin/xvfb-run", "/bin/xvfb-run"];
   return candidates.find((candidate) => candidate && existsSync(candidate)) || "";
 }

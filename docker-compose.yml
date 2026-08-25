@@ -6,6 +6,7 @@ services:
     hostname: linkmigo
     restart: unless-stopped
     init: true
+    shm_size: "1gb"
 
     ports:
       - "3000:3000"
@@ -43,6 +44,9 @@ services:
       # 以下登录凭据均为可选项。公开内容解析正常时保持为空。
       SOCIAL_INSTAGRAM_COOKIE: ""
       SOCIAL_XIAOHONGSHU_COOKIE: ""
+      # NAS 容器使用无头 Chromium 生成二维码；二维码会通过 API 返回到浏览器。
+      LINKMIGO_XHS_HEADLESS: "0"
+      LINKMIGO_XHS_XVFB: "1"
       SOCIAL_YOUTUBE_COOKIE: ""
 
       # Reddit OAuth 配置，可选。
@@ -73,4 +77,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-

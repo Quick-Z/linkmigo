@@ -37,6 +37,7 @@ import {
   titleFromBody,
   withCookieHeader,
 } from "./shared";
+import { renderXiaohongshuPage } from "./xiaohongshu-sessions";
 
 const XIAOHONGSHU_HEADERS = {
   ...PAGE_HEADERS,
@@ -473,7 +474,9 @@ export async function resolveXiaohongshuComments(normalized, options = {}, setti
       settings,
     }).catch(() => null);
 
-    if (apiPayload && (apiPayload.comments.length > 0 || apiPayload.nextCursor || apiPayload.totalCount != null)) {
+    // A response containing only comment_count is not a usable comment page.
+    // Keep going so the authenticated browser fallback can load the DOM list.
+    if (apiPayload && (apiPayload.comments.length > 0 || apiPayload.nextCursor)) {
       return {
         platform: "xiaohongshu",
         shortcode: active.shortcode,
@@ -499,7 +502,7 @@ export async function resolveXiaohongshuComments(normalized, options = {}, setti
     const offset = cursor.type === "snapshot" ? cursor.offset : 0;
     const endOffset = offset + limit;
     const comments = renderedSnapshot.comments.slice(offset, endOffset);
-    const totalCount = renderedSnapshot.totalCount ?? parseXiaohongshuCount(note?.interactInfo?.commentCount) ?? renderedSnapshot.comments.length;
+    const totalCount = renderedSnapshot.totalCount ?? xiaohongshuCommentCount(note) ?? renderedSnapshot.comments.length;
     const nextCursor = endOffset < renderedSnapshot.comments.length ? `snapshot:${endOffset}` : null;
 
     return {
@@ -523,7 +526,7 @@ export async function resolveXiaohongshuComments(normalized, options = {}, setti
     .slice(offset, endOffset)
     .map((comment) => normalizeXiaohongshuComment(comment))
     .filter((comment) => comment.id);
-  const totalCount = parseXiaohongshuCount(note?.interactInfo?.commentCount) ?? publicComments.length;
+  const totalCount = xiaohongshuCommentCount(note) ?? publicComments.length;
   const nextCursor = endOffset < publicComments.length ? `snapshot:${endOffset}` : null;
 
   return {
@@ -1489,8 +1492,9 @@ async function xiaohongshuRenderedCommentSnapshot({
 }
 
 async function fetchRenderedXiaohongshuHtml(pageUrl, settings = {}) {
-  if (!isEnabledValue(process.env.SOCIAL_RENDERED_XIAOHONGSHU_COMMENTS) &&
-      !isEnabledValue(process.env.SOCIAL_RENDERED_XHS_COMMENTS)) {
+  const renderedEnabled = isEnabledValue(process.env.SOCIAL_RENDERED_XIAOHONGSHU_COMMENTS) ||
+    isEnabledValue(process.env.SOCIAL_RENDERED_XHS_COMMENTS);
+  if (!renderedEnabled && !settings.xiaohongshuCookie) {
     return "";
   }
 
@@ -1504,6 +1508,10 @@ async function fetchRenderedXiaohongshuHtml(pageUrl, settings = {}) {
   const timeoutMs = Math.min(Math.max((settings.httpTimeoutMs ?? 20_000) * 2, 25_000), 60_000);
 
   try {
+    if (settings.xiaohongshuCookie) {
+      return await renderXiaohongshuPage(pageUrl, settings.xiaohongshuCookie, timeoutMs);
+    }
+
     const { stdout } = await execFile(
       chromePath,
       [
@@ -2484,16 +2492,59 @@ function xiaohongshuTags(note) {
 }
 
 function metricsFromXiaohongshu(detail) {
-  const stats = detail?.interactInfo && typeof detail.interactInfo === "object" ? detail.interactInfo : {};
+  const stats = [
+    detail?.interactInfo,
+    detail?.interact_info,
+    detail?.noteCard?.interactInfo,
+    detail?.note_card?.interactInfo,
+    detail?.stats,
+  ].find((value) => value && typeof value === "object") || {};
 
   return {
-    like_count: parseXiaohongshuCount(stats.likedCount ?? stats.likeCount),
-    comment_count: parseXiaohongshuCount(stats.commentCount),
-    view_count: parseXiaohongshuCount(stats.viewCount),
-    save_count: parseXiaohongshuCount(stats.collectedCount ?? stats.collectCount),
-    share_count: parseXiaohongshuCount(stats.shareCount),
+    like_count: parseXiaohongshuCount(firstDefined(
+      stats.likedCount,
+      stats.liked_count,
+      stats.likeCount,
+      stats.like_count,
+      detail?.likedCount,
+      detail?.liked_count,
+    )),
+    comment_count: parseXiaohongshuCount(firstDefined(
+      stats.commentCount,
+      stats.comment_count,
+      detail?.commentCount,
+      detail?.comment_count,
+    )),
+    view_count: parseXiaohongshuCount(firstDefined(
+      stats.viewCount,
+      stats.view_count,
+      detail?.viewCount,
+      detail?.view_count,
+    )),
+    save_count: parseXiaohongshuCount(firstDefined(
+      stats.collectedCount,
+      stats.collected_count,
+      stats.collectCount,
+      stats.collect_count,
+      detail?.collectedCount,
+      detail?.collected_count,
+    )),
+    share_count: parseXiaohongshuCount(firstDefined(
+      stats.shareCount,
+      stats.share_count,
+      detail?.shareCount,
+      detail?.share_count,
+    )),
     source: "xiaohongshu_public_best_effort",
   };
+}
+
+function xiaohongshuCommentCount(detail) {
+  return metricsFromXiaohongshu(detail).comment_count;
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value != null && value !== "");
 }
 
 function parseXiaohongshuCount(value) {

@@ -3,6 +3,7 @@ services:
     image: k21vin/linkmigo:latest-amd64
     container_name: linkmigo
     restart: unless-stopped
+    shm_size: "1gb"
     ports:
       - 3000:3000
     environment:
@@ -17,6 +18,8 @@ services:
       SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY: "1"
       SOCIAL_ASSET_DOWNLOAD_CONCURRENCY: "1"
       SOCIAL_PROFILE_ZIP_CONCURRENCY: "1"
+      LINKMIGO_XHS_HEADLESS: "0"
+      LINKMIGO_XHS_XVFB: "1"
       SOCIAL_MAX_ASSET_BYTES: "10737418240"
       SOCIAL_AUTO_SYSTEM_PROXY: "0"
       # SOCIAL_INSTAGRAM_COOKIE: 你的INS

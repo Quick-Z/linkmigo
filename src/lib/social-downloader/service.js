@@ -17,8 +17,8 @@ import { xiaohongshuSessionCookie } from "./xiaohongshu-sessions";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-const mediaCacheVersion = 37;
-const profileCacheVersion = 11;
+const mediaCacheVersion = 38;
+const profileCacheVersion = 12;
 const profileInitialPostsPageSize = 30;
 const profileMaxPostsPageSize = 60;
 let sharpFactoryPromise = null;

@@ -1039,6 +1039,18 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   }, []);
 
   useEffect(() => {
+    if (xiaohongshuAuth.status !== "authenticated") {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setXiaohongshuAuth((current) => ({ ...current, open: false }));
+    }, 2_000);
+
+    return () => window.clearTimeout(timer);
+  }, [xiaohongshuAuth.status]);
+
+  useEffect(() => {
     if (!result) {
       setSelectedAssetIds([]);
       setSelectedPostIds([]);
@@ -1882,6 +1894,17 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                 </div>
 
                 <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-center">
+                  {inputPlatform === "xiaohongshu" ? (
+                    <button
+                      className={`${actionButtonBaseClass} h-11 shrink-0 px-4 text-[13px]`}
+                      onClick={openXiaohongshuLogin}
+                      style={buildSecondaryButtonStyle(inputDrivenTheme)}
+                      type="button"
+                    >
+                      {xiaohongshuAuth.status === "authenticated" ? "小红书已登录" : "小红书扫码登录"}
+                    </button>
+                  ) : null}
+
                   {result ? (
                     <button
                       className={actionButtonBaseClass}
@@ -1900,16 +1923,6 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
                   ) : null}
 
                   <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
-                    {inputPlatform === "xiaohongshu" ? (
-                      <button
-                        className={`${actionButtonBaseClass} h-11 shrink-0 px-4 text-[13px]`}
-                        onClick={openXiaohongshuLogin}
-                        style={buildSecondaryButtonStyle(inputDrivenTheme)}
-                        type="button"
-                      >
-                        {xiaohongshuAuth.status === "authenticated" ? "小红书已登录" : "小红书扫码登录"}
-                      </button>
-                    ) : null}
                     <button
                       className={`${actionButtonBaseClass} h-11 w-full min-w-[6rem] px-6 sm:w-auto`}
                       disabled={!canSubmit || isLoading}
@@ -3664,6 +3677,7 @@ function PostMetricBar({ chrome, copy, items, language, onCommentsClick }) {
 }
 
 function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, result }) {
+  const knownCommentCount = numberOrNull(result.metrics?.comment_count);
   const [comments, setComments] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [hasMore, setHasMore] = useState(false);
@@ -3704,7 +3718,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
     setIsLoading(true);
     setIsLoadingMore(false);
     setError(null);
-    setTotalCount(null);
+    setTotalCount(knownCommentCount);
     setPublicCount(null);
 
     fetchComments(null)
@@ -3716,7 +3730,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
         setComments(normalizeCommentList(payload.comments));
         setCursor(payload.next_cursor ?? null);
         setHasMore(Boolean(payload.has_more));
-        setTotalCount(numberOrNull(payload.total_count));
+        setTotalCount(numberOrNull(payload.total_count) ?? knownCommentCount);
         setPublicCount(numberOrNull(payload.public_count));
       })
       .catch((caught) => {
@@ -3735,7 +3749,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
     return () => {
       isActive = false;
     };
-  }, [fetchComments]);
+  }, [fetchComments, knownCommentCount]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || isLoading || isLoadingMore) {
@@ -3751,14 +3765,14 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
       setComments((current) => mergeComments(current, normalizeCommentList(payload.comments)));
       setCursor(payload.next_cursor ?? null);
       setHasMore(Boolean(payload.has_more));
-      setTotalCount(numberOrNull(payload.total_count));
+      setTotalCount(numberOrNull(payload.total_count) ?? knownCommentCount);
       setPublicCount(numberOrNull(payload.public_count));
     } catch (caught) {
       setError(getApiError(caught));
     } finally {
       setIsLoadingMore(false);
     }
-  }, [cursor, fetchComments, hasMore, isLoading, isLoadingMore]);
+  }, [cursor, fetchComments, hasMore, isLoading, isLoadingMore, knownCommentCount]);
 
   const onScroll = useCallback((event) => {
     const viewport = event.currentTarget;
@@ -3769,7 +3783,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
     }
   }, [loadMore]);
 
-  const visibleTotal = Math.max(publicCount ?? totalCount ?? comments.length, comments.length);
+  const visibleTotal = Math.max(totalCount ?? publicCount ?? comments.length, comments.length);
   const hasUnavailablePublicComments = !isLoading &&
     !error &&
     comments.length === 0 &&
@@ -3832,7 +3846,7 @@ function PostCommentsModal({ chrome, copy, language, onClose, onCopyComment, res
                   setComments(normalizeCommentList(payload.comments));
                   setCursor(payload.next_cursor ?? null);
                   setHasMore(Boolean(payload.has_more));
-                  setTotalCount(numberOrNull(payload.total_count));
+                  setTotalCount(numberOrNull(payload.total_count) ?? knownCommentCount);
                   setPublicCount(numberOrNull(payload.public_count));
                   setError(null);
                 })

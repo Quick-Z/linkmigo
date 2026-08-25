@@ -25,9 +25,10 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         -e "s|http://deb.debian.org/debian|${mirror}/debian|g" \
         /etc/apt/sources.list.d/debian.sources; \
     fi \
+    && sed -i 's/^Suites: bookworm bookworm-updates$/Suites: bookworm/' /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 update \
     && if [ "$INSTALL_CHROMIUM" = "1" ]; then \
-      apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends ca-certificates curl gosu chromium fonts-liberation; \
+      apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends ca-certificates curl gosu chromium fonts-liberation xvfb xauth; \
     else \
       apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=60 install -y --no-install-recommends ca-certificates curl gosu \
       && echo "Skipping Chromium install. Set INSTALL_CHROMIUM=1 to include /usr/bin/chromium."; \
@@ -41,6 +42,8 @@ ENV PORT=3000
 ENV YTDL_NO_DEBUG_FILE=1
 ENV SOCIAL_CACHE_DIR=/data/social-downloader
 ENV CHROME_PATH=/usr/bin/chromium
+ENV LINKMIGO_XHS_HEADLESS=0
+ENV LINKMIGO_XHS_XVFB=1
 
 RUN mkdir -p /data/social-downloader /app/logs && chown -R node:node /data /app/logs
 

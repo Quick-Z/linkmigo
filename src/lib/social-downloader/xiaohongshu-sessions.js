@@ -58,7 +58,16 @@ export async function startXiaohongshuQrLogin(sessionId) {
   if (!session) throw new Error("小红书登录会话不存在。");
   if (session.status === "pending" && session.qrDataUrl) return xiaohongshuSessionSnapshot(session.id);
 
+  if (session.expiryTimer) clearTimeout(session.expiryTimer);
+  session.expiryTimer = null;
   await stopBrowser(session);
+  // A new QR flow must not inherit a previous cookie or authenticated state.
+  // XHS can issue a web_session cookie on the anonymous login page, so the
+  // cookie alone is never sufficient evidence that the QR code was scanned.
+  session.cookie = "";
+  session.qrDataUrl = null;
+  session.status = "anonymous";
+  session.error = null;
   const chromePath = resolveChromePath();
   if (!chromePath) {
     session.status = "error";
@@ -114,6 +123,9 @@ export async function startXiaohongshuQrLogin(sessionId) {
     if (!qr) {
       throw new Error("小红书登录页没有返回二维码，可能触发了安全验证。请稍后重试或配置 SOCIAL_XIAOHONGSHU_COOKIE。");
     }
+    const initialCookies = await session.cdp.send("Network.getAllCookies").catch(() => ({ cookies: [] }));
+    session.loginBaselineWebSession = (initialCookies?.cookies || [])
+      .find((item) => item.name === "web_session")?.value || "";
     monitorLogin(session.id);
   } catch (error) {
     session.status = "error";
@@ -127,6 +139,8 @@ export async function logoutXiaohongshuSession(sessionId) {
   const session = store().get(String(sessionId || ""));
   if (!session) return;
   await stopBrowser(session);
+  if (session.expiryTimer) clearTimeout(session.expiryTimer);
+  session.expiryTimer = null;
   session.status = "anonymous";
   session.cookie = "";
   session.qrDataUrl = null;
@@ -135,11 +149,184 @@ export async function logoutXiaohongshuSession(sessionId) {
 }
 
 /**
+ * Run a search in the browser that completed QR login and return the rendered
+ * page plus the captured search response. Reusing this browser is important:
+ * XHS binds search requests to the logged-in browser/device context, so
+ * copying only cookies into a fresh Chromium profile is often not sufficient.
+ */
+export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs = 25_000) {
+  const session = store().get(String(sessionId || ""));
+  if (!session || session.status !== "authenticated" || !session.cdp) return { html: "", payload: null };
+
+  const query = String(keyword || "").trim();
+  if (!query) return { html: "", payload: null };
+
+  // Serialize page operations for a session. A second request must wait for
+  // the first one; otherwise it can receive the previous keyword's payload.
+  if (session.searchPromise) {
+    await session.searchPromise.catch(() => {});
+    if (session.status !== "authenticated" || !session.cdp) return { html: "", payload: null };
+  }
+  let removeNetworkListener = () => {};
+  let removeLoadingListener = () => {};
+  session.searchPromise = (async () => {
+    const cdp = session.cdp;
+    const searchPayloads = [];
+    const responseIds = new Set();
+    const capturePromises = new Map();
+    const captureResponseBody = async (requestId) => {
+      if (!requestId) return;
+      if (!capturePromises.has(requestId)) {
+        capturePromises.set(requestId, (async () => {
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            try {
+              const bodyResult = await cdp.send("Network.getResponseBody", { requestId }, 5_000);
+              let text = String(bodyResult?.body || "");
+              if (bodyResult?.base64Encoded) text = Buffer.from(text, "base64").toString("utf8");
+              const payload = JSON.parse(text);
+              const items = Array.isArray(payload?.data?.items) ? payload.data.items : Array.isArray(payload?.items) ? payload.items : [];
+              // Keep successful empty responses as well. They distinguish a
+              // real zero-result query from a request that was never captured.
+              if (items.length || payload?.success === true || payload?.code === 0) {
+                searchPayloads.push(payload);
+              }
+              return;
+            } catch {
+              if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 200));
+            }
+          }
+        })());
+      }
+      return capturePromises.get(requestId);
+    };
+    removeNetworkListener = cdp.on?.("Network.responseReceived", (params) => {
+      const responseUrl = String(params?.response?.url || "");
+      if (/\/api\/sns\/web\/(?:v1|v2)\/search\/notes(?:\?|$)/.test(responseUrl)) {
+        responseIds.add(String(params.requestId || ""));
+      }
+    });
+    removeLoadingListener = cdp.on?.("Network.loadingFinished", (params) => {
+      const requestId = String(params?.requestId || "");
+      if (responseIds.has(requestId)) captureResponseBody(requestId);
+    });
+    const searchUrl = new URL("https://www.xiaohongshu.com/search_result");
+    searchUrl.searchParams.set("keyword", query);
+    searchUrl.searchParams.set("source", "web_search_result_notes");
+
+    await cdp.send("Page.enable");
+    await cdp.send("Network.enable");
+    await cdp.send("Page.navigate", { url: searchUrl.toString() });
+
+    const deadline = Date.now() + Math.max(3_000, timeoutMs);
+    let interactionAttempted = false;
+    let lastCardCount = 0;
+    while (Date.now() < deadline) {
+      const state = await cdp.send("Runtime.evaluate", {
+        expression: `(() => {
+          const links = Array.from(document.querySelectorAll('[href*="/explore/"], [href*="/discovery/item/"]'));
+          const cards = links.filter((node) => (node.closest('a') || node).querySelector('img, source, video'));
+          const input = document.querySelector('input[type="search"], input[placeholder*="搜索"], .input-box input');
+      return { ready: document.readyState, cards: cards.length, href: location.href, hasInput: Boolean(input), queryInUrl: decodeURIComponent(location.href).includes(${JSON.stringify(query)}) };
+        })()`,
+        returnByValue: true,
+      }).catch(() => null);
+      const value = state?.result?.value || {};
+      lastCardCount = Math.max(lastCardCount, Number(value.cards) || 0);
+
+      // Some XHS builds ignore the keyword query string until the search box
+      // receives an input/Enter event. Trigger the same UI path once when the
+      // initial navigation has settled without producing cards.
+      if (!interactionAttempted && value.ready === "complete" && value.hasInput) {
+        interactionAttempted = true;
+        const encoded = JSON.stringify(query);
+        await cdp.send("Runtime.evaluate", {
+          expression: `(() => {
+            const input = document.querySelector('input[type="search"], input[placeholder*="搜索"], .input-box input');
+            if (!input) return false;
+            const value = ${encoded};
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+            setter ? setter.call(input, value) : (input.value = value);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+            const button = document.querySelector('.input-box .input-button, .input-box .search-icon, button[type="submit"]');
+            button?.click();
+            return true;
+          })()`,
+          returnByValue: true,
+        }).catch(() => {});
+      }
+
+      if (value.cards > 0 && (value.queryInUrl || value.ready === "loading")) {
+        // Scroll a little to force the virtualized result list to mount more
+        // cards, matching the behavior of the desktop helper application.
+        await cdp.send("Runtime.evaluate", {
+          expression: "window.scrollTo(0, Math.min(document.body.scrollHeight, window.innerHeight * 2));",
+        }).catch(() => {});
+        if (lastCardCount >= 3 || Date.now() + 1_000 >= deadline) break;
+      }
+      const hasSearchItems = searchPayloads.some((payload) => {
+        return (Array.isArray(payload?.data?.items) && payload.data.items.length > 0)
+          || (Array.isArray(payload?.items) && payload.items.length > 0);
+      });
+      if (hasSearchItems || (interactionAttempted && searchPayloads.length > 0)) break;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+
+    // Give the responseReceived handler a moment to fetch the JSON body after
+    // the result cards have mounted.
+    if (searchPayloads.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    const html = await cdp.send("Runtime.evaluate", {
+      expression: "document.documentElement?.outerHTML || ''",
+      returnByValue: true,
+    });
+    const cards = await cdp.send("Runtime.evaluate", {
+      expression: `(() => {
+        const seen = new Set();
+        return Array.from(document.querySelectorAll('[href*="/explore/"], [href*="/discovery/item/"]'))
+          .map((node) => {
+            const link = node.closest('a') || node;
+            const href = link.getAttribute('href') || '';
+            const media = link.querySelector('img, source, video');
+            const src = media?.currentSrc || media?.getAttribute('src') || media?.getAttribute('data-src') || media?.getAttribute('data-original') || media?.getAttribute('poster') || '';
+            const key = href + '|' + src;
+            if (!href || !src || seen.has(key)) return null;
+            seen.add(key);
+            return { href, src, text: (link.innerText || '').trim() };
+          })
+          .filter(Boolean)
+          .slice(0, 100);
+      })()` ,
+      returnByValue: true,
+    }).catch(() => null);
+    await Promise.all([...responseIds].map((requestId) => captureResponseBody(requestId)));
+    removeNetworkListener?.();
+    removeLoadingListener?.();
+    touch(session.id);
+    return {
+      html: String(html?.result?.value || ""),
+      cards: Array.isArray(cards?.result?.value) ? cards.result.value : [],
+      payload: searchPayloads.at(-1) || null,
+    };
+  })().finally(() => {
+    removeNetworkListener?.();
+    removeLoadingListener?.();
+    session.searchPromise = null;
+  });
+
+  return session.searchPromise;
+}
+
+/**
  * Render an XHS page in a temporary Chromium profile with the supplied
  * authenticated cookie. This is used for pages whose comment list is loaded
  * only after the browser executes the site's JavaScript.
  */
-export async function renderXiaohongshuPage(url, cookieHeader, timeoutMs = 20_000) {
+export async function renderXiaohongshuPage(url, cookieHeader, timeoutMs = 20_000, options = {}) {
   const chromePath = resolveChromePath();
   if (!chromePath || !url) return "";
 
@@ -187,14 +374,26 @@ export async function renderXiaohongshuPage(url, cookieHeader, timeoutMs = 20_00
     let commentRegionSeenAt = 0;
     while (Date.now() < deadline) {
       const state = await cdp.send("Runtime.evaluate", {
-        expression: `(() => ({
-          ready: document.readyState,
-          comments: document.querySelectorAll('.parent-comment').length,
-          commentRegion: Boolean(document.querySelector('.comments-el')),
-        }))()`,
+        expression: options.waitFor === "search"
+          ? `(() => ({
+              ready: document.readyState,
+              cards: Array.from(document.querySelectorAll('a[href*="/explore/"]')).filter((node) => node.querySelector('img')).length,
+            }))()`
+          : `(() => ({
+              ready: document.readyState,
+              comments: document.querySelectorAll('.parent-comment').length,
+              commentRegion: Boolean(document.querySelector('.comments-el')),
+            }))()`,
         returnByValue: true,
       }).catch(() => null);
       const value = state?.result?.value || {};
+      if (options.waitFor === "search" && value.cards > 0) {
+        break;
+      }
+      if (options.waitFor === "search") {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        continue;
+      }
       if (value.comments > 0) {
         break;
       }
@@ -254,18 +453,47 @@ function monitorLogin(sessionId) {
     }
     try {
       const loginState = await current.cdp.send("Runtime.evaluate", {
-        expression: "Boolean(document.querySelector('.main-container .user .link-wrapper .channel'))",
+        expression: `(() => {
+          const node = document.querySelector('.main-container .user .link-wrapper .channel');
+          const rect = node?.getBoundingClientRect?.();
+          const qr = document.querySelector('.login-container .qrcode-img');
+          // Login pages contain /user/ links too; only a real profile link is
+          // evidence that the QR flow completed.
+          const profileLink = document.querySelector('a[href*="/user/profile/"]');
+          const profileRect = profileLink?.getBoundingClientRect?.();
+          const loggedOutText = /退出登录|logout/i.test(document.body?.innerText || "");
+          return JSON.stringify({
+            marker: Boolean(
+              (node && rect?.width > 0 && rect?.height > 0)
+              || (profileLink && profileRect?.width > 0 && profileRect?.height > 0)
+              || loggedOutText,
+            ),
+            qrVisible: Boolean(qr && qr.getBoundingClientRect().width > 0),
+            href: location.href,
+          });
+        })()`,
         returnByValue: true,
       });
-      const isLoggedIn = loginState?.result?.value === true;
+      let pageState = {};
+      try { pageState = JSON.parse(loginState?.result?.value || "{}"); } catch {}
       const result = await current.cdp.send("Network.getAllCookies");
       const cookies = (result?.cookies || []).filter((cookie) => /(?:^|\.)xiaohongshu\.com$/.test(cookie.domain));
       const cookie = cookies.map((item) => `${item.name}=${item.value}`).join("; ");
-      if (isLoggedIn && cookies.some((item) => item.name === "web_session") && cookie) {
+      const hasSessionCookie = cookies.some((item) => item.name === "web_session" && String(item.value || "").length > 10);
+      const currentWebSession = cookies.find((item) => item.name === "web_session")?.value || "";
+      const cookieChanged = Boolean(currentWebSession && currentWebSession !== current.loginBaselineWebSession);
+      const isLoggedIn = pageState.marker === true || (cookieChanged && pageState.qrVisible === false && !/\/login(?:[/?#]|$)/i.test(pageState.href || ""));
+      if (isLoggedIn && hasSessionCookie && cookie) {
         current.cookie = cookie;
         current.status = "authenticated";
         current.qrDataUrl = null;
-        await stopBrowser(current, { keepCookie: true });
+        // Keep the authenticated Chromium/CDP context alive. XHS search uses
+        // browser-generated state/signatures and can fail when only cookies
+        // are copied into a new profile.
+        if (current.monitor) clearInterval(current.monitor);
+        current.monitor = null;
+        current.loginBaselineWebSession = "";
+        scheduleSessionExpiry(current);
       }
       touch(sessionId);
     } catch {
@@ -274,6 +502,21 @@ function monitorLogin(sessionId) {
       await stopBrowser(current);
     }
   }, 1500);
+}
+
+function scheduleSessionExpiry(session) {
+  if (session.expiryTimer) clearTimeout(session.expiryTimer);
+  session.expiryTimer = setTimeout(async () => {
+    const current = store().get(session.id);
+    if (!current) return;
+    if (current.updatedAt + sessionTtlMs > Date.now()) {
+      scheduleSessionExpiry(current);
+      return;
+    }
+    await stopBrowser(current);
+    store().delete(current.id);
+  }, sessionTtlMs + 1_000);
+  session.expiryTimer.unref?.();
 }
 
 async function stopBrowser(session, options = {}) {
@@ -363,6 +606,7 @@ async function openDevToolsSession(url, timeoutMs) {
   if (typeof WebSocket !== "function") throw new Error("当前 Node.js 不支持浏览器控制连接。");
   const socket = new WebSocket(url);
   const pending = new Map();
+  const listeners = new Map();
   let nextId = 1;
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("连接浏览器控制通道超时。")), Math.min(timeoutMs, 5000));
@@ -373,9 +617,15 @@ async function openDevToolsSession(url, timeoutMs) {
     let message;
     try { message = JSON.parse(String(event.data || "")); } catch { return; }
     const entry = pending.get(message?.id);
-    if (!entry) return;
-    pending.delete(message.id);
-    message.error ? entry.reject(new Error(message.error.message || "Chrome DevTools error")) : entry.resolve(message.result);
+    if (entry) {
+      pending.delete(message.id);
+      message.error ? entry.reject(new Error(message.error.message || "Chrome DevTools error")) : entry.resolve(message.result);
+      return;
+    }
+    const handlers = listeners.get(message?.method) || [];
+    for (const handler of handlers) {
+      Promise.resolve(handler(message.params || {})).catch(() => {});
+    }
   });
   return {
     send(method, params = {}, timeout = 10_000) {
@@ -385,6 +635,18 @@ async function openDevToolsSession(url, timeoutMs) {
         pending.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
         socket.send(JSON.stringify({ id, method, params }));
       });
+    },
+    on(method, handler) {
+      if (!method || typeof handler !== "function") return () => {};
+      const handlers = listeners.get(method) || [];
+      handlers.push(handler);
+      listeners.set(method, handlers);
+      return () => {
+        const current = listeners.get(method) || [];
+        const index = current.indexOf(handler);
+        if (index >= 0) current.splice(index, 1);
+        if (current.length === 0) listeners.delete(method);
+      };
     },
     close() { try { socket.close(); } catch {} },
   };

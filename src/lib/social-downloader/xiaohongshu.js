@@ -37,7 +37,11 @@ import {
   titleFromBody,
   withCookieHeader,
 } from "./shared";
-import { renderXiaohongshuPage } from "./xiaohongshu-sessions";
+import {
+  renderXiaohongshuPage,
+  searchXiaohongshuInSession,
+  xiaohongshuSessionSnapshot,
+} from "./xiaohongshu-sessions";
 
 const XIAOHONGSHU_HEADERS = {
   ...PAGE_HEADERS,
@@ -186,6 +190,206 @@ export async function resolveXiaohongshuProfile(normalized, settings) {
   };
 }
 
+/** Search public XHS notes by keyword using the server-rendered search snapshot. */
+export async function searchXiaohongshu(keyword, options = {}, settings = {}) {
+  const query = pickSingleLineText(keyword).trim();
+
+  if (!query || query.length > 120) {
+    throw new AppError(ErrorCode.UNSUPPORTED_URL, "小红书搜索关键词不能为空且不能超过 120 个字符。", 400);
+  }
+
+  const parsedLimit = Number.parseInt(options.limit, 10);
+  const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 20;
+  const searchUrl = new URL("https://www.xiaohongshu.com/search_result");
+  searchUrl.searchParams.set("keyword", query);
+  searchUrl.searchParams.set("source", "web_search_result_notes");
+
+  let pageResponse = { text: "", source: "" };
+  let pageError = null;
+  let posts = [];
+  const sessionAuthenticated = settings.xiaohongshuSessionId
+    && xiaohongshuSessionSnapshot(settings.xiaohongshuSessionId).status === "authenticated";
+
+  // Reuse the authenticated XHS browser first. The browser performs the
+  // official web request (including its current signatures/headers), while we
+  // parse the captured response body into the same card model used below.
+  if (sessionAuthenticated) {
+    const renderedSession = await searchXiaohongshuInSession(
+      settings.xiaohongshuSessionId,
+      query,
+      Math.min(Math.max(settings.httpTimeoutMs ?? 20_000, 10_000), 25_000),
+    ).catch(() => null);
+    const browserApi = renderedSession?.payload || null;
+    posts = browserApi
+      ? xiaohongshuProfilePostsFromState(browserApi, { username: "" }, searchUrl.toString(), { sort: false })
+      : [];
+    if (!posts.length) {
+      posts = xiaohongshuSearchPostsFromRenderedHtml(renderedSession?.html || "", searchUrl.toString());
+    }
+    if (!posts.length) {
+      posts = xiaohongshuSearchPostsFromRenderedCards(renderedSession?.cards, searchUrl.toString());
+    }
+    if (posts.length) {
+      return {
+        keyword: query,
+        posts: posts.slice(0, limit),
+        has_more: Boolean(browserApi?.data?.has_more || browserApi?.has_more || posts.length >= limit),
+        requires_login: false,
+        login_platforms: [],
+        next_cursor: pickSingleLineText(browserApi?.data?.cursor, browserApi?.data?.next_cursor, browserApi?.cursor),
+        source: browserApi ? "xiaohongshu_web_search_api" : "xiaohongshu_browser_search_dom",
+      };
+    }
+  }
+
+  // Fetch the page only to obtain the current web signer/config, then call the
+  // same JSON endpoint used by the XHS web client. This is the fast path and
+  // avoids waiting for a second browser navigation just to render cards.
+  try {
+    pageResponse = await fetchXiaohongshuPageTextWithMobileFallback({
+      pageUrl: searchUrl.toString(),
+      pageHeaders: xiaohongshuPageHeaders(settings),
+      shortcode: "",
+      settings: { ...settings, httpTimeoutMs: Math.min(settings.httpTimeoutMs ?? 20_000, 8_000) },
+    });
+  } catch (error) {
+    // Search can still succeed through the JSON endpoint when the HTML page
+    // is blocked by an interstitial, so keep the API attempt independent.
+    pageError = error;
+  }
+  const state = extractXiaohongshuInitialState(pageResponse.text);
+
+  // The search page embeds a snapshot, but authenticated sessions can also
+  // access the JSON endpoint. Prefer that response when available because it
+  // includes pagination and fresh result ordering.
+  const apiPage = await requestXiaohongshuSearchPage({
+    keyword: query,
+    pageUrl: searchUrl.toString(),
+    pageText: pageResponse.text,
+    settings,
+  }).catch(() => null);
+  if (apiPage?.items?.length) {
+    posts = xiaohongshuProfilePostsFromState({ items: apiPage.items }, { username: "" }, searchUrl.toString(), { sort: false });
+  }
+  if (!posts.length && state) {
+    posts = xiaohongshuProfilePostsFromState(state, { username: "" }, searchUrl.toString(), { sort: false });
+  }
+  if (!posts.length && pageError && (sessionAuthenticated || xiaohongshuCookieHeader(settings))) {
+    throw pageError;
+  }
+  posts = posts.slice(0, limit);
+  // Anonymous search pages frequently return an empty shell (or a state
+  // object without result items) instead of an explicit 401. Treat an empty
+  // anonymous response as login-required so the UI can offer the QR action.
+  // An authenticated browser session can temporarily expose no cookie string
+  // while Chrome is refreshing it. Do not turn that transient state into a
+  // login prompt; only anonymous requests should advertise login_required.
+  const requiresLogin = !posts.length && !sessionAuthenticated && !xiaohongshuCookieHeader(settings);
+
+  return {
+    keyword: query,
+    posts,
+    has_more: Boolean(apiPage?.has_more || posts.length >= limit),
+    requires_login: requiresLogin,
+    login_platforms: requiresLogin ? ["xiaohongshu"] : [],
+    next_cursor: apiPage?.next_cursor || "",
+    source: apiPage?.items?.length
+      ? "xiaohongshu_search_api"
+      : pageResponse.source || "xiaohongshu_public_search_snapshot",
+  };
+}
+
+async function requestXiaohongshuSearchPage({ keyword, pageUrl, pageText, settings }) {
+  // v2 is the endpoint used by the current XHS web client (and by the
+  // reference desktop helper). Keep v1 as a compatibility fallback because
+  // older deployments still expose it.
+  const requests = [
+    {
+      path: "/api/sns/web/v2/search/notes",
+      body: {
+        filters: [],
+        page: 1,
+        pageSize: 20,
+        page_size: 20,
+        keyword,
+        sort_type: "general",
+        filter_note_type: 0,
+        filter_note_time: 0,
+        filter_note_range: 0,
+        filter_pos_distance: 0,
+        type: "51",
+        tags: [],
+        id: "",
+        search_id: "",
+        searchId: "",
+        dataType: "51",
+        data_type: "",
+        search_filter: [],
+        owner: "",
+      },
+    },
+    {
+      path: "/api/sns/web/v1/search/notes",
+      body: {
+        keyword,
+        page: 1,
+        page_size: 20,
+        search_id: "",
+        sort: "general",
+        note_type: 0,
+      },
+    },
+  ];
+  const hosts = ["https://edith.xiaohongshu.com", "https://www.xiaohongshu.com"];
+  const deadline = Date.now() + Math.min(Math.max(settings.httpTimeoutMs ?? 20_000, 6_000), 12_000);
+
+  for (const request of requests) {
+    if (Date.now() >= deadline) break;
+    const body = JSON.stringify(request.body);
+    for (const host of hosts) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const url = new URL(request.path, host);
+      const headers = await xiaohongshuCommentApiHeaders({
+        pageUrl,
+        pageText,
+        pathWithQuery: `${url.pathname}${url.search}`,
+        cookieHeader: xiaohongshuCookieHeader(settings),
+        requestBody: body,
+        settings,
+      });
+      headers["content-type"] = "application/json;charset=UTF-8";
+
+      try {
+        const response = await fetchWithTimeout(url.toString(), {
+          method: "POST",
+          headers,
+          body,
+          cache: "no-store",
+        }, Math.min(Math.max(remaining, 1_000), 5_000));
+        const text = await response.text();
+        if (response.status >= 400) continue;
+
+        let data;
+        try { data = JSON.parse(text); } catch { continue; }
+        const items = Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.items) ? data.items : [];
+        const nextCursor = pickSingleLineText(data?.data?.cursor, data?.data?.next_cursor, data?.data?.search_id, data?.cursor, data?.next_cursor);
+        if (items.length || data?.success === true || data?.code === 0) {
+          return {
+            items,
+            next_cursor: nextCursor,
+            has_more: Boolean(data?.data?.has_more ?? data?.has_more ?? nextCursor),
+          };
+        }
+      } catch {
+        // Try the next XHS API host or request shape.
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function resolveXiaohongshuProfilePostsPage(options = {}, settings = {}) {
   const userId = pickSingleLineText(options.userId);
   if (!userId) return { posts: [], user_id: "", next_cursor: "", has_more: false };
@@ -271,7 +475,7 @@ function findXiaohongshuProfileUser(value, profileId, seen = new WeakSet(), dept
   return null;
 }
 
-function xiaohongshuProfilePostsFromState(state, profile, profileUrl) {
+function xiaohongshuProfilePostsFromState(state, profile, profileUrl, options = {}) {
   const posts = [];
   const seen = new Set();
   const token = (() => { try { return new URL(profileUrl).searchParams.get("xsec_token") || ""; } catch { return ""; } })();
@@ -283,13 +487,33 @@ function xiaohongshuProfilePostsFromState(state, profile, profileUrl) {
     if (!Array.isArray(value)) {
       const rawNote = value.note_card || value.noteCard || value.note || value;
       const noteId = pickSingleLineText(rawNote.noteId, rawNote.note_id, rawNote.id, value.noteId, value.note_id, value.id);
-      const hasMedia = Array.isArray(rawNote.imageList) || rawNote.image_list || rawNote.video || rawNote.cover || rawNote.coverUrl || rawNote.cover_url;
+      const rawImageList = rawNote.imageList ?? rawNote.image_list;
+      const imageList = Array.isArray(rawImageList)
+        ? rawImageList
+        : rawImageList
+          ? [rawImageList]
+          : [];
+      const hasMedia = imageList.length > 0 || rawNote.video || rawNote.video_info || rawNote.videoInfo || rawNote.cover || rawNote.coverUrl || rawNote.cover_url;
       if (noteId && /^[A-Za-z0-9_-]{8,80}$/.test(noteId) && hasMedia && !seen.has(noteId)) {
         const note = rawNote;
-        const user = note.user || note.author || {};
-        const imageList = Array.isArray(note.imageList) ? note.imageList : Array.isArray(note.image_list) ? note.image_list : [];
+        const user = note.user || note.user_info || note.userInfo || note.author || {};
         const media = imageList[0] || note.cover || note.image || note.cover_url || {};
-        const preview = pickSingleLineText(media.url, media.originUrl, media.origin_url, media.urlPre, media.url_default, note.coverUrl, note.cover_url);
+        const preview = normalizeXiaohongshuImageUrl(typeof media === "string"
+          ? media
+          : pickSingleLineText(
+              media.url,
+              media.originUrl,
+              media.origin_url,
+              media.urlPre,
+              media.url_pre,
+              media.url_default,
+              media.urlDefault,
+              media.url_ori,
+              media.url_original,
+              note.coverUrl,
+              note.cover_url,
+              xiaohongshuImageUrls(media)[0],
+            ));
         const body = pickText(note.desc, note.description, note.content, note.display_title);
         const metrics = metricsFromXiaohongshu(note);
         const taken = firstPresentInt(note.time, note.createTime, note.createdAt, note.updateTime);
@@ -305,11 +529,12 @@ function xiaohongshuProfilePostsFromState(state, profile, profileUrl) {
         canonical.searchParams.set("xsec_source", pickSingleLineText(note.xsecSource, note.xsec_source, value.xsecSource, value.xsec_source, "pc_feed"));
         seen.add(noteId);
         posts.push({
+          platform: "xiaohongshu",
           id: noteId,
           shortcode: noteId,
           canonical_url: canonical.toString(),
-          kind: String(note.type || note.noteType || note.type_name || (note.video || note.video_url ? "video" : "image")),
-          media_type: note.video || note.videoUrl ? "video" : "image",
+          kind: String(note.type || note.noteType || note.type_name || (note.video || note.video_url || note.video_info || note.videoInfo ? "video" : "image")),
+          media_type: note.video || note.videoUrl || note.video_url || note.video_info || note.videoInfo ? "video" : "image",
           preview_url: preview,
           preview_width: firstPresentInt(media.width, media.width_px),
           preview_height: firstPresentInt(media.height, media.height_px),
@@ -322,7 +547,92 @@ function xiaohongshuProfilePostsFromState(state, profile, profileUrl) {
     for (const child of (Array.isArray(value) ? value : Object.values(value))) visit(child, depth + 1);
   }
   visit(state);
-  return posts.sort((a, b) => (Date.parse(b.taken_at) || 0) - (Date.parse(a.taken_at) || 0));
+  return options.sort === false
+    ? posts
+    : posts.sort((a, b) => (Date.parse(b.taken_at) || 0) - (Date.parse(a.taken_at) || 0));
+}
+
+function xiaohongshuSearchPostsFromRenderedHtml(html, profileUrl) {
+  const posts = [];
+  const seen = new Set();
+  const source = String(html || "");
+  const anchorPattern = /<a\b[^>]*href=(['"])([^'"]*\/explore\/([A-Za-z0-9_-]{8,80})(?:[?#][^'"]*)?)\1[^>]*>([\s\S]*?)<\/a>/gi;
+
+  for (const match of source.matchAll(anchorPattern)) {
+    const noteId = match[3];
+    if (!noteId || seen.has(noteId)) continue;
+    const chunk = match[4] || "";
+    const imageMatch = /<(?:img|source|video)\b[^>]*(?:src|data-src|data-original|srcset|poster)=(['"])([^'"]+)\1[^>]*>/i.exec(chunk);
+    if (!imageMatch) continue;
+
+    const previewUrl = imageMatch[2].split(",")[0].trim().split(/\s+/)[0];
+    const text = cleanDisplayText(chunk.replace(/<[^>]*>/g, " "));
+    const title = pickSingleLineText(text.split("\n"), text);
+    let canonicalUrl = match[2];
+    try {
+      canonicalUrl = new URL(htmlUnescape(canonicalUrl), profileUrl).toString();
+    } catch {}
+
+    seen.add(noteId);
+    posts.push({
+      platform: "xiaohongshu",
+      id: noteId,
+      shortcode: noteId,
+      canonical_url: canonicalUrl,
+      kind: /<video\b/i.test(chunk) ? "video" : "image",
+      media_type: /<video\b/i.test(chunk) ? "video" : "image",
+      preview_url: htmlUnescape(previewUrl),
+      preview_width: null,
+      preview_height: null,
+      taken_at: "",
+      metrics: createMetrics("xiaohongshu_rendered_search_snapshot"),
+      post_info: createPostInfo({
+        title,
+        body: text,
+        author: "",
+        author_handle: "",
+        metrics: createMetrics("xiaohongshu_rendered_search_snapshot"),
+      }, { source: "xiaohongshu_rendered_search_snapshot" }),
+    });
+  }
+
+  return posts;
+}
+
+function xiaohongshuSearchPostsFromRenderedCards(cards, profileUrl) {
+  if (!Array.isArray(cards)) return [];
+  const posts = [];
+  const seen = new Set();
+
+  for (const card of cards) {
+    const href = htmlUnescape(String(card?.href || "")).trim();
+    const previewUrl = normalizeXiaohongshuImageUrl(card?.src);
+    const match = /\/(?:explore|discovery\/item)\/([A-Za-z0-9_-]{8,80})/.exec(href);
+    const noteId = match?.[1] || "";
+    if (!noteId || !previewUrl || seen.has(noteId)) continue;
+    seen.add(noteId);
+
+    let canonicalUrl = href;
+    try { canonicalUrl = new URL(href, profileUrl).toString(); } catch {}
+    const text = cleanDisplayText(card?.text || "");
+    const metrics = createMetrics("xiaohongshu_rendered_search_dom");
+    posts.push({
+      platform: "xiaohongshu",
+      id: noteId,
+      shortcode: noteId,
+      canonical_url: canonicalUrl,
+      kind: "image",
+      media_type: "image",
+      preview_url: previewUrl,
+      preview_width: null,
+      preview_height: null,
+      taken_at: "",
+      metrics,
+      post_info: createPostInfo({ title: pickSingleLineText(text), body: text, metrics }, { source: metrics.source }),
+    });
+  }
+
+  return posts;
 }
 
 export async function resolveXiaohongshuPost(normalized, settings) {
@@ -1286,9 +1596,10 @@ async function xiaohongshuCommentApiHeaders({
   pageText,
   pathWithQuery,
   cookieHeader,
+  requestBody = "",
   settings,
 }) {
-  const signHeaders = await xiaohongshuSignedHeaders(pathWithQuery, pageText, settings).catch(() => ({}));
+  const signHeaders = await xiaohongshuSignedHeaders(pathWithQuery, pageText, settings, requestBody).catch(() => ({}));
 
   return withCookieHeader({
     ...PAGE_HEADERS,
@@ -1301,18 +1612,18 @@ async function xiaohongshuCommentApiHeaders({
   }, cookieHeader || xiaohongshuCookieHeader(settings));
 }
 
-async function xiaohongshuSignedHeaders(pathWithQuery, pageText, settings = {}) {
+async function xiaohongshuSignedHeaders(pathWithQuery, pageText, settings = {}, requestBody = "") {
   const signer = await loadXiaohongshuSigner(pageText, settings);
   const commonHeaders = {
     "X-Mns": "unload",
-    "X-S-Common": xiaohongshuXSCommonHeader(),
+    "X-S-Common": xiaohongshuXSCommonHeader(requestBody),
   };
 
   if (!signer) {
     return commonHeaders;
   }
 
-  const signed = signer(pathWithQuery, "");
+  const signed = signer(pathWithQuery, requestBody);
 
   if (!signed) {
     return commonHeaders;
@@ -1327,7 +1638,7 @@ async function xiaohongshuSignedHeaders(pathWithQuery, pageText, settings = {}) 
   };
 }
 
-function xiaohongshuXSCommonHeader() {
+function xiaohongshuXSCommonHeader(requestBody = "") {
   const payload = {
     s0: 5,
     s1: "",
@@ -1340,7 +1651,7 @@ function xiaohongshuXSCommonHeader() {
     x6: "",
     x7: "",
     x8: "",
-    x9: xiaohongshuCrc32(""),
+    x9: xiaohongshuCrc32(requestBody),
     x10: 0,
     x11: "normal",
     x12: "0;",
@@ -2120,8 +2431,9 @@ function xiaohongshuImageUrls(imageData) {
   const candidates = [];
 
   function add(value, score = 0) {
-    if (typeof value === "string" && /^https?:\/\//i.test(value)) {
-      const url = htmlUnescape(value);
+    const normalized = normalizeXiaohongshuImageUrl(value);
+    if (normalized && /^https?:\/\//i.test(normalized)) {
+      const url = normalized;
       const watermarkPenalty = /[?&!/](crd_)?wm/i.test(url) ? -20 : 0;
 
       candidates.push([score + watermarkPenalty, url]);
@@ -2129,11 +2441,14 @@ function xiaohongshuImageUrls(imageData) {
   }
 
   add(imageData.urlDefault, 80);
+  add(imageData.url_default, 80);
   add(imageData.urlPre, 70);
+  add(imageData.url_pre, 70);
   add(imageData.url, 60);
   add(imageData.originalUrl, 90);
+  add(imageData.original_url, 90);
 
-  for (const url of [imageData.urlDefault, imageData.url, imageData.urlPre, imageData.originalUrl]) {
+  for (const url of [imageData.urlDefault, imageData.url_default, imageData.url, imageData.urlPre, imageData.url_pre, imageData.originalUrl, imageData.original_url]) {
     const tokenUrls = xiaohongshuImageTokenUrls(url);
 
     tokenUrls.forEach((tokenUrl, index) => {
@@ -2141,12 +2456,15 @@ function xiaohongshuImageUrls(imageData) {
     });
   }
 
-  if (Array.isArray(imageData.infoList)) {
-    imageData.infoList.forEach((item) => {
+  const infoList = Array.isArray(imageData.infoList) ? imageData.infoList : Array.isArray(imageData.info_list) ? imageData.info_list : [];
+  if (infoList.length) {
+    infoList.forEach((item) => {
       const scene = String(item?.imageScene || "");
       const sceneScore = /origin|original/i.test(scene) ? 95 : /wm/i.test(scene) ? 45 : 65;
 
       add(item?.url, sceneScore);
+      add(item?.url_default, sceneScore);
+      add(item?.url_pre, sceneScore);
 
       xiaohongshuImageTokenUrls(item?.url).forEach((tokenUrl, index) => {
         candidates.push([110 - index, tokenUrl]);
@@ -2180,6 +2498,14 @@ function xiaohongshuImageUrls(imageData) {
       seen.add(url);
       return true;
     });
+}
+
+function normalizeXiaohongshuImageUrl(value) {
+  const normalized = htmlUnescape(String(value || "")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\\//g, "/")
+    .trim());
+  return normalized.startsWith("//") ? `https:${normalized}` : normalized;
 }
 
 function xiaohongshuImageTokenUrls(value) {

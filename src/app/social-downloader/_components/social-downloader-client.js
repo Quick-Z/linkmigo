@@ -32,6 +32,12 @@ const platformLabels = {
   pornhub: "Pornhub",
 };
 
+const keywordSearchPlatforms = [
+  { id: "xiaohongshu", color: "#ff2442", enabled: true, loginUrl: "" },
+  { id: "instagram", color: "#c13584", enabled: false, loginUrl: "https://www.instagram.com/accounts/login/" },
+  { id: "douyin", color: "#111827", enabled: false, loginUrl: "https://www.douyin.com/" },
+];
+
 const copyByLanguage = {
   zh: {
     all: "全选",
@@ -140,6 +146,13 @@ const copyByLanguage = {
     resourcesCount: (count) => `${count} 个资源`,
     resultAria: "解析结果",
     search: "搜索",
+    searchPlatform: "搜索平台",
+    comingSoon: "即将支持",
+    searchDownloadUnavailable: "搜索结果暂不支持批量下载",
+    searchLoginTitle: "搜索需要登录",
+    searchLoginHint: "请先登录对应平台，再重新搜索。",
+    searchLoginButton: "登录",
+    searchRetryButton: "已登录",
     selectedPostsCount: (count) => `已选 ${count} 个帖子`,
     selectedCount: (count) => `已选 ${count} 个`,
     selectPost: "选中帖子",
@@ -263,6 +276,13 @@ const copyByLanguage = {
     resourcesCount: (count) => `${count} ${count === 1 ? "Resource" : "Resources"}`,
     resultAria: "Parse result",
     search: "Search",
+    searchPlatform: "Search platforms",
+    comingSoon: "Coming soon",
+    searchDownloadUnavailable: "Bulk download is unavailable for search results",
+    searchLoginTitle: "Login required for search",
+    searchLoginHint: "Sign in to the platform, then search again.",
+    searchLoginButton: "Log in",
+    searchRetryButton: "Signed in",
     selectedPostsCount: (count) => `${count} Posts Selected`,
     selectedCount: (count) => `${count} Selected`,
     selectPost: "Select post",
@@ -1087,8 +1107,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   const [language, setLanguage] = useState("zh");
   const [colorMode, setColorMode] = useState("light");
   const [url, setUrl] = useState("");
+  const [searchPlatforms, setSearchPlatforms] = useState(["xiaohongshu"]);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [searchLoginPlatforms, setSearchLoginPlatforms] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isUrlInputHovered, setIsUrlInputHovered] = useState(false);
@@ -1116,8 +1138,13 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   const xiaohongshuAuthPollRef = useRef(null);
 
   const normalizedUrl = extractUrlCandidate(url);
-  const canSubmit = Boolean(normalizedUrl) && isValidHttpUrl(normalizedUrl);
-  const inputPlatform = detectPlatform(normalizedUrl);
+  const inputLooksLikeUrl = looksLikeUrlInput(url);
+  const isKeywordMode = Boolean(url.trim()) && !inputLooksLikeUrl;
+  const keyword = isKeywordMode ? url.trim() : "";
+  const canSubmit = isKeywordMode
+    ? Boolean(keyword) && searchPlatforms.length > 0
+    : Boolean(normalizedUrl) && isValidHttpUrl(normalizedUrl);
+  const inputPlatform = isKeywordMode ? "" : detectPlatform(normalizedUrl);
   const copy = {
     ...(copyByLanguage[language] ?? copyByLanguage.zh),
     ...(language === "zh" && urlPlaceholder ? { urlPlaceholder } : {}),
@@ -1164,6 +1191,19 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     window.localStorage.setItem("linkmigo-color-mode", colorMode);
   }, [colorMode]);
 
+  useEffect(() => {
+    // Restore the server-side XHS session state after a refresh. This only
+    // updates the login badge; it never starts a search automatically.
+    fetch("/api/v1/xiaohongshu/auth/status", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (payload?.status) {
+          setXiaohongshuAuth((current) => ({ ...current, ...payload, open: false }));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => () => {
     clearProfileDownloadPolling();
     if (xiaohongshuAuthPollRef.current) window.clearTimeout(xiaohongshuAuthPollRef.current);
@@ -1199,7 +1239,9 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
 
     if (result.mode === "profile") {
       setSelectedAssetIds([]);
-      setSelectedPostIds(result.posts.map((post) => post.id));
+      // Search results are informational by default. Let the user explicitly
+      // choose posts before any future batch action.
+      setSelectedPostIds([]);
       setProfileDownloadJob(null);
       clearProfileDownloadPolling();
       setIsLoadingMoreProfilePosts(false);
@@ -1226,8 +1268,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     event?.preventDefault();
 
     logClientAction("resolve_button_clicked", {
-      url: normalizedUrl,
-      platform: inputPlatform || "unknown",
+      url: isKeywordMode ? keyword : normalizedUrl,
+      platform: isKeywordMode ? searchPlatforms.join(",") : inputPlatform || "unknown",
       can_submit: canSubmit,
       is_loading: isLoading,
     });
@@ -1241,6 +1283,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     setResolvingPlatform(inputPlatform);
     setIsLoading(true);
     setError(null);
+    setSearchLoginPlatforms([]);
     setResult(null);
     setIsPostInfoOpen(false);
     setPostInfoInitialAssetIndex(0);
@@ -1252,6 +1295,67 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     profilePostsLoadingRef.current = false;
 
     try {
+      if (isKeywordMode) {
+        if (!searchPlatforms.includes("xiaohongshu")) {
+          throw new Error("请选择小红书搜索平台。");
+        }
+
+        const response = await fetch("/api/v1/xiaohongshu/search", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ keyword, limit: 30 }),
+        });
+        const payload = await readJsonResponse(response, "小红书搜索接口没有返回有效响应");
+
+        if (!response.ok) {
+          throw payload;
+        }
+
+        const posts = Array.isArray(payload.posts) ? payload.posts : [];
+        const loginPlatforms = normalizeSearchLoginPlatforms(payload.login_platforms);
+
+        if (!posts.length) {
+          throw {
+            error: {
+              code: payload.requires_login ? "LOGIN_REQUIRED" : "NO_MEDIA_FOUND",
+              message: payload.requires_login
+                ? "小红书搜索需要登录，请先完成登录后重试。"
+                : "小红书没有返回相关搜索结果，可能需要登录或稍后重试。",
+              details: {
+                requires_login: Boolean(payload.requires_login),
+                login_platforms: payload.requires_login
+                  ? (loginPlatforms.length > 0 ? loginPlatforms : ["xiaohongshu"])
+                  : [],
+              },
+            },
+          };
+        }
+
+        setResult({
+          mode: "profile",
+          platform: "xiaohongshu",
+          canonical_url: `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}`,
+          creator_handle: `search-${keyword}`,
+          profile: {
+            username: "search",
+            full_name: `小红书搜索：${keyword}`,
+            post_count: posts.length,
+            follower_count: null,
+            following_count: null,
+          },
+          posts,
+          profile_posts_page: {
+            total_count: posts.length,
+            has_more: Boolean(payload.has_more),
+            is_partial_snapshot: true,
+          },
+          search_login_platforms: loginPlatforms,
+        });
+        setSearchLoginPlatforms(loginPlatforms);
+        return;
+      }
+
       const response = await fetch("/api/v1/instagram/resolve/jobs", {
         method: "POST",
         cache: "no-store",
@@ -1280,7 +1384,14 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
       }
     } catch (caught) {
       if (resolveRunRef.current === runId) {
-        setError(getApiError(caught));
+        const apiError = getApiError(caught);
+        setError(apiError);
+        if (isKeywordMode && apiError.details?.requires_login) {
+          const loginPlatforms = normalizeSearchLoginPlatforms(apiError.details?.login_platforms);
+          setSearchLoginPlatforms(loginPlatforms.length > 0 ? loginPlatforms : ["xiaohongshu"]);
+        } else {
+          setSearchLoginPlatforms([]);
+        }
         const errorCode = caught?.error?.code || caught?.code;
         if (inputPlatform === "xiaohongshu" && ["LOGIN_REQUIRED", "UPSTREAM_BLOCKED"].includes(errorCode)) {
           openXiaohongshuLogin();
@@ -1335,6 +1446,23 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   async function logoutXiaohongshu() {
     await fetch("/api/v1/xiaohongshu/auth/logout", { method: "POST", cache: "no-store" }).catch(() => {});
     setXiaohongshuAuth({ open: false, status: "anonymous", qr_data_url: null, error: null });
+  }
+
+  function openSearchLogin(platform) {
+    if (platform === "xiaohongshu") {
+      if (xiaohongshuAuth.status === "authenticated") {
+        // Keep the current result set after login. The main Search button is
+        // the explicit action that starts a new query.
+        return;
+      }
+      openXiaohongshuLogin();
+      return;
+    }
+
+    const loginUrl = keywordSearchPlatforms.find((item) => item.id === platform)?.loginUrl;
+    if (loginUrl) {
+      window.open(loginUrl, "_blank", "noopener,noreferrer");
+    }
   }
 
   function onUrlChange(event) {
@@ -1408,6 +1536,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
 
     resolveRunRef.current += 1;
     setUrl("");
+    setSearchPlatforms(["xiaohongshu"]);
+    setSearchLoginPlatforms([]);
     setResult(null);
     setError(null);
     setIsLoading(false);
@@ -1435,6 +1565,8 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     });
 
     setUrl("");
+    setSearchPlatforms(["xiaohongshu"]);
+    setSearchLoginPlatforms([]);
     setError(null);
     setIsInputFocused(false);
     setIsUrlInputHovered(false);
@@ -1803,7 +1935,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   }
 
   async function downloadSelectedPosts() {
-    if (!isProfileResult || selectedPosts.length === 0 || isProfileDownloadPending) {
+    if (!isProfileResult || !result?.request_id || selectedPosts.length === 0 || isProfileDownloadPending) {
       return;
     }
 
@@ -1989,12 +2121,12 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                       hasOutput ? "h-11 sm:h-12" : "h-14 sm:h-16"
                     }`}
                     id="social-url"
-                    inputMode="url"
+                    inputMode={isKeywordMode ? "search" : "url"}
                     name="social-url"
                     onBlur={() => setIsInputFocused(false)}
                     onChange={onUrlChange}
                     onFocus={() => setIsInputFocused(true)}
-                    placeholder={copy.urlPlaceholder}
+                    placeholder={isKeywordMode ? (language === "zh" ? "输入关键词，选择平台后搜索..." : "Enter a keyword, then choose platforms to search...") : copy.urlPlaceholder}
                     spellCheck={false}
                     style={{
                       "--lm-input-text-color": inputDrivenTheme.inputText,
@@ -2025,8 +2157,38 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                   ) : null}
                 </div>
 
+                {isKeywordMode ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: inputDrivenTheme.panelBorder }}>
+                    <span className="mr-1 text-xs font-semibold" style={{ color: inputDrivenTheme.mutedText }}>
+                      {copy.searchPlatform}
+                    </span>
+                    {keywordSearchPlatforms.map((platform) => {
+                      const isSelected = searchPlatforms.includes(platform.id);
+                      const label = getPlatformLabel(platform.id, copy);
+
+                      return (
+                        <button
+                          aria-disabled={!platform.enabled}
+                          aria-pressed={isSelected}
+                          className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[13px] font-semibold transition ${platform.enabled ? "" : "cursor-not-allowed opacity-60"}`}
+                          disabled={!platform.enabled}
+                          key={platform.id}
+                          onClick={() => setSearchPlatforms((current) => current.includes(platform.id) ? current.filter((item) => item !== platform.id) : [...current, platform.id])}
+                          style={isSelected ? buildPrimaryButtonStyle(inputDrivenTheme, false) : buildSecondaryButtonStyle(inputDrivenTheme)}
+                          title={platform.enabled ? label : `${label} · ${copy.comingSoon}`}
+                          type="button"
+                        >
+                          <span aria-hidden="true" className="size-2 rounded-full" style={{ backgroundColor: platform.color }} />
+                          {label}
+                          {!platform.enabled ? <span className="text-[10px] font-medium opacity-80">{copy.comingSoon}</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
                 <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-center">
-                  {inputPlatform === "xiaohongshu" ? (
+                  {!isKeywordMode && inputPlatform === "xiaohongshu" ? (
                     <button
                       className={`${actionButtonBaseClass} h-11 shrink-0 px-4 text-[13px]`}
                       onClick={openXiaohongshuLogin}
@@ -2048,7 +2210,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                     </button>
                   ) : null}
 
-                  {normalizedUrl && !canSubmit ? (
+                  {!isKeywordMode && normalizedUrl && !canSubmit ? (
                     <span id="social-url-error" className="text-sm font-medium" style={{ color: inputDrivenTheme.invalidText }}>
                       {copy.invalidUrl}
                     </span>
@@ -2064,7 +2226,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                       {isLoading ? (
                         <span className="inline-flex items-center gap-2">
                           <span className="block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                          {copy.parsing}
+                          {isKeywordMode ? (language === "zh" ? "搜索中..." : "Searching...") : copy.parsing}
                         </span>
                       ) : (
                         copy.search
@@ -2094,6 +2256,28 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
               <div className="grid gap-1">
                 <strong className="text-sm" style={{ color: inputDrivenTheme.accentText }}>{errorLabel(error, language)}</strong>
                 <span className="text-sm" style={{ color: inputDrivenTheme.mutedText }}>{error.message}</span>
+                {isKeywordMode && searchLoginPlatforms.length > 0 ? (
+                  <div className="mt-3 grid gap-2">
+                    <strong className="text-sm" style={{ color: inputDrivenTheme.accentText }}>{copy.searchLoginTitle}</strong>
+                    <span className="text-xs font-semibold" style={{ color: inputDrivenTheme.mutedText }}>
+                      {copy.searchLoginHint}
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {searchLoginPlatforms.map((platform) => (
+                        <button
+                          className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`}
+                          key={platform}
+                          onClick={() => openSearchLogin(platform)}
+                          style={buildPrimaryButtonStyle(inputDrivenTheme, false)}
+                          type="button"
+                        >
+                          <span aria-hidden="true" className="mr-1.5 inline-block size-2 rounded-full" style={{ backgroundColor: keywordSearchPlatforms.find((item) => item.id === platform)?.color || inputDrivenTheme.accent }} />
+                          {getPlatformLabel(platform, copy)} {platform === "xiaohongshu" && xiaohongshuAuth.status === "authenticated" ? copy.searchRetryButton : copy.searchLoginButton}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -2115,8 +2299,11 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                 onPostsScroll={onProfilePostsScroll}
                 onToggleAll={toggleAllProfilePosts}
                 onTogglePost={toggleProfilePost}
+                onLoginPlatform={openSearchLogin}
                 profileDownloadJob={profileDownloadJob}
                 result={result}
+                searchLoginPlatforms={searchLoginPlatforms}
+                isXiaohongshuAuthenticated={xiaohongshuAuth.status === "authenticated"}
                 selectedPostIds={selectedPostIds}
                 selectedPosts={selectedPosts}
                 theme={resultTheme}
@@ -2339,8 +2526,11 @@ function ProfileResultSection({
   onPostsScroll,
   onToggleAll,
   onTogglePost,
+  onLoginPlatform,
   profileDownloadJob,
   result,
+  searchLoginPlatforms,
+  isXiaohongshuAuthenticated,
   selectedPostIds,
   selectedPosts,
   theme,
@@ -2377,6 +2567,24 @@ function ProfileResultSection({
           </div>
         ) : null}
       </div>
+
+      {searchLoginPlatforms.length > 0 ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 sm:px-5" style={{ borderColor: theme.panelBorder }}>
+          <span className="text-xs font-semibold" style={{ color: theme.mutedText }}>{copy.searchLoginTitle}</span>
+          {searchLoginPlatforms.map((platform) => (
+            <button
+              className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`}
+              key={platform}
+              onClick={() => onLoginPlatform(platform)}
+              style={buildPrimaryButtonStyle(theme, false)}
+              type="button"
+            >
+              <span aria-hidden="true" className="mr-1.5 inline-block size-2 rounded-full" style={{ backgroundColor: keywordSearchPlatforms.find((item) => item.id === platform)?.color || theme.accent }} />
+              {getPlatformLabel(platform, copy)} {platform === "xiaohongshu" && isXiaohongshuAuthenticated ? copy.searchRetryButton : copy.searchLoginButton}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="grid shrink-0 gap-2 border-b px-3 py-2 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-start" style={{ borderColor: theme.panelBorder }}>
         <div className="flex min-w-0 items-start gap-3 min-[600px]:items-center">
@@ -2424,12 +2632,13 @@ function ProfileResultSection({
           </button>
           <button
             className={`${actionButtonBaseClass} h-9 px-4 text-[13px]`}
-            disabled={selectedPosts.length === 0 || isDownloading}
+            disabled={!result.request_id || selectedPosts.length === 0 || isDownloading}
             onClick={onDownloadSelected}
-            style={buildPrimaryButtonStyle(theme, selectedPosts.length === 0 || isDownloading)}
+            style={buildPrimaryButtonStyle(theme, !result.request_id || selectedPosts.length === 0 || isDownloading)}
+            title={!result.request_id ? copy.searchDownloadUnavailable : undefined}
             type="button"
           >
-            {isDownloading ? profileDownloadButtonLabel(copy, profileDownloadJob) : copy.downloadSelectedPosts}
+            {isDownloading ? profileDownloadButtonLabel(copy, profileDownloadJob) : result.request_id ? copy.downloadSelectedPosts : copy.searchDownloadUnavailable}
           </button>
         </div>
       </div>
@@ -2463,7 +2672,9 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
         const normalizedDownloadStatus = normalizeProfileDownloadStatus(downloadStatus?.status);
         const excerpt = profilePostExcerpt(post);
         const dateText = formatProfilePostDate(post.taken_at, language);
-        const previewUrl = profileImageUrl(post.preview_url, platform, "image");
+        const postPlatform = post.platform || platform;
+        const postTheme = getButtonTheme(postPlatform, theme.colorMode, theme.uiTheme === "cohere" ? "cohere" : "default");
+        const previewUrl = profileImageUrl(post.preview_url, postPlatform, "image");
 
         return (
           <article
@@ -2488,12 +2699,38 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
               ) : null}
 
               {previewUrl ? (
-                <img alt={post.post_info?.title || post.shortcode} className="h-full w-full object-cover" src={previewUrl} />
+                <img
+                  alt={post.post_info?.title || post.shortcode}
+                  className="h-full w-full object-cover"
+                  onError={(event) => {
+                    event.currentTarget.style.display = "none";
+                    event.currentTarget.nextElementSibling?.removeAttribute("hidden");
+                  }}
+                  src={previewUrl}
+                />
               ) : (
                 <div className="grid h-full w-full place-items-center text-sm font-semibold" style={{ color: theme.mutedText }}>
-                  Instagram
+                  {getPlatformLabel(postPlatform, copy)}
                 </div>
               )}
+
+              {previewUrl ? (
+                <div hidden className="absolute inset-0 grid place-items-center text-sm font-semibold" style={{ color: theme.mutedText }}>
+                  {getPlatformLabel(postPlatform, copy)}
+                </div>
+              ) : null}
+
+              <span
+                className="pointer-events-none absolute left-3 top-3 z-20 inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold shadow-[0_8px_18px_rgba(15,23,42,0.16)] backdrop-blur-md"
+                style={{
+                  color: postTheme.accentText,
+                  backgroundColor: hexToRgba(postTheme.accent, theme.colorMode === "dark" ? 0.24 : 0.12),
+                  borderColor: hexToRgba(postTheme.accent, theme.colorMode === "dark" ? 0.62 : 0.34),
+                }}
+              >
+                <span aria-hidden="true" className="mr-1.5 size-1.5 rounded-full" style={{ backgroundColor: postTheme.accent }} />
+                {getPlatformLabel(postPlatform, copy)}
+              </span>
 
               <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-2 bg-[linear-gradient(180deg,rgba(10,18,30,0)_0%,rgba(10,18,30,0.72)_100%)] px-3 pb-3 pt-8 text-white">
                 <span className="truncate text-xs font-semibold uppercase tracking-[0.08em]">{post.kind}</span>
@@ -2637,6 +2874,14 @@ function instagramImageProxyUrl(sourceUrl) {
   return apiUrl(`/api/v1/instagram/image?url=${encodeURIComponent(sourceUrl)}`);
 }
 
+function xiaohongshuImageProxyUrl(sourceUrl) {
+  if (!sourceUrl) {
+    return "";
+  }
+
+  return apiUrl(`/api/v1/xiaohongshu/image?url=${encodeURIComponent(sourceUrl)}`);
+}
+
 function profileImageUrl(sourceUrl, platform, kind) {
   if (!sourceUrl) {
     return "";
@@ -2644,6 +2889,10 @@ function profileImageUrl(sourceUrl, platform, kind) {
 
   if (platform === "instagram") {
     return kind === "avatar" ? instagramAvatarProxyUrl(sourceUrl) : instagramImageProxyUrl(sourceUrl);
+  }
+
+  if (platform === "xiaohongshu") {
+    return xiaohongshuImageProxyUrl(sourceUrl);
   }
 
   return sourceUrl;
@@ -5782,6 +6031,22 @@ function extractUrlCandidate(value) {
   const candidate = match ? match[0] : trimmed;
 
   return candidate.replace(trailingUrlPunctuationPattern, "");
+}
+
+function looksLikeUrlInput(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return false;
+  }
+
+  return /^(?:https?:\/\/|www\.|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/:?#]|$))/i.test(text);
+}
+
+function normalizeSearchLoginPlatforms(value) {
+  const allowed = new Set(keywordSearchPlatforms.map((platform) => platform.id));
+  return [...new Set(Array.isArray(value) ? value : [])]
+    .filter((platform) => allowed.has(platform));
 }
 
 function hexToRgba(hex, alpha) {

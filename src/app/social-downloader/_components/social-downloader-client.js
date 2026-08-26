@@ -1334,6 +1334,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
 
         setResult({
           mode: "profile",
+          request_id: payload.request_id || "",
           platform: "xiaohongshu",
           canonical_url: `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}`,
           creator_handle: `search-${keyword}`,

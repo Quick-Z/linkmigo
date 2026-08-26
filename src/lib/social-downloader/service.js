@@ -176,6 +176,40 @@ export async function getZipFile(requestId, options = {}) {
   };
 }
 
+/** Store keyword-search posts in the same profile record used by batch downloads. */
+export async function saveXiaohongshuSearchRecord({ keyword, posts, sessionId = "" } = {}) {
+  const query = String(keyword || "").trim();
+  const normalizedPosts = Array.isArray(posts) ? posts : [];
+  if (!query || normalizedPosts.length === 0) return null;
+
+  const normalized = {
+    platform: "xiaohongshu",
+    canonical_url: `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(query)}`,
+  };
+  return saveProfileRecord({
+    cache: getCacheStore(),
+    normalized,
+    parsedProfile: {
+      creator_handle: `search-${query}`,
+      profile: {
+        username: "search",
+        full_name: `小红书搜索：${query}`,
+        post_count: normalizedPosts.length,
+        follower_count: null,
+        following_count: null,
+      },
+      posts: normalizedPosts,
+      profile_pagination: {
+        source: "xiaohongshu_search",
+        next_cursor: "",
+        has_more: false,
+      },
+    },
+    settings: getSocialDownloaderSettings(),
+    sessionId,
+  });
+}
+
 export async function getProfileZipFile(requestId, options = {}) {
   const cache = getCacheStore();
   const settings = getSocialDownloaderSettings();

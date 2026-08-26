@@ -5,6 +5,7 @@ import {
   xiaohongshuSessionCookie,
 } from "@/lib/social-downloader/xiaohongshu-sessions";
 import { searchXiaohongshu } from "@/lib/social-downloader/xiaohongshu";
+import { saveXiaohongshuSearchRecord } from "@/lib/social-downloader/service";
 import { errorPayload, getErrorDetail, toAppError } from "@/lib/social-downloader/errors";
 import { getSocialDownloaderSettings } from "@/lib/social-downloader/settings";
 
@@ -38,6 +39,12 @@ export async function POST(request) {
         xiaohongshuCookie: xiaohongshuSessionCookie(sessionId) || baseSettings.xiaohongshuCookie,
       },
     );
+    try {
+      const record = await saveXiaohongshuSearchRecord({ keyword, posts: payload.posts, sessionId });
+      if (record?.request_id) payload.request_id = record.request_id;
+    } catch {
+      // Search results remain usable even if the optional download index cannot be saved.
+    }
     const response = NextResponse.json(payload, { status: 200 });
     setSessionCookie(response, sessionId, request);
     return response;

@@ -66,6 +66,8 @@ export async function startXiaohongshuQrLogin(sessionId) {
   // cookie alone is never sufficient evidence that the QR code was scanned.
   session.cookie = "";
   session.qrDataUrl = null;
+  session.loginBaselineWebSession = "";
+  session.loginConfirmationCount = 0;
   session.status = "anonymous";
   session.error = null;
   const chromePath = resolveChromePath();
@@ -113,11 +115,14 @@ export async function startXiaohongshuQrLogin(sessionId) {
   touch(session.id);
 
   try {
-    const page = await openDevToolsPage(port, 20_000);
+    const page = await openDevToolsPage(port, 20_000, "about:blank");
     if (launchError) throw launchError;
     session.cdp = await openDevToolsSession(page.webSocketDebuggerUrl, 20_000);
     await session.cdp.send("Page.enable");
     await session.cdp.send("Network.enable");
+    await session.cdp.send("Network.clearBrowserCookies");
+    await session.cdp.send("Network.clearBrowserCache").catch(() => {});
+    await session.cdp.send("Page.navigate", { url: "https://www.xiaohongshu.com/explore" });
     const qr = await waitForLoginQr(session.cdp, 20_000);
     session.qrDataUrl = qr;
     if (!qr) {
@@ -126,6 +131,7 @@ export async function startXiaohongshuQrLogin(sessionId) {
     const initialCookies = await session.cdp.send("Network.getAllCookies").catch(() => ({ cookies: [] }));
     session.loginBaselineWebSession = (initialCookies?.cookies || [])
       .find((item) => item.name === "web_session")?.value || "";
+    session.loginConfirmationCount = 0;
     monitorLogin(session.id);
   } catch (error) {
     session.status = "error";
@@ -144,6 +150,8 @@ export async function logoutXiaohongshuSession(sessionId) {
   session.status = "anonymous";
   session.cookie = "";
   session.qrDataUrl = null;
+  session.loginBaselineWebSession = "";
+  session.loginConfirmationCount = 0;
   session.error = null;
   touch(session.id);
 }
@@ -446,29 +454,21 @@ function monitorLogin(sessionId) {
   session.monitor = setInterval(async () => {
     const current = store().get(sessionId);
     if (!current || current.status !== "pending") return;
+    if (current.monitorRunning) return;
+    current.monitorRunning = true;
     if (Date.now() > current.qrExpiresAt) {
       current.status = "expired";
       await stopBrowser(current);
+      current.monitorRunning = false;
       return;
     }
     try {
       const loginState = await current.cdp.send("Runtime.evaluate", {
         expression: `(() => {
-          const node = document.querySelector('.main-container .user .link-wrapper .channel');
-          const rect = node?.getBoundingClientRect?.();
           const qr = document.querySelector('.login-container .qrcode-img');
-          // Login pages contain /user/ links too; only a real profile link is
-          // evidence that the QR flow completed.
-          const profileLink = document.querySelector('a[href*="/user/profile/"]');
-          const profileRect = profileLink?.getBoundingClientRect?.();
-          const loggedOutText = /退出登录|logout/i.test(document.body?.innerText || "");
+          const qrRect = qr?.getBoundingClientRect?.();
           return JSON.stringify({
-            marker: Boolean(
-              (node && rect?.width > 0 && rect?.height > 0)
-              || (profileLink && profileRect?.width > 0 && profileRect?.height > 0)
-              || loggedOutText,
-            ),
-            qrVisible: Boolean(qr && qr.getBoundingClientRect().width > 0),
+            qrVisible: Boolean(qr && qrRect?.width > 0 && qrRect?.height > 0),
             href: location.href,
           });
         })()`,
@@ -482,7 +482,12 @@ function monitorLogin(sessionId) {
       const hasSessionCookie = cookies.some((item) => item.name === "web_session" && String(item.value || "").length > 10);
       const currentWebSession = cookies.find((item) => item.name === "web_session")?.value || "";
       const cookieChanged = Boolean(currentWebSession && currentWebSession !== current.loginBaselineWebSession);
-      const isLoggedIn = pageState.marker === true || (cookieChanged && pageState.qrVisible === false && !/\/login(?:[/?#]|$)/i.test(pageState.href || ""));
+      const isLoginPage = /\/login(?:[/?#]|$)/i.test(pageState.href || "");
+      const hasFreshLoginEvidence = cookieChanged && pageState.qrVisible === false && !isLoginPage;
+      current.loginConfirmationCount = hasFreshLoginEvidence
+        ? (current.loginConfirmationCount || 0) + 1
+        : 0;
+      const isLoggedIn = current.loginConfirmationCount >= 2;
       if (isLoggedIn && hasSessionCookie && cookie) {
         current.cookie = cookie;
         current.status = "authenticated";
@@ -493,6 +498,7 @@ function monitorLogin(sessionId) {
         if (current.monitor) clearInterval(current.monitor);
         current.monitor = null;
         current.loginBaselineWebSession = "";
+        current.loginConfirmationCount = 0;
         scheduleSessionExpiry(current);
       }
       touch(sessionId);
@@ -500,6 +506,8 @@ function monitorLogin(sessionId) {
       current.status = "error";
       current.error = "扫码登录浏览器会话已断开。";
       await stopBrowser(current);
+    } finally {
+      current.monitorRunning = false;
     }
   }, 1500);
 }
@@ -568,16 +576,14 @@ async function waitForLoginQr(cdp, timeoutMs) {
     try {
       const result = await cdp.send("Runtime.evaluate", {
         expression: `(() => {
-          const loggedIn = Boolean(document.querySelector('.main-container .user .link-wrapper .channel'));
           const node = document.querySelector('.login-container .qrcode-img');
           const rect = node ? node.getBoundingClientRect() : null;
-          return JSON.stringify({ loggedIn, src: node?.getAttribute('src') || '', rect: rect && { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+          return JSON.stringify({ src: node?.getAttribute('src') || '', rect: rect && { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
         })()`,
         returnByValue: true,
       });
       const raw = result?.result?.value || "";
       const state = JSON.parse(raw || "{}");
-      if (state.loggedIn) return "";
       if (state.src) {
         if (/^data:image\//i.test(state.src)) return state.src;
         try {

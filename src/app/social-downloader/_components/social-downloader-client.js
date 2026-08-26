@@ -2721,20 +2721,18 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
                 </div>
               ) : null}
 
-              <span
-                className="pointer-events-none absolute left-3 top-3 z-20 inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold shadow-[0_8px_18px_rgba(15,23,42,0.16)] backdrop-blur-md"
-                style={{
-                  color: postTheme.accentText,
-                  backgroundColor: hexToRgba(postTheme.accent, theme.colorMode === "dark" ? 0.24 : 0.12),
-                  borderColor: hexToRgba(postTheme.accent, theme.colorMode === "dark" ? 0.62 : 0.34),
-                }}
-              >
-                <span aria-hidden="true" className="mr-1.5 size-1.5 rounded-full" style={{ backgroundColor: postTheme.accent }} />
-                {getPlatformLabel(postPlatform, copy)}
-              </span>
-
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-2 bg-[linear-gradient(180deg,rgba(10,18,30,0)_0%,rgba(10,18,30,0.72)_100%)] px-3 pb-3 pt-8 text-white">
-                <span className="truncate text-xs font-semibold uppercase tracking-[0.08em]">{post.kind}</span>
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-end justify-between gap-2 bg-[linear-gradient(180deg,rgba(10,18,30,0)_0%,rgba(10,18,30,0.72)_100%)] px-3 pb-3 pt-8 text-white">
+                <span
+                  className="inline-flex max-w-[calc(100%-2rem)] items-center rounded-full border px-2.5 py-1 text-[11px] font-bold shadow-[0_8px_18px_rgba(15,23,42,0.16)] backdrop-blur-md"
+                  style={{
+                    color: postTheme.accentText,
+                    backgroundColor: hexToRgba(postTheme.accent, theme.colorMode === "dark" ? 0.24 : 0.12),
+                    borderColor: hexToRgba(postTheme.accent, theme.colorMode === "dark" ? 0.62 : 0.34),
+                  }}
+                >
+                  <span aria-hidden="true" className="mr-1.5 size-1.5 rounded-full" style={{ backgroundColor: postTheme.accent }} />
+                  {getPlatformLabel(postPlatform, copy)}
+                </span>
               </div>
 
               <button
@@ -2821,7 +2819,7 @@ function ProfilePostDownloadBadge({ copy, status, theme }) {
 
   return (
     <div
-      className="pointer-events-none absolute left-2 top-2 z-10 inline-flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold shadow-[0_12px_28px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+      className="pointer-events-none absolute right-2 top-2 z-30 inline-flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold shadow-[0_12px_28px_rgba(15,23,42,0.18)] backdrop-blur-xl"
       style={buildProfilePostDownloadBadgeStyle(theme, normalizedStatus)}
       title={status?.message || label}
     >

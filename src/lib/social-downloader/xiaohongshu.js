@@ -200,6 +200,10 @@ export async function searchXiaohongshu(keyword, options = {}, settings = {}) {
 
   const parsedLimit = Number.parseInt(options.limit, 10);
   const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 20;
+  const parsedPage = Number.parseInt(options.page, 10);
+  const page = Number.isFinite(parsedPage) ? Math.min(Math.max(parsedPage, 1), 100) : 1;
+  const cursor = normalizeXiaohongshuSearchCursor(options.cursor);
+  const isLoadMore = page > 1;
   const searchUrl = new URL("https://www.xiaohongshu.com/search_result");
   searchUrl.searchParams.set("keyword", query);
   searchUrl.searchParams.set("source", "web_search_result_notes");
@@ -218,25 +222,28 @@ export async function searchXiaohongshu(keyword, options = {}, settings = {}) {
       settings.xiaohongshuSessionId,
       query,
       Math.min(Math.max(settings.httpTimeoutMs ?? 20_000, 10_000), 25_000),
+      { page, cursor },
     ).catch(() => null);
     const browserApi = renderedSession?.payload || null;
     posts = browserApi
       ? xiaohongshuProfilePostsFromState(browserApi, { username: "" }, searchUrl.toString(), { sort: false })
       : [];
-    if (!posts.length) {
+    if (!posts.length && !isLoadMore) {
       posts = xiaohongshuSearchPostsFromRenderedHtml(renderedSession?.html || "", searchUrl.toString());
     }
     if (!posts.length) {
       posts = xiaohongshuSearchPostsFromRenderedCards(renderedSession?.cards, searchUrl.toString());
     }
     if (posts.length) {
+      const pagination = xiaohongshuSearchPagination(browserApi, page, posts.length, limit);
       return {
         keyword: query,
         posts: posts.slice(0, limit),
-        has_more: Boolean(browserApi?.data?.has_more || browserApi?.has_more || posts.length >= limit),
+        page,
+        has_more: pagination.has_more,
         requires_login: false,
         login_platforms: [],
-        next_cursor: pickSingleLineText(browserApi?.data?.cursor, browserApi?.data?.next_cursor, browserApi?.cursor),
+        next_cursor: pagination.next_cursor,
         source: browserApi ? "xiaohongshu_web_search_api" : "xiaohongshu_browser_search_dom",
       };
     }
@@ -264,6 +271,8 @@ export async function searchXiaohongshu(keyword, options = {}, settings = {}) {
   // includes pagination and fresh result ordering.
   const apiPage = await requestXiaohongshuSearchPage({
     keyword: query,
+    page,
+    cursor,
     pageUrl: searchUrl.toString(),
     pageText: pageResponse.text,
     settings,
@@ -271,7 +280,7 @@ export async function searchXiaohongshu(keyword, options = {}, settings = {}) {
   if (apiPage?.items?.length) {
     posts = xiaohongshuProfilePostsFromState({ items: apiPage.items }, { username: "" }, searchUrl.toString(), { sort: false });
   }
-  if (!posts.length && state) {
+  if (!posts.length && state && !isLoadMore) {
     posts = xiaohongshuProfilePostsFromState(state, { username: "" }, searchUrl.toString(), { sort: false });
   }
   if (!posts.length && pageError && (sessionAuthenticated || xiaohongshuCookieHeader(settings))) {
@@ -285,21 +294,23 @@ export async function searchXiaohongshu(keyword, options = {}, settings = {}) {
   // while Chrome is refreshing it. Do not turn that transient state into a
   // login prompt; only anonymous requests should advertise login_required.
   const requiresLogin = !posts.length && !sessionAuthenticated && !xiaohongshuCookieHeader(settings);
+  const pagination = xiaohongshuSearchPagination(apiPage, page, posts.length, limit);
 
   return {
     keyword: query,
     posts,
-    has_more: Boolean(apiPage?.has_more || posts.length >= limit),
+    page,
+    has_more: pagination.has_more,
     requires_login: requiresLogin,
     login_platforms: requiresLogin ? ["xiaohongshu"] : [],
-    next_cursor: apiPage?.next_cursor || "",
+    next_cursor: pagination.next_cursor,
     source: apiPage?.items?.length
       ? "xiaohongshu_search_api"
       : pageResponse.source || "xiaohongshu_public_search_snapshot",
   };
 }
 
-async function requestXiaohongshuSearchPage({ keyword, pageUrl, pageText, settings }) {
+async function requestXiaohongshuSearchPage({ keyword, page = 1, cursor = "", pageUrl, pageText, settings }) {
   // v2 is the endpoint used by the current XHS web client (and by the
   // reference desktop helper). Keep v1 as a compatibility fallback because
   // older deployments still expose it.
@@ -308,7 +319,7 @@ async function requestXiaohongshuSearchPage({ keyword, pageUrl, pageText, settin
       path: "/api/sns/web/v2/search/notes",
       body: {
         filters: [],
-        page: 1,
+        page,
         pageSize: 20,
         page_size: 20,
         keyword,
@@ -320,8 +331,8 @@ async function requestXiaohongshuSearchPage({ keyword, pageUrl, pageText, settin
         type: "51",
         tags: [],
         id: "",
-        search_id: "",
-        searchId: "",
+        search_id: cursor,
+        searchId: cursor,
         dataType: "51",
         data_type: "",
         search_filter: [],
@@ -332,9 +343,9 @@ async function requestXiaohongshuSearchPage({ keyword, pageUrl, pageText, settin
       path: "/api/sns/web/v1/search/notes",
       body: {
         keyword,
-        page: 1,
+        page,
         page_size: 20,
-        search_id: "",
+        search_id: cursor,
         sort: "general",
         note_type: 0,
       },
@@ -388,6 +399,29 @@ async function requestXiaohongshuSearchPage({ keyword, pageUrl, pageText, settin
   }
 
   return null;
+}
+
+function normalizeXiaohongshuSearchCursor(value) {
+  const cursor = pickSingleLineText(value);
+  return /^page:\d+$/i.test(cursor) ? "" : cursor;
+}
+
+function xiaohongshuSearchPagination(payload, page, postCount, limit) {
+  const nextCursor = pickSingleLineText(
+    payload?.next_cursor,
+    payload?.data?.cursor,
+    payload?.data?.next_cursor,
+    payload?.data?.search_id,
+    payload?.cursor,
+  );
+  const rawHasMore = payload?.data?.has_more ?? payload?.has_more;
+  const upstreamPageSize = Math.min(limit, 20);
+  const hasMore = rawHasMore == null ? postCount >= upstreamPageSize : Boolean(rawHasMore);
+
+  return {
+    has_more: hasMore,
+    next_cursor: hasMore ? (nextCursor || `page:${page + 1}`) : "",
+  };
 }
 
 export async function resolveXiaohongshuProfilePostsPage(options = {}, settings = {}) {

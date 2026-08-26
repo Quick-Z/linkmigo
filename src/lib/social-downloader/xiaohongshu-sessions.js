@@ -162,18 +162,27 @@ export async function logoutXiaohongshuSession(sessionId) {
  * XHS binds search requests to the logged-in browser/device context, so
  * copying only cookies into a fresh Chromium profile is often not sufficient.
  */
-export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs = 25_000) {
+export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs = 25_000, options = {}) {
   const session = store().get(String(sessionId || ""));
   if (!session || session.status !== "authenticated" || !session.cdp) return { html: "", payload: null };
 
   const query = String(keyword || "").trim();
   if (!query) return { html: "", payload: null };
+  const requestedPage = Math.min(Math.max(Number.parseInt(options.page, 10) || 1, 1), 100);
+  const isLoadMore = requestedPage > 1;
 
   // Serialize page operations for a session. A second request must wait for
   // the first one; otherwise it can receive the previous keyword's payload.
   if (session.searchPromise) {
     await session.searchPromise.catch(() => {});
     if (session.status !== "authenticated" || !session.cdp) return { html: "", payload: null };
+  }
+  const cachedPage = session.searchState?.keyword === query
+    ? session.searchState.pages?.[requestedPage]
+    : null;
+  if (isLoadMore && cachedPage) return cachedPage;
+  if (isLoadMore && session.searchState?.keyword !== query) {
+    return { html: "", cards: [], payload: null };
   }
   let removeNetworkListener = () => {};
   let removeLoadingListener = () => {};
@@ -223,12 +232,47 @@ export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs =
 
     await cdp.send("Page.enable");
     await cdp.send("Network.enable");
-    await cdp.send("Page.navigate", { url: searchUrl.toString() });
+    let baselineCardHrefs = [];
+    if (isLoadMore) {
+      const baseline = await cdp.send("Runtime.evaluate", {
+        expression: `Array.from(document.querySelectorAll('[href*="/explore/"], [href*="/discovery/item/"]')).map((node) => (node.closest('a') || node).getAttribute('href') || '').filter(Boolean)`,
+        returnByValue: true,
+      }).catch(() => null);
+      baselineCardHrefs = Array.isArray(baseline?.result?.value) ? baseline.result.value : [];
+    } else {
+      await cdp.send("Page.navigate", { url: searchUrl.toString() });
+    }
 
     const deadline = Date.now() + Math.max(3_000, timeoutMs);
     let interactionAttempted = false;
     let lastCardCount = 0;
     while (Date.now() < deadline) {
+      if (isLoadMore) {
+        await cdp.send("Runtime.evaluate", {
+          expression: `(() => {
+            const scrollingElement = document.scrollingElement || document.documentElement;
+            scrollingElement.scrollTop = scrollingElement.scrollHeight;
+            window.scrollTo(0, scrollingElement.scrollHeight);
+            for (const element of document.querySelectorAll('main, section, div')) {
+              const style = getComputedStyle(element);
+              if (!/(?:auto|scroll)/.test(style.overflowY) || element.scrollHeight <= element.clientHeight + 80) continue;
+              element.scrollTop = element.scrollHeight;
+              element.dispatchEvent(new Event('scroll', { bubbles: true }));
+            }
+            window.dispatchEvent(new Event('scroll'));
+            return true;
+          })()`,
+          returnByValue: true,
+        }).catch(() => {});
+        await cdp.send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: 640,
+          y: 850,
+          deltaX: 0,
+          deltaY: 1800,
+        }).catch(() => {});
+      }
+
       const state = await cdp.send("Runtime.evaluate", {
         expression: `(() => {
           const links = Array.from(document.querySelectorAll('[href*="/explore/"], [href*="/discovery/item/"]'));
@@ -240,6 +284,16 @@ export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs =
       }).catch(() => null);
       const value = state?.result?.value || {};
       lastCardCount = Math.max(lastCardCount, Number(value.cards) || 0);
+
+      if (isLoadMore) {
+        const hasSearchItems = searchPayloads.some((payload) => {
+          return (Array.isArray(payload?.data?.items) && payload.data.items.length > 0)
+            || (Array.isArray(payload?.items) && payload.items.length > 0);
+        });
+        if (hasSearchItems) break;
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        continue;
+      }
 
       // Some XHS builds ignore the keyword query string until the search box
       // receives an input/Enter event. Trigger the same UI path once when the
@@ -315,11 +369,27 @@ export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs =
     removeNetworkListener?.();
     removeLoadingListener?.();
     touch(session.id);
-    return {
+    const baselineSet = new Set(baselineCardHrefs);
+    const renderedCards = Array.isArray(cards?.result?.value) ? cards.result.value : [];
+    const result = {
       html: String(html?.result?.value || ""),
-      cards: Array.isArray(cards?.result?.value) ? cards.result.value : [],
+      cards: isLoadMore
+        ? renderedCards.filter((card) => !baselineSet.has(String(card?.href || "")))
+        : renderedCards,
       payload: searchPayloads.at(-1) || null,
     };
+    if (!isLoadMore) {
+      session.searchState = { keyword: query, pages: {} };
+    } else {
+      session.searchState ||= { keyword: query, pages: {} };
+      session.searchState.pages ||= {};
+      session.searchState.pages[requestedPage] = {
+        html: "",
+        cards: result.cards,
+        payload: result.payload,
+      };
+    }
+    return result;
   })().finally(() => {
     removeNetworkListener?.();
     removeLoadingListener?.();

@@ -1346,10 +1346,15 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
             following_count: null,
           },
           posts,
+          search_keyword: keyword,
           profile_posts_page: {
             total_count: posts.length,
+            loaded_count: posts.length,
+            next_cursor: payload.next_cursor || "",
             has_more: Boolean(payload.has_more),
-            is_partial_snapshot: true,
+            is_partial_snapshot: false,
+            search_page: Number(payload.page) || 1,
+            source: "xiaohongshu_search",
           },
           search_login_platforms: loginPlatforms,
         });
@@ -1696,18 +1701,33 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     }
 
     const shouldSelectNewPosts = allPostsSelected;
+    const isXiaohongshuSearch = result.platform === "xiaohongshu"
+      && Boolean(result.search_keyword)
+      && page.source === "xiaohongshu_search";
+    const nextSearchPage = Math.max(Number.parseInt(page.search_page, 10) || 1, 1) + 1;
 
     profilePostsLoadingRef.current = true;
     setIsLoadingMoreProfilePosts(true);
     setError(null);
 
     try {
-      const response = await fetch(
-        `/api/v1/instagram/profile-requests/${encodeURIComponent(result.request_id)}/posts?cursor=${encodeURIComponent(cursor)}&limit=30`,
-        {
+      const response = isXiaohongshuSearch
+        ? await fetch("/api/v1/xiaohongshu/search", {
+          method: "POST",
           cache: "no-store",
-        },
-      );
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            keyword: result.search_keyword,
+            limit: 20,
+            page: nextSearchPage,
+            cursor,
+            request_id: result.request_id,
+          }),
+        })
+        : await fetch(
+          `/api/v1/instagram/profile-requests/${encodeURIComponent(result.request_id)}/posts?cursor=${encodeURIComponent(cursor)}&limit=30`,
+          { cache: "no-store" },
+        );
       const payload = await response.json();
 
       if (!response.ok) {
@@ -1721,10 +1741,24 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
           return current;
         }
 
+        const mergedPosts = mergeProfilePosts(current.posts, nextPosts);
         return {
           ...current,
-          posts: mergeProfilePosts(current.posts, nextPosts),
-          profile_posts_page: payload.page ?? current.profile_posts_page,
+          posts: mergedPosts,
+          profile: isXiaohongshuSearch
+            ? { ...current.profile, post_count: mergedPosts.length }
+            : current.profile,
+          profile_posts_page: isXiaohongshuSearch
+            ? {
+              total_count: mergedPosts.length,
+              loaded_count: mergedPosts.length,
+              next_cursor: payload.next_cursor || "",
+              has_more: Boolean(payload.has_more && payload.next_cursor && nextPosts.length > 0),
+              is_partial_snapshot: false,
+              search_page: Number(payload.page) || nextSearchPage,
+              source: "xiaohongshu_search",
+            }
+            : payload.page ?? current.profile_posts_page,
         };
       });
 

@@ -5,7 +5,10 @@ import {
   xiaohongshuSessionCookie,
 } from "@/lib/social-downloader/xiaohongshu-sessions";
 import { searchXiaohongshu } from "@/lib/social-downloader/xiaohongshu";
-import { saveXiaohongshuSearchRecord } from "@/lib/social-downloader/service";
+import {
+  appendXiaohongshuSearchRecord,
+  saveXiaohongshuSearchRecord,
+} from "@/lib/social-downloader/service";
 import { errorPayload, getErrorDetail, toAppError } from "@/lib/social-downloader/errors";
 import { getSocialDownloaderSettings } from "@/lib/social-downloader/settings";
 
@@ -26,13 +29,17 @@ export async function POST(request) {
   const rawKeyword = body?.keyword ?? body?.query ?? body?.text;
   const keyword = typeof rawKeyword === "string" ? rawKeyword.trim() : "";
   const limit = body?.limit;
+  const page = Math.min(Math.max(Number.parseInt(body?.page, 10) || 1, 1), 100);
+  const cursor = typeof body?.cursor === "string" ? body.cursor.trim() : "";
+  const requestId = typeof body?.request_id === "string" ? body.request_id.trim() : "";
+  let sessionId = "";
 
   try {
-    const sessionId = ensureXiaohongshuSession(request);
+    sessionId = ensureXiaohongshuSession(request);
     const baseSettings = getSocialDownloaderSettings();
     const payload = await searchXiaohongshu(
       keyword,
-      { limit },
+      { limit, page, cursor },
       {
         ...baseSettings,
         xiaohongshuSessionId: sessionId,
@@ -40,7 +47,16 @@ export async function POST(request) {
       },
     );
     try {
-      const record = await saveXiaohongshuSearchRecord({ keyword, posts: payload.posts, sessionId });
+      const pagination = {
+        page: payload.page || page,
+        next_cursor: payload.next_cursor || "",
+        has_more: Boolean(payload.has_more),
+      };
+      const record = requestId
+        ? await appendXiaohongshuSearchRecord({ requestId, keyword, posts: payload.posts, pagination, sessionId })
+        : page === 1
+          ? await saveXiaohongshuSearchRecord({ keyword, posts: payload.posts, pagination, sessionId })
+          : null;
       if (record?.request_id) payload.request_id = record.request_id;
     } catch {
       // Search results remain usable even if the optional download index cannot be saved.

@@ -177,7 +177,7 @@ export async function getZipFile(requestId, options = {}) {
 }
 
 /** Store keyword-search posts in the same profile record used by batch downloads. */
-export async function saveXiaohongshuSearchRecord({ keyword, posts, sessionId = "" } = {}) {
+export async function saveXiaohongshuSearchRecord({ keyword, posts, pagination = {}, sessionId = "" } = {}) {
   const query = String(keyword || "").trim();
   const normalizedPosts = Array.isArray(posts) ? posts : [];
   if (!query || normalizedPosts.length === 0) return null;
@@ -201,13 +201,53 @@ export async function saveXiaohongshuSearchRecord({ keyword, posts, sessionId = 
       posts: normalizedPosts,
       profile_pagination: {
         source: "xiaohongshu_search",
-        next_cursor: "",
-        has_more: false,
+        next_cursor: String(pagination.next_cursor || "").trim(),
+        has_more: Boolean(pagination.has_more && pagination.next_cursor),
+        search_keyword: query,
+        search_page: Math.max(Number.parseInt(pagination.page, 10) || 1, 1),
       },
     },
     settings: getSocialDownloaderSettings(),
     sessionId,
   });
+}
+
+export async function appendXiaohongshuSearchRecord({ requestId, keyword, posts, pagination = {}, sessionId = "" } = {}) {
+  const cache = getCacheStore();
+  const record = await cache.getRecord(String(requestId || ""));
+  const query = String(keyword || "").trim();
+  const paginationSource = String(record?.profile_pagination?.source || "");
+
+  if (record?.platform !== "xiaohongshu" || paginationSource !== "xiaohongshu_search") {
+    throw new AppError(ErrorCode.CACHE_EXPIRED, "小红书搜索结果缓存不存在或已过期。", 404);
+  }
+  if (record.session_id && record.session_id !== sessionId) {
+    throw new AppError(ErrorCode.CACHE_EXPIRED, "小红书搜索登录会话已变化，请重新搜索。", 410);
+  }
+  if (record.profile_pagination?.search_keyword && record.profile_pagination.search_keyword !== query) {
+    throw new AppError(ErrorCode.UNSUPPORTED_URL, "小红书搜索关键词与当前结果不一致。", 400);
+  }
+
+  const mergedPosts = mergeProfilePostsForCache(record.posts, posts);
+  const updatedRecord = {
+    ...record,
+    profile: {
+      ...(record.profile || {}),
+      post_count: mergedPosts.length,
+    },
+    posts: mergedPosts,
+    profile_pagination: {
+      ...(record.profile_pagination || {}),
+      source: "xiaohongshu_search",
+      next_cursor: String(pagination.next_cursor || "").trim(),
+      has_more: Boolean(pagination.has_more && pagination.next_cursor),
+      search_keyword: query,
+      search_page: Math.max(Number.parseInt(pagination.page, 10) || 1, 1),
+    },
+  };
+
+  await cache.saveRecord(updatedRecord);
+  return updatedRecord;
 }
 
 export async function getProfileZipFile(requestId, options = {}) {
@@ -981,12 +1021,15 @@ function normalizeProfilePostsForCache(posts) {
 
 function normalizeProfilePaginationForCache(pagination, profile = {}) {
   const safePagination = pagination && typeof pagination === "object" ? pagination : {};
+  const searchKeyword = String(safePagination.search_keyword || "").trim();
+  const searchPage = Math.max(Number.parseInt(safePagination.search_page, 10) || 0, 0);
 
   return {
     source: String(safePagination.source || "instagram_public_snapshot"),
     user_id: String(safePagination.user_id || profile.user_id || "").trim(),
     next_cursor: String(safePagination.next_cursor || "").trim(),
     has_more: Boolean(safePagination.has_more && safePagination.next_cursor),
+    ...(searchKeyword ? { search_keyword: searchKeyword, search_page: searchPage || 1 } : {}),
   };
 }
 

@@ -370,6 +370,134 @@ const colorModeTokens = {
   },
 };
 
+// Cohere is intentionally isolated from the existing platform themes. The
+// default theme continues to use the original per-platform colour language;
+// opting into Cohere swaps the complete surface/token set instead.
+const cohereThemeTokens = {
+  light: {
+    pageBackground: "#ffffff",
+    pageText: "#212121",
+    titleText: "#17171c",
+    bodyText: "#212121",
+    mutedText: "#616161",
+    subtleText: "#75758a",
+    placeholderText: "#93939f",
+    panelBorder: "#d9d9dd",
+    panelClass: "border-[#d9d9dd] bg-white/90 shadow-[0_24px_60px_rgba(33,33,33,0.08)]",
+    pageBackdrop: "radial-gradient(circle at 9% 12%, rgba(255,119,89,0.26), transparent 31%), radial-gradient(circle at 74% 24%, rgba(24,99,220,0.18), transparent 38%), radial-gradient(circle at 50% 100%, rgba(0,60,51,0.12), transparent 42%), linear-gradient(135deg, #ffffff 0%, #eeece7 100%)",
+    glowA: "rgba(255,119,89,0.22)",
+    glowB: "rgba(24,99,220,0.16)",
+    glowC: "rgba(0,60,51,0.12)",
+    glassGradient: "linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(238,236,231,0.9) 100%)",
+    glassGradientSoft: "linear-gradient(135deg, rgba(255,255,255,0.96) 0%, rgba(245,245,242,0.9) 100%)",
+    resultGradient: "linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(241,245,255,0.94) 52%, rgba(237,252,233,0.9) 100%)",
+    chipText: "#212121",
+    chipBackground: "rgba(255,255,255,0.86)",
+    chipBorder: "#d9d9dd",
+    chipShadow: "inset 0 1px 0 rgba(255,255,255,0.92)",
+    inputText: "#212121",
+    invalidBackground: "#fff5f2",
+    invalidText: "#b30000",
+    cardBackground: "#ffffff",
+    cardGradient: "linear-gradient(135deg, #ffffff 0%, #f7f7f5 100%)",
+    cardBorder: "#f2f2f2",
+    cardShadow: "0 14px 30px rgba(33,33,33,0.06)",
+    disabledBackground: "#eeece7",
+    disabledBorder: "#d9d9dd",
+    disabledText: "#93939f",
+    iconBackground: "#f1f5ff",
+    mediaOverlay: "rgba(0,60,51,0.08)",
+    modalHeaderBackground: "rgba(255,255,255,0.9)",
+    modalPanelBackground: "rgba(255,255,255,0.94)",
+    selectionBackground: "rgba(255,119,89,0.1)",
+    modalButtonBackground: "#ffffff",
+    modalButtonText: "#212121",
+    previewBackdropOverlay: "radial-gradient(circle at center, rgba(255,119,89,0.16), rgba(238,236,231,0.7) 72%)",
+    previewBackdropVeil: "linear-gradient(135deg, rgba(255,119,89,0.14) 0%, rgba(255,255,255,0.34) 48%, rgba(0,60,51,0.16) 100%)",
+    toolbarBackground: "rgba(255,255,255,0.9)",
+    toolbarText: "#212121",
+    accent: "#17171c",
+    accentStrong: "#003c33",
+    accentText: "#212121",
+    accentMuted: "#75758a",
+    buttonText: "#ffffff",
+    border: "#d9d9dd",
+    borderStrong: "#17171c",
+    ring: "rgba(76,110,230,0.28)",
+    panelShadow: "0 24px 60px rgba(33,33,33,0.08)",
+    buttonShadow: "0 14px 28px rgba(0,60,51,0.18)",
+    selectedShadow: "0 18px 36px rgba(0,60,51,0.14)",
+    glassEnd: "rgba(238,236,231,0.9)",
+    cardEnd: "#f7f7f5",
+    buttonGradient: "linear-gradient(135deg, #17171c 0%, #003c33 100%)",
+    progressGradient: "linear-gradient(90deg, #ff7759 0%, #1863dc 52%, #003c33 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(255,119,89,0.16) 0%, rgba(255,255,255,0.96) 48%, rgba(24,99,220,0.14) 100%)",
+    previewGradient: "linear-gradient(135deg, #ffad9b 0%, #f1f5ff 52%, #edfce9 100%)",
+    mediaTint: "rgba(255,255,255,0.76)",
+  },
+  dark: {
+    pageBackground: "#071829",
+    pageText: "#ffffff",
+    titleText: "#ffffff",
+    bodyText: "#f5f5f4",
+    mutedText: "#b7b7bd",
+    subtleText: "#a4a4b0",
+    placeholderText: "#93939f",
+    panelBorder: "rgba(255,255,255,0.18)",
+    panelClass: "border-white/15 bg-[#17171c]/90 shadow-[0_28px_70px_rgba(0,0,0,0.34)]",
+    pageBackdrop: "radial-gradient(circle at 7% 12%, rgba(255,119,89,0.36), transparent 30%), radial-gradient(circle at 76% 18%, rgba(76,110,230,0.32), transparent 38%), radial-gradient(circle at 64% 86%, rgba(0,60,51,0.4), transparent 44%), linear-gradient(135deg, #071829 0%, #17171c 56%, #000000 100%)",
+    glowA: "rgba(255,119,89,0.28)",
+    glowB: "rgba(76,110,230,0.22)",
+    glowC: "rgba(0,60,51,0.26)",
+    glassGradient: "linear-gradient(135deg, rgba(35,35,42,0.95) 0%, rgba(7,24,41,0.92) 100%)",
+    glassGradientSoft: "linear-gradient(135deg, rgba(38,38,46,0.95) 0%, rgba(0,60,51,0.68) 100%)",
+    resultGradient: "linear-gradient(135deg, rgba(23,23,28,0.96) 0%, rgba(7,24,41,0.94) 52%, rgba(0,60,51,0.82) 100%)",
+    chipText: "#f5f5f4",
+    chipBackground: "rgba(23,23,28,0.82)",
+    chipBorder: "rgba(255,255,255,0.18)",
+    chipShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
+    inputText: "#ffffff",
+    invalidBackground: "rgba(86,20,18,0.8)",
+    invalidText: "#ffad9b",
+    cardBackground: "rgba(23,23,28,0.92)",
+    cardGradient: "linear-gradient(135deg, rgba(38,38,46,0.96) 0%, rgba(7,24,41,0.9) 100%)",
+    cardBorder: "rgba(255,255,255,0.14)",
+    cardShadow: "0 18px 42px rgba(0,0,0,0.28)",
+    disabledBackground: "rgba(23,23,28,0.72)",
+    disabledBorder: "rgba(255,255,255,0.16)",
+    disabledText: "#93939f",
+    iconBackground: "rgba(255,119,89,0.14)",
+    mediaOverlay: "rgba(0,0,0,0.2)",
+    modalHeaderBackground: "rgba(23,23,28,0.9)",
+    modalPanelBackground: "rgba(7,24,41,0.92)",
+    selectionBackground: "rgba(255,119,89,0.15)",
+    modalButtonBackground: "rgba(255,255,255,0.08)",
+    modalButtonText: "#ffffff",
+    previewBackdropOverlay: "radial-gradient(circle at center, rgba(255,119,89,0.2), rgba(0,0,0,0.72) 72%)",
+    previewBackdropVeil: "linear-gradient(135deg, rgba(255,119,89,0.22) 0%, rgba(7,24,41,0.26) 48%, rgba(0,0,0,0.72) 100%)",
+    toolbarBackground: "rgba(7,24,41,0.88)",
+    toolbarText: "#ffffff",
+    accent: "#ff7759",
+    accentStrong: "#ffad9b",
+    accentText: "#ffffff",
+    accentMuted: "#ffad9b",
+    buttonText: "#17171c",
+    border: "rgba(255,119,89,0.34)",
+    borderStrong: "rgba(255,173,155,0.5)",
+    ring: "rgba(255,119,89,0.28)",
+    panelShadow: "0 28px 70px rgba(0,0,0,0.38), 0 12px 30px rgba(0,60,51,0.2)",
+    buttonShadow: "0 16px 34px rgba(255,119,89,0.22)",
+    selectedShadow: "0 20px 42px rgba(255,119,89,0.2)",
+    glassEnd: "rgba(7,24,41,0.92)",
+    cardEnd: "rgba(7,24,41,0.9)",
+    buttonGradient: "linear-gradient(135deg, #ffffff 0%, #eeece7 100%)",
+    progressGradient: "linear-gradient(90deg, #ff7759 0%, #ffad9b 48%, #4c6ee6 100%)",
+    skeletonGradient: "linear-gradient(90deg, rgba(255,119,89,0.2) 0%, rgba(23,23,28,0.96) 48%, rgba(76,110,230,0.2) 100%)",
+    previewGradient: "linear-gradient(135deg, #ff7759 0%, #071829 52%, #003c33 100%)",
+    mediaTint: "rgba(7,24,41,0.74)",
+  },
+};
+
 const darkPlatformThemeOverrides = {
   instagram: {
     accent: "#FF5EA8",
@@ -955,7 +1083,7 @@ const buttonThemes = {
   },
 };
 
-export function SocialDownloaderClient({ appName = "LinkMigo" }) {
+export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "default", urlPlaceholder = "" }) {
   const [language, setLanguage] = useState("zh");
   const [colorMode, setColorMode] = useState("light");
   const [url, setUrl] = useState("");
@@ -990,12 +1118,15 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
   const normalizedUrl = extractUrlCandidate(url);
   const canSubmit = Boolean(normalizedUrl) && isValidHttpUrl(normalizedUrl);
   const inputPlatform = detectPlatform(normalizedUrl);
-  const copy = copyByLanguage[language] ?? copyByLanguage.zh;
-  const inputTheme = getButtonTheme(inputPlatform, colorMode);
-  const resolvingTheme = getButtonTheme(resolvingPlatform, colorMode);
-  const resultTheme = result ? getButtonTheme(result.platform, colorMode) : getButtonTheme("", colorMode);
+  const copy = {
+    ...(copyByLanguage[language] ?? copyByLanguage.zh),
+    ...(language === "zh" && urlPlaceholder ? { urlPlaceholder } : {}),
+  };
+  const inputTheme = getButtonTheme(inputPlatform, colorMode, themeName);
+  const resolvingTheme = getButtonTheme(resolvingPlatform, colorMode, themeName);
+  const resultTheme = result ? getButtonTheme(result.platform, colorMode, themeName) : getButtonTheme("", colorMode, themeName);
   const submitTheme = isLoading ? resolvingTheme : inputTheme;
-  const inputDrivenTheme = normalizedUrl ? inputTheme : getButtonTheme("", colorMode);
+  const inputDrivenTheme = normalizedUrl ? inputTheme : getButtonTheme("", colorMode, themeName);
   const hasOutput = Boolean(isLoading || result || error);
   const isProfileResult = result?.mode === "profile";
   const resultSelectionKey = result ? `${result.mode || "post"}:${result.request_id || result.canonical_url || ""}` : "";
@@ -1780,6 +1911,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
     <main
       className="lm-page relative h-[100svh] overflow-hidden transition-colors duration-700"
       data-color-mode={colorMode}
+      data-ui-theme={themeName}
       style={{ backgroundColor: inputDrivenTheme.pageBackground, color: inputDrivenTheme.pageText }}
     >
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -1815,7 +1947,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
             <div className="relative z-10">
               <div className="text-center">
                 <h1
-                  className={`font-serif italic leading-[0.98] transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  className={`${themeName === "cohere" ? "font-sans not-italic tracking-[-0.06em]" : "font-serif italic"} leading-[0.98] transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                     hasOutput ? "text-[2rem] sm:text-[2.75rem]" : "text-[3.2rem] sm:text-[5.4rem] lg:text-[6.25rem]"
                   }`}
                   style={{ color: inputDrivenTheme.titleText }}
@@ -2103,7 +2235,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo" }) {
           onDownloadAll={() => downloadAllAssetsFromResult(profilePostDetail.result, "profile_post_detail_modal")}
           onDownloadAsset={downloadCurrentAsset}
           result={profilePostDetail.result}
-          theme={getButtonTheme(profilePostDetail.result.platform, colorMode)}
+          theme={getButtonTheme(profilePostDetail.result.platform, colorMode, themeName)}
         />
       ) : null}
       {profilePostDetail.isOpen && !profilePostDetail.result ? (
@@ -4533,7 +4665,7 @@ function buildPrimaryButtonStyle(theme, disabled) {
   return {
     color: theme.buttonText,
     backgroundColor: hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.2 : 0.14),
-    backgroundImage: theme.glassGradientSoft,
+    backgroundImage: theme.uiTheme === "cohere" ? theme.buttonGradient : theme.glassGradientSoft,
     borderColor: theme.borderStrong,
     boxShadow: theme.buttonShadow,
     transition: themeTransition,
@@ -5012,12 +5144,18 @@ function buildSegmentStyle(theme, isActive) {
 }
 
 function buildActionInteractionVars(theme) {
+  const cohereHoverGradient = theme.colorMode === "dark"
+    ? "linear-gradient(135deg, #eeece7 0%, #ffffff 100%)"
+    : "linear-gradient(135deg, #003c33 0%, #17171c 100%)";
+
   return {
     "--lm-action-hover-bg": hexToRgba(theme.accent, 0.18),
     "--lm-action-hover-border": theme.borderStrong ?? theme.border,
     "--lm-action-hover-shadow": theme.buttonShadow,
     "--lm-action-active-bg": hexToRgba(theme.accent, 0.24),
     "--lm-action-active-shadow": `0 8px 18px ${hexToRgba(theme.accent, 0.18)}`,
+    "--lm-action-hover-gradient": theme.uiTheme === "cohere" ? cohereHoverGradient : undefined,
+    "--lm-action-active-gradient": theme.uiTheme === "cohere" ? cohereHoverGradient : undefined,
   };
 }
 
@@ -5513,7 +5651,7 @@ function darkPostAvatarRing(platform, accent, accentStrong) {
   return `linear-gradient(135deg, ${accent} 0%, ${accentStrong} 100%)`;
 }
 
-function getButtonTheme(platform, colorMode = "light") {
+function getButtonTheme(platform, colorMode = "light", themeName = "default") {
   const surface = colorModeTokens[colorMode] ?? colorModeTokens.light;
   const platformTheme = buttonThemes[platform] ?? buttonThemes.neutral;
   const platformKey = buttonThemes[platform] ? platform : "neutral";
@@ -5521,10 +5659,21 @@ function getButtonTheme(platform, colorMode = "light") {
     ? darkPlatformThemeOverrides[platformKey] ?? darkPlatformThemeOverrides.neutral
     : {};
 
+  if (themeName === "cohere") {
+    return {
+      ...platformTheme,
+      ...surface,
+      ...(cohereThemeTokens[colorMode] ?? cohereThemeTokens.light),
+      uiTheme: "cohere",
+      colorMode,
+    };
+  }
+
   return {
     ...platformTheme,
     ...colorModeOverride,
     ...surface,
+    uiTheme: "default",
     colorMode,
   };
 }

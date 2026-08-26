@@ -49,3 +49,4 @@ next-env.d.ts
 /logs
 /logs/*.log
 !/logs/.gitkeep
+/design-md

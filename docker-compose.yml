@@ -1,5 +1,8 @@
 services:
   linkmigo:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: k21vin/linkmigo:0.1.8-amd64 # 根据你设备芯片架构来调整，如果是arm架构可以改成 image: k21vin/linkmigo:0.1.8-arm64
     platform: linux/amd64
     container_name: linkmigo

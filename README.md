@@ -135,9 +135,11 @@ image: k21vin/linkmigo:latest-arm64
 
 ```bash
 mkdir -p social-downloader logs
-docker compose pull
-docker compose up -d
+# 使用仓库当前代码构建（包含 yt-dlp 下载引擎）
+docker compose up -d --build
 ```
+
+仅使用已发布镜像时才执行 `docker compose pull`；修改 LinkMigo 代码后，单纯 `docker compose restart` 不会更新镜像内容。
 
 访问地址：
 
@@ -234,6 +236,25 @@ npm run docker:push:manifest -- --image 你的DockerHub用户名/linkmigo --tags
 
 
 ## 🧙‍♀️ 法师
+
+### YouTube 下载引擎
+
+YouTube 下载使用 Node 调用持续更新的 `yt-dlp` 可执行文件，由它负责播放器签名、分段下载和 ffmpeg 合并。项目 Docker 镜像会自动安装对应架构的 `yt-dlp`；非 Docker 部署会在首次使用 YouTube 时自动下载到缓存目录，也可以自行安装后指定：
+
+```bash
+YTDLP_PATH=/usr/local/bin/yt-dlp
+```
+
+默认把 Node 作为 yt-dlp 的 JavaScript runtime，用于执行 YouTube 播放器签名脚本；如需切换到其他已安装 runtime，可设置 `YTDLP_JS_RUNTIME`。
+
+如果运行环境不能访问 GitHub，可关闭自动下载并提供系统内的二进制：
+
+```bash
+YTDLP_AUTO_DOWNLOAD=0
+YTDLP_PATH=/usr/local/bin/yt-dlp
+```
+
+需要登录 Cookie 时，可以配置 `YTDLP_COOKIES_FILE=/path/to/cookies.txt`。这条链路完全由 JS/Node 编排，不需要在 LinkMigo 中运行 Python。
 
 服务端会优先使用当前网络环境直接访问外网。如果「魔法」是全局路由或 TUN 模式，通常不需要额外配置；如果「魔法」客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP、HTTPS 或 SOCKS5 代理。
 

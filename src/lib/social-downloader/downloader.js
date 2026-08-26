@@ -8,6 +8,7 @@ import { URL } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
 import { fetchWithTimeout, getProxyUrl } from "./utils";
+import { downloadYoutubeWithYtDlp } from "./ytdlp";
 
 const require = createRequire(import.meta.url);
 const packagedFfmpegPath = require("ffmpeg-static");
@@ -62,6 +63,16 @@ const CONTENT_TYPE_EXTENSIONS = {
 };
 
 export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, onProgress }) {
+  if (asset.download_with === "yt-dlp") {
+    return await downloadYoutubeWithYtDlp({
+      asset,
+      destination,
+      maxBytes,
+      timeoutMs,
+      onProgress,
+    });
+  }
+
   if (asset.media_type === "text" && typeof asset.text_content === "string") {
     return await writeTextAsset({ asset, destination, maxBytes, onProgress });
   }
@@ -181,6 +192,14 @@ async function writeTextAsset({ asset, destination, maxBytes, onProgress }) {
 }
 
 export async function estimateMediaDownloadSize({ asset, maxBytes, timeoutMs }) {
+  if (asset.download_with === "yt-dlp") {
+    return {
+      totalBytes: null,
+      knownParts: 0,
+      partCount: 1,
+    };
+  }
+
   if (asset.media_type === "text" && typeof asset.text_content === "string") {
     const size = Buffer.byteLength(asset.text_content, "utf8");
 
@@ -791,6 +810,9 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
 
   const tempPath = `${destination}.part`;
   const headers = { ...MEDIA_HEADERS, ...(asset.request_headers || {}) };
+  if (isYoutubeMediaUrl(asset.source_url)) {
+    headers.range = "bytes=0-";
+  }
   const expectedInfo = await probeContentInfo({ asset, headers, maxBytes, timeoutMs });
   const expectedType = expectedInfo.contentType;
   let response;
@@ -1219,6 +1241,15 @@ function isHlsUrl(value) {
     return new URL(value).pathname.toLowerCase().endsWith(".m3u8");
   } catch {
     return /\.m3u8(?:$|\?)/i.test(String(value));
+  }
+}
+
+function isYoutubeMediaUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname === "googlevideo.com" || parsed.hostname.endsWith(".googlevideo.com");
+  } catch {
+    return false;
   }
 }
 

@@ -15,6 +15,8 @@ RUN npm run build
 FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
 
+ARG TARGETARCH=amd64
+
 ARG APT_MIRROR=
 ARG INSTALL_CHROMIUM=1
 
@@ -35,11 +37,24 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     fi \
     && rm -rf /var/lib/apt/lists/*
 
+# Keep YouTube extraction in the maintained yt-dlp project. LinkMigo invokes
+# this standalone executable from Node; no Python runtime is required.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) YTDLP_ASSET="yt-dlp_linux" ;; \
+      arm64) YTDLP_ASSET="yt-dlp_linux_aarch64" ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YTDLP_ASSET}" -o /usr/local/bin/yt-dlp; \
+    chmod 0755 /usr/local/bin/yt-dlp; \
+    /usr/local/bin/yt-dlp --version
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV YTDL_NO_DEBUG_FILE=1
+ENV YTDLP_PATH=/usr/local/bin/yt-dlp
 ENV SOCIAL_CACHE_DIR=/data/social-downloader
 ENV CHROME_PATH=/usr/bin/chromium
 ENV LINKMIGO_XHS_HEADLESS=0

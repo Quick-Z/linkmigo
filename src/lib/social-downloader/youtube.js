@@ -17,6 +17,7 @@ import {
   pickSingleLineText,
   pickText,
 } from "./post-info";
+import { resolveYoutubeWithYtDlp } from "./ytdlp";
 
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 const YOUTUBE_HOSTS = new Set([
@@ -29,7 +30,9 @@ const YOUTUBE_HOSTS = new Set([
   "youtube-nocookie.com",
   "www.youtube-nocookie.com",
 ]);
-const INNERTUBE_CLIENTS = ["ANDROID_VR", "IOS", "ANDROID", "WEB", "WEB_EMBEDDED", "TV", "MWEB"];
+// Prefer clients whose media URLs are not tied to the legacy Android VR
+// playback contract. Keep Android VR as a last fallback for older videos.
+const INNERTUBE_CLIENTS = ["WEB_EMBEDDED", "WEB", "IOS", "ANDROID", "TV", "MWEB", "ANDROID_VR"];
 const YTDL_PLAYER_CLIENTS = ["WEB_EMBEDDED", "IOS", "ANDROID", "TV", "WEB"];
 const YOUTUBE_COMMENT_SORT = "TOP_COMMENTS";
 const YOUTUBE_COOKIE_ENV_NAMES = [
@@ -128,23 +131,12 @@ export async function resolveYoutubeComments(normalized, options = {}, settings 
 }
 
 export async function resolveYoutubePost(normalized, settings) {
-  try {
-    return await resolveYoutubePostWithInnertube(normalized, settings);
-  } catch (error) {
-    const primaryError = toYoutubeAppError(error);
-
-    try {
-      return await resolveYoutubePostWithYtdl(normalized, settings);
-    } catch (fallbackError) {
-      const secondaryError = toYoutubeAppError(fallbackError);
-
-      if (primaryError.code === ErrorCode.NO_MEDIA_FOUND && secondaryError.code !== ErrorCode.NO_MEDIA_FOUND) {
-        throw secondaryError;
-      }
-
-      throw primaryError;
-    }
-  }
+  // Keep the complete YouTube transaction inside yt-dlp.  In particular, do
+  // not fall back to the in-process extractors here: they expose short-lived
+  // googlevideo URLs to the generic downloader, which is exactly the path that
+  // produces the platform/CDN 403 seen in production.  yt-dlp owns player
+  // signatures, PO tokens, retries, fragment downloads and ffmpeg merging.
+  return await resolveYoutubeWithYtDlp(normalized, settings);
 }
 
 async function resolveYoutubePostWithInnertube(normalized, settings) {
@@ -1040,10 +1032,10 @@ function ytdlAudioFormatScore(format) {
 }
 
 function youtubeMediaHeaders(pageUrl) {
-  const headers = {
-    Referer: pageUrl,
-    Origin: "https://www.youtube.com",
-  };
+  // googlevideo playback URLs are signed and are most reliable with the
+  // same minimal headers used by ytdl-core. Some CDN edges reject an
+  // otherwise valid URL when Origin/Referer are added.
+  const headers = {};
   const cookieHeader = getYoutubeCookieHeader();
 
   if (cookieHeader) {

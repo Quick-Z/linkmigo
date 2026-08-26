@@ -1,5 +1,8 @@
 services:
   linkmigo:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: k21vin/linkmigo:latest-amd64
     container_name: linkmigo
     restart: unless-stopped

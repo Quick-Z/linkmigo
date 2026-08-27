@@ -150,10 +150,10 @@ export function AssetPreviewGrid({
 
               <span
                 aria-hidden="true"
-                className="grid size-4 shrink-0 place-items-center rounded-full border text-[9px] font-bold transition"
+                className="grid size-5 shrink-0 place-items-center rounded-full border transition"
                 style={buildSelectionBadgeStyle(theme, isSelected)}
               >
-                {isSelected ? "✓" : ""}
+                {isSelected ? <SelectionCheckIcon /> : null}
               </span>
             </div>
 
@@ -340,6 +340,14 @@ function AudioIcon() {
   );
 }
 
+function SelectionCheckIcon() {
+  return (
+    <svg aria-hidden="true" className="size-3.5" fill="none" viewBox="0 0 16 16">
+      <path d="m3.25 8.25 3 3 6.5-7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" />
+    </svg>
+  );
+}
+
 function PlayIcon() {
   return (
     <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24">
@@ -361,13 +369,17 @@ function buildAssetCardStyle(theme, isSelected) {
 }
 
 function buildSelectionBadgeStyle(theme, isSelected) {
+  const isCohere = theme.uiTheme === "cohere";
+
   return {
     color: isSelected ? theme.buttonText : "transparent",
-    backgroundColor: isSelected ? hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.2 : 0.12) : theme.selectionBackground,
+    backgroundColor: isSelected
+      ? isCohere ? theme.accent : hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.9 : 0.82)
+      : theme.selectionBackground,
     backgroundImage: isSelected
-      ? theme.glassGradientSoft
+      ? isCohere ? "none" : theme.glassGradientSoft
       : "none",
-    borderColor: isSelected ? theme.border : theme.panelBorder,
+    borderColor: isSelected ? isCohere ? theme.accentStrong : theme.border : theme.panelBorder,
     boxShadow: isSelected ? theme.buttonShadow : "none",
     transition: themeTransition,
   };
@@ -377,8 +389,8 @@ function buildActionButtonStyle(theme) {
   return {
     color: theme.buttonText,
     backgroundColor: hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.18 : 0.12),
-    backgroundImage: theme.glassGradientSoft,
-    borderColor: theme.border,
+    backgroundImage: theme.uiTheme === "cohere" ? theme.buttonGradient : theme.glassGradientSoft,
+    borderColor: theme.uiTheme === "cohere" ? theme.borderStrong : theme.border,
     boxShadow: theme.buttonShadow,
     transition: themeTransition,
     ...buildActionInteractionVars(theme),
@@ -386,12 +398,18 @@ function buildActionButtonStyle(theme) {
 }
 
 function buildActionInteractionVars(theme) {
+  const cohereHoverGradient = theme.colorMode === "dark"
+    ? "linear-gradient(135deg, #eeece7 0%, #ffffff 100%)"
+    : "linear-gradient(135deg, #003c33 0%, #17171c 100%)";
+
   return {
     "--lm-action-hover-bg": hexToRgba(theme.accent, 0.18),
     "--lm-action-hover-border": theme.borderStrong ?? theme.border,
     "--lm-action-hover-shadow": theme.buttonShadow,
     "--lm-action-active-bg": hexToRgba(theme.accent, 0.24),
     "--lm-action-active-shadow": `0 8px 18px ${hexToRgba(theme.accent, 0.18)}`,
+    "--lm-action-hover-gradient": theme.uiTheme === "cohere" ? cohereHoverGradient : undefined,
+    "--lm-action-active-gradient": theme.uiTheme === "cohere" ? cohereHoverGradient : undefined,
   };
 }
 

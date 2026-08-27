@@ -48,6 +48,7 @@ const copyByLanguage = {
     darkMode: "暗色",
     download: "下载",
     downloadAll: "全部下载",
+    downloadCurrent: "下载当前资源",
     downloadContents: "选择下载内容",
     downloadMedia: "帖子资源（图片和视频）",
     downloadPostText: "帖子文案（标题、正文）",
@@ -186,6 +187,7 @@ const copyByLanguage = {
     darkMode: "Dark",
     download: "Download",
     downloadAll: "Download All",
+    downloadCurrent: "Download current resource",
     downloadContents: "Choose download contents",
     downloadMedia: "Post resources (images and videos)",
     downloadPostText: "Post text (title and body)",
@@ -2301,7 +2303,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                 <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-center">
                   {!isKeywordMode && inputPlatform === "xiaohongshu" ? (
                     <button
-                      className={`${actionButtonBaseClass} h-11 shrink-0 px-4 text-[13px]`}
+                      className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-11 shrink-0 px-4 text-[13px]`}
                       onClick={openXiaohongshuLogin}
                       style={buildSecondaryButtonStyle(inputDrivenTheme)}
                       type="button"
@@ -2312,7 +2314,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
 
                   {result ? (
                     <button
-                      className={actionButtonBaseClass}
+                      className={`${actionButtonBaseClass} lm-cohere-contrast-hover`}
                       onClick={reset}
                       style={resetButtonStyle}
                       type="button"
@@ -2425,7 +2427,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                   <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-2 pt-1">
                     <GlassChip theme={resultTheme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
                     <a
-                      className="lm-themed-action inline-flex h-9 max-w-full shrink-0 cursor-pointer items-center rounded-full border px-3 text-[13px] font-semibold transition"
+                      className="lm-themed-action lm-cohere-contrast-hover lm-cohere-flat-action inline-flex h-9 max-w-full shrink-0 cursor-pointer items-center rounded-full border px-3 text-[13px] font-semibold transition"
                       href={result.canonical_url}
                       rel="noreferrer"
                       style={buildLinkChipStyle(resultTheme)}
@@ -2449,7 +2451,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                 <div className="grid shrink-0 gap-2 border-b px-3 py-2 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-start" style={{ borderColor: resultTheme.panelBorder }}>
                   <div className="lm-inline-scroll flex min-w-0 flex-wrap items-center gap-2 overflow-visible min-[600px]:flex-nowrap min-[600px]:overflow-x-auto">
                     <button
-                      className="lm-themed-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
+                      className="lm-themed-action lm-cohere-contrast-hover lm-cohere-flat-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
                       onClick={() => openPostInfoModal(0)}
                       style={buildCreatorButtonStyle(resultTheme)}
                       title={copy.openPostDetails}
@@ -2466,10 +2468,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                   </div>
 
                   <div className="flex shrink-0 flex-wrap items-center gap-2 min-[600px]:flex-nowrap min-[600px]:justify-end">
-                    <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={toggleAll} style={resultSecondaryButtonStyle} type="button">
+                    <button className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-9 px-3 text-[13px]`} onClick={toggleAll} style={resultSecondaryButtonStyle} type="button">
                       {allSelected ? copy.none : copy.all}
                     </button>
-                    <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={invertSelection} style={resultSecondaryButtonStyle} type="button">
+                    <button className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-9 px-3 text-[13px]`} onClick={invertSelection} style={resultSecondaryButtonStyle} type="button">
                       {copy.invert}
                     </button>
                     <button
@@ -2759,10 +2761,10 @@ function ProfileResultSection({
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2 min-[600px]:flex-nowrap min-[600px]:justify-end">
-          <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={onToggleAll} style={buildSecondaryButtonStyle(theme)} type="button">
+          <button className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-9 px-3 text-[13px]`} onClick={onToggleAll} style={buildSecondaryButtonStyle(theme)} type="button">
             {allSelected ? copy.none : copy.all}
           </button>
-          <button className={`${actionButtonBaseClass} h-9 px-3 text-[13px]`} onClick={onInvertSelection} style={buildSecondaryButtonStyle(theme)} type="button">
+          <button className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-9 px-3 text-[13px]`} onClick={onInvertSelection} style={buildSecondaryButtonStyle(theme)} type="button">
             {copy.invert}
           </button>
           <button
@@ -2872,11 +2874,12 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
               <button
                 aria-label={isSelected ? copy.unselectPost : copy.selectPost}
                 aria-pressed={isSelected}
-                className="absolute bottom-3 right-3 z-30 grid size-5 shrink-0 cursor-pointer place-items-center rounded-full border border-white/60 bg-white/15 text-[10px] font-bold text-white backdrop-blur-sm transition hover:scale-110"
+                className="absolute bottom-3 right-3 z-30 grid size-6 shrink-0 cursor-pointer place-items-center rounded-full border transition hover:scale-110"
                 onClick={() => onTogglePost(post.id)}
+                style={buildProfilePostSelectionStyle(theme, isSelected)}
                 type="button"
               >
-                  {isSelected ? "✓" : ""}
+                {isSelected ? <SelectionCheckIcon /> : null}
               </button>
             </div>
 
@@ -3334,6 +3337,14 @@ function ClearIcon() {
   );
 }
 
+function SelectionCheckIcon() {
+  return (
+    <svg aria-hidden="true" className="size-3.5" fill="none" viewBox="0 0 16 16">
+      <path d="m3.25 8.25 3 3 6.5-7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" />
+    </svg>
+  );
+}
+
 function InfoIcon() {
   return (
     <svg aria-hidden="true" className="size-3.5" fill="none" viewBox="0 0 24 24">
@@ -3432,6 +3443,24 @@ function DownloadContentsModal({ copy, onClose, onDownload, result, theme }) {
   const [commentLimit, setCommentLimit] = useState(20);
   const canDownload = includeMedia || includePostText || includeComments;
 
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
+    }
+
+    window.addEventListener("keydown", onKeyDown, true);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [onClose]);
+
   function submit(event) {
     event.preventDefault();
     if (!canDownload) return;
@@ -3488,7 +3517,7 @@ function DownloadContentsModal({ copy, onClose, onDownload, result, theme }) {
         ) : null}
 
         <div className="mt-6 flex justify-end gap-2">
-          <button className={`${actionButtonBaseClass} h-10 px-4 text-sm`} onClick={onClose} style={buildSecondaryButtonStyle(theme)} type="button">{copy.cancel}</button>
+          <button className={`${actionButtonBaseClass} lm-download-cancel h-10 px-4 text-sm`} onClick={onClose} style={buildSecondaryButtonStyle(theme)} type="button">{copy.cancel}</button>
           <button className={`${actionButtonBaseClass} h-10 px-4 text-sm`} disabled={!canDownload} style={buildPrimaryButtonStyle(theme, !canDownload)} type="submit">{copy.startDownload}</button>
         </div>
       </form>
@@ -3528,10 +3557,8 @@ function PostInfoModal({
   const [assetIndex, setAssetIndex] = useState(() => clampAssetIndex(initialAssetIndex, assets.length));
   const [isAssetPreviewOpen, setIsAssetPreviewOpen] = useState(false);
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
-  const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [toastId, setToastId] = useState(0);
-  const downloadMenuRef = useRef(null);
   const previewAsset = assets[assetIndex] ?? assets[0] ?? null;
   const hasMultipleAssets = assets.length > 1;
   const canOpenComments = canOpenPostComments(result);
@@ -3546,8 +3573,6 @@ function PostInfoModal({
 
     setAssetIndex(clampedIndex);
     setIsAssetPreviewOpen(true);
-    setIsDownloadMenuOpen(false);
-
     logClientAction("post_modal_asset_preview_clicked", {
       asset_id: asset.id,
       filename: asset.filename,
@@ -3569,7 +3594,6 @@ function PostInfoModal({
       return;
     }
 
-    setIsDownloadMenuOpen(false);
     onDownloadAsset?.(previewAsset);
   }, [onDownloadAsset, previewAsset]);
 
@@ -3578,7 +3602,6 @@ function PostInfoModal({
       return;
     }
 
-    setIsDownloadMenuOpen(false);
     onDownloadAll?.();
   }, [assets.length, onDownloadAll]);
 
@@ -3607,11 +3630,6 @@ function PostInfoModal({
           return;
         }
 
-        if (isDownloadMenuOpen) {
-          setIsDownloadMenuOpen(false);
-          return;
-        }
-
         if (isCommentsOpen) {
           setIsCommentsOpen(false);
           return;
@@ -3622,13 +3640,11 @@ function PostInfoModal({
 
       if (hasMultipleAssets && event.key === "ArrowLeft") {
         event.preventDefault();
-        setIsDownloadMenuOpen(false);
         showPreviousAsset();
       }
 
       if (hasMultipleAssets && event.key === "ArrowRight") {
         event.preventDefault();
-        setIsDownloadMenuOpen(false);
         showNextAsset();
       }
     }
@@ -3638,27 +3654,7 @@ function PostInfoModal({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [hasMultipleAssets, isAssetPreviewOpen, isCommentsOpen, isDownloadMenuOpen, onClose, showNextAsset, showPreviousAsset]);
-
-  useEffect(() => {
-    if (!isDownloadMenuOpen) {
-      return undefined;
-    }
-
-    function onPointerDown(event) {
-      if (downloadMenuRef.current?.contains(event.target)) {
-        return;
-      }
-
-      setIsDownloadMenuOpen(false);
-    }
-
-    window.addEventListener("mousedown", onPointerDown);
-
-    return () => {
-      window.removeEventListener("mousedown", onPointerDown);
-    };
-  }, [isDownloadMenuOpen]);
+  }, [hasMultipleAssets, isAssetPreviewOpen, isCommentsOpen, onClose, showNextAsset, showPreviousAsset]);
 
   useEffect(() => {
     if (!toast) {
@@ -3676,7 +3672,6 @@ function PostInfoModal({
     setAssetIndex(clampAssetIndex(initialAssetIndex, assets.length));
     setIsAssetPreviewOpen(false);
     setIsCommentsOpen(false);
-    setIsDownloadMenuOpen(false);
   }, [assets.length, initialAssetIndex, result.request_id]);
 
   return (
@@ -3722,15 +3717,11 @@ function PostInfoModal({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <PostDownloadSplitButton
+              <PostDownloadButton
                 chrome={postChrome}
                 copy={copy}
                 disabled={!previewAsset}
-                isOpen={isDownloadMenuOpen}
-                menuRef={downloadMenuRef}
-                onDownloadAll={downloadAllAssets}
-                onDownloadCurrent={downloadCurrentAsset}
-                onToggleMenu={() => setIsDownloadMenuOpen((current) => !current)}
+                onDownload={result.platform === "xiaohongshu" ? downloadAllAssets : downloadCurrentAsset}
               />
               <button
                 aria-label={copy.closeDetails}
@@ -3857,59 +3848,17 @@ function PostInfoModal({
   );
 }
 
-function PostDownloadSplitButton({
-  chrome,
-  copy,
-  disabled,
-  isOpen,
-  menuRef,
-  onDownloadAll,
-  onDownloadCurrent,
-  onToggleMenu,
-}) {
+function PostDownloadButton({ chrome, copy, disabled, onDownload }) {
   return (
-    <div className="relative flex shrink-0" ref={menuRef}>
-      <button
-        className="inline-flex h-10 cursor-pointer items-center justify-center rounded-l-full border border-r-0 px-4 text-sm font-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:hover:scale-100"
-        disabled={disabled}
-        onClick={onDownloadCurrent}
-        style={buildPostDownloadButtonStyle(chrome, disabled)}
-        type="button"
-      >
-        {copy.download}
-      </button>
-      <button
-        aria-expanded={isOpen}
-        aria-haspopup="menu"
-        aria-label={copy.downloadAll}
-        className="grid h-10 w-10 cursor-pointer place-items-center rounded-r-full border text-sm font-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:hover:scale-100"
-        disabled={disabled}
-        onClick={onToggleMenu}
-        style={buildPostDownloadButtonStyle(chrome, disabled)}
-        type="button"
-      >
-        <ChevronDownIcon />
-      </button>
-
-      {isOpen ? (
-        <div
-          className="absolute right-0 top-[calc(100%+0.5rem)] z-50 min-w-36 overflow-hidden rounded-[0.85rem] border p-1 shadow-2xl"
-          role="menu"
-          style={buildPostDownloadMenuStyle(chrome)}
-        >
-          <button
-            className="flex h-10 w-full cursor-pointer items-center justify-between gap-3 rounded-[0.65rem] px-3 text-left text-sm font-bold transition hover:opacity-80"
-            onClick={onDownloadAll}
-            role="menuitem"
-            style={buildPostDownloadMenuItemStyle(chrome)}
-            type="button"
-          >
-            <span>{copy.downloadAll}</span>
-            <ChevronDownIcon />
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <button
+      className="inline-flex h-10 shrink-0 cursor-pointer items-center justify-center rounded-full border px-5 text-sm font-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:hover:scale-100"
+      disabled={disabled}
+      onClick={onDownload}
+      style={buildPostDownloadButtonStyle(chrome, disabled)}
+      type="button"
+    >
+      {copy.download}
+    </button>
   );
 }
 
@@ -5268,6 +5217,17 @@ function buildProfilePostCardStyle(theme, isSelected, status) {
   }
 
   return base;
+}
+
+function buildProfilePostSelectionStyle(theme, isSelected) {
+  return {
+    color: isSelected ? theme.buttonText : "transparent",
+    backgroundColor: isSelected
+      ? theme.uiTheme === "cohere" ? theme.accent : hexToRgba(theme.accent, 0.9)
+      : theme.colorMode === "dark" ? "rgba(7,24,41,0.54)" : "rgba(255,255,255,0.72)",
+    borderColor: isSelected ? theme.accentStrong : theme.colorMode === "dark" ? "rgba(255,255,255,0.62)" : "rgba(33,33,33,0.3)",
+    boxShadow: isSelected ? `0 8px 18px ${hexToRgba(theme.accent, 0.28)}` : "0 6px 16px rgba(15,23,42,0.14)",
+  };
 }
 
 function buildProfilePostDownloadBadgeStyle(theme, status) {

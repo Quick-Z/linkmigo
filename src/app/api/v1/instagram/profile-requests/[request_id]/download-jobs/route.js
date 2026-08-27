@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AppError, ErrorCode, errorPayload, getErrorDetail } from "@/lib/social-downloader/errors";
 import { startProfileDownloadJob } from "@/lib/social-downloader/profile-download-jobs";
+import { getXiaohongshuSessionId } from "@/lib/social-downloader/xiaohongshu-sessions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +30,11 @@ export async function POST(request, { params }) {
   try {
     const job = startProfileDownloadJob(requestId, {
       postIds: parsePostIds(body?.post_ids),
+      includeMedia: body?.include_media !== false,
+      includePostText: body?.include_post_text === true,
+      includeComments: body?.include_comments === true,
+      commentLimit: body?.comment_limit,
+      sessionId: getXiaohongshuSessionId(request),
     });
 
     return NextResponse.json(job, { status: 202 });

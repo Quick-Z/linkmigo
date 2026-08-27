@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { errorPayload, toAppError } from "@/lib/social-downloader/errors";
 import { getZipFile } from "@/lib/social-downloader/service";
+import { getXiaohongshuSessionId } from "@/lib/social-downloader/xiaohongshu-sessions";
 import { writeUserActionLog } from "@/lib/user-action-logger";
 
 export const runtime = "nodejs";
@@ -11,11 +12,20 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request, { params }) {
   const { request_id: requestId } = await params;
-  const selectedAssetIds = parseAssetIds(new URL(request.url).searchParams.get("asset_ids"));
+  const searchParams = new URL(request.url).searchParams;
+  const selectedAssetIds = parseAssetIds(searchParams.get("asset_ids"));
+  const downloadOptions = {
+    includeMedia: parseBooleanOption(searchParams.get("include_media"), true),
+    includePostText: parseBooleanOption(searchParams.get("include_post_text"), false),
+    includeComments: parseBooleanOption(searchParams.get("include_comments"), false),
+    commentLimit: searchParams.get("comment_limit"),
+    sessionId: getXiaohongshuSessionId(request),
+  };
 
   try {
     const { assets, filePath, filename, record } = await getZipFile(requestId, {
       assetIds: selectedAssetIds,
+      ...downloadOptions,
     });
     const buffer = await fs.readFile(filePath);
 
@@ -29,6 +39,10 @@ export async function GET(request, { params }) {
           shortcode: record.shortcode,
           filename,
           selected_asset_ids: selectedAssetIds,
+          include_media: downloadOptions.includeMedia,
+          include_post_text: downloadOptions.includePostText,
+          include_comments: downloadOptions.includeComments,
+          comment_limit: downloadOptions.commentLimit,
           asset_count: assets?.length ?? 0,
           size_bytes: buffer.length,
         },
@@ -59,6 +73,10 @@ export async function GET(request, { params }) {
           error_status: appError.status,
           error_details: appError.details,
           selected_asset_ids: selectedAssetIds,
+          include_media: downloadOptions.includeMedia,
+          include_post_text: downloadOptions.includePostText,
+          include_comments: downloadOptions.includeComments,
+          comment_limit: downloadOptions.commentLimit,
         },
       },
       request,
@@ -78,4 +96,9 @@ function parseAssetIds(value) {
   }
 
   return [...new Set(value.split(",").map((assetId) => assetId.trim()).filter(Boolean))];
+}
+
+function parseBooleanOption(value, fallback) {
+  if (value == null) return fallback;
+  return value === "1" || value === "true";
 }

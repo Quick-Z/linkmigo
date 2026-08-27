@@ -48,7 +48,11 @@ export function normalizeFacebookUrl(parsed) {
 export async function resolveFacebookPost(normalized, settings) {
   let pageUrl = normalized.canonical_url;
 
-  if (normalized.kind === "short") {
+  // Facebook's share links (including `/share/r/<token>/`) are redirect
+  // wrappers rather than pages containing the media metadata themselves.
+  // Resolve them before fetching the page so we inspect the actual reel/video
+  // document.  This also keeps support for the legacy `fb.watch` short links.
+  if (normalized.kind === "short" || normalized.kind?.startsWith("share-")) {
     pageUrl = (await resolveRedirect(normalized.canonical_url, settings)) || pageUrl;
   }
 

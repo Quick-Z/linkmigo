@@ -5,6 +5,7 @@ import path from "node:path";
 import { CacheStore } from "./cache";
 import { AppError, ErrorCode } from "./errors";
 import { downloadMedia, estimateMediaDownloadSize, extensionForAsset } from "./downloader";
+import { resolveSocialComments } from "./comments";
 import { resolveInstagramProfile, resolveInstagramProfilePostsPage } from "./instagram";
 import { resolveXiaohongshuProfile, resolveXiaohongshuProfilePostsPage } from "./xiaohongshu";
 import { getSocialDownloaderSettings } from "./settings";
@@ -150,9 +151,12 @@ export async function getZipFile(requestId, options = {}) {
   const cache = getCacheStore();
   const record = await cache.getRecord(requestId);
   const selectedAssetIds = normalizeAssetIds(options.assetIds);
-  const selectedAssets = selectRecordAssets(record.assets, selectedAssetIds);
+  const downloadOptions = normalizePostDownloadOptions(options);
+  const selectedAssets = downloadOptions.includeMedia
+    ? selectRecordAssets(record.assets, selectedAssetIds)
+    : [];
   const recordDir = cache.recordDir(record.request_id, record.platform);
-  const zipSuffix = selectedAssetIds.length ? `-selected-${assetSelectionHash(selectedAssetIds)}` : "";
+  const zipSuffix = postDownloadZipSuffix(selectedAssetIds, downloadOptions);
   const zipPath = path.join(recordDir, `${record.platform}-${record.shortcode}${zipSuffix}.zip`);
 
   if (!(await exists(zipPath))) {
@@ -165,6 +169,18 @@ export async function getZipFile(requestId, options = {}) {
       });
     }
 
+    if (downloadOptions.includePostText || downloadOptions.includeComments) {
+      const contentPath = path.join(recordDir, `${record.platform}-${record.shortcode}${zipSuffix}-post-content.txt`);
+      const contentText = await buildPostContentExport(record, downloadOptions);
+
+      await fs.writeFile(contentPath, contentText, "utf8");
+      entries.push({ name: "post-content.txt", path: contentPath });
+    }
+
+    if (!entries.length) {
+      throw new AppError(ErrorCode.NO_MEDIA_FOUND, "请至少选择一种下载内容。", 400);
+    }
+
     await buildZipFile(entries, zipPath);
   }
 
@@ -174,6 +190,152 @@ export async function getZipFile(requestId, options = {}) {
     filePath: zipPath,
     filename: `${record.platform}-${record.shortcode}${zipSuffix}.zip`,
   };
+}
+
+function normalizePostDownloadOptions(options = {}) {
+  const includeMedia = options.includeMedia !== false;
+  const includePostText = options.includePostText === true;
+  const includeComments = options.includeComments === true;
+
+  if (!includeMedia && !includePostText && !includeComments) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "请至少选择一种下载内容。", 400);
+  }
+
+  const parsedCommentLimit = Number.parseInt(String(options.commentLimit ?? ""), 10);
+
+  return {
+    includeMedia,
+    includePostText,
+    includeComments,
+    commentLimit: Number.isFinite(parsedCommentLimit) ? Math.min(100, Math.max(1, parsedCommentLimit)) : 20,
+    sessionId: String(options.sessionId || "").trim(),
+  };
+}
+
+function postDownloadZipSuffix(selectedAssetIds, options) {
+  const selectedSuffix = selectedAssetIds.length ? `-selected-${assetSelectionHash(selectedAssetIds)}` : "";
+
+  if (options.includeMedia && !options.includePostText && !options.includeComments) {
+    return selectedSuffix;
+  }
+
+  const contentHash = assetSelectionHash([
+    options.includeMedia ? "media" : "no-media",
+    options.includePostText ? "post-text" : "no-post-text",
+    options.includeComments ? `comments-${options.commentLimit}` : "no-comments",
+  ]);
+
+  return `${selectedSuffix}-content-${contentHash}`;
+}
+
+async function buildPostContentExport(record, options) {
+  let commentsPayload = null;
+
+  if (options.includeComments) {
+    const normalized = normalizeSocialUrl(record.canonical_url);
+    const sessionId = options.sessionId || record.session_id || "";
+    const settings = record.platform === "xiaohongshu" && sessionId
+      ? { ...getSocialDownloaderSettings(), xiaohongshuCookie: xiaohongshuSessionCookie(sessionId) || "" }
+      : getSocialDownloaderSettings();
+
+    commentsPayload = await collectPostComments(normalized, options.commentLimit, settings);
+  }
+
+  const info = createPostInfo(record.post_info, {
+    metrics: record.metrics,
+    creatorHandle: record.creator_handle,
+    source: record.metrics?.source,
+  });
+  const lines = [
+    "# LinkMigo Post Content Export v1",
+    "# Each field is: field_name<TAB>JSON value. Parse the JSON value after the first tab.",
+    "[POST_METADATA]",
+  ];
+
+  appendContentField(lines, "platform", record.platform);
+  appendContentField(lines, "canonical_url", record.canonical_url);
+  appendContentField(lines, "shortcode", record.shortcode);
+  appendContentField(lines, "creator_handle", record.creator_handle || "");
+  appendContentField(lines, "exported_at", new Date().toISOString());
+  lines.push("[/POST_METADATA]");
+
+  if (options.includePostText) {
+    lines.push("[POST_TEXT]");
+    appendContentField(lines, "title", info.title || "");
+    appendContentField(lines, "body", info.body || "");
+    appendContentField(lines, "author_name", info.author || "");
+    appendContentField(lines, "author_handle", info.author_handle || "");
+    appendContentField(lines, "tags", Array.isArray(info.tags) ? info.tags : []);
+    appendContentField(lines, "metrics", info.metrics || record.metrics || {});
+    lines.push("[/POST_TEXT]");
+  }
+
+  if (commentsPayload) {
+    const comments = Array.isArray(commentsPayload.comments) ? commentsPayload.comments : [];
+    lines.push("[COMMENTS]");
+    appendContentField(lines, "requested_top_level_count", options.commentLimit);
+    appendContentField(lines, "exported_top_level_count", comments.length);
+    appendContentField(lines, "total_count", commentsPayload.total_count ?? null);
+    appendContentField(lines, "is_partial_public_snapshot", Boolean(commentsPayload.is_partial_public_snapshot));
+    appendContentField(lines, "source", commentsPayload.source || "");
+
+    comments.forEach((comment, index) => {
+      lines.push(`[COMMENT ${index + 1}]`);
+      appendContentField(lines, "id", comment?.id || "");
+      appendContentField(lines, "author_name", comment?.author_name || "");
+      appendContentField(lines, "author_handle", comment?.author_handle || "");
+      appendContentField(lines, "created_at", comment?.created_at ?? null);
+      appendContentField(lines, "ip_loc", comment?.ip_loc || "");
+      appendContentField(lines, "like_count", comment?.like_count ?? null);
+      appendContentField(lines, "reply_count", comment?.reply_count ?? 0);
+      appendContentField(lines, "text", comment?.text || "");
+      appendContentField(lines, "replies", Array.isArray(comment?.replies) ? comment.replies.map((reply) => ({
+        id: reply?.id || "",
+        author_name: reply?.author_name || "",
+        author_handle: reply?.author_handle || "",
+        created_at: reply?.created_at ?? null,
+        text: reply?.text || "",
+      })) : []);
+      lines.push(`[/COMMENT ${index + 1}]`);
+    });
+
+    lines.push("[/COMMENTS]");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+async function collectPostComments(normalized, limit, settings) {
+  const comments = [];
+  const seen = new Set();
+  let cursor = "";
+  let lastPayload = null;
+
+  while (comments.length < limit) {
+    const payload = await resolveSocialComments(normalized, {
+      cursor,
+      limit: Math.min(30, limit - comments.length),
+    }, settings);
+    lastPayload = payload;
+
+    for (const comment of Array.isArray(payload.comments) ? payload.comments : []) {
+      const key = String(comment?.id || JSON.stringify(comment));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      comments.push(comment);
+      if (comments.length >= limit) break;
+    }
+
+    const nextCursor = String(payload.next_cursor || "");
+    if (!payload.has_more || !nextCursor || nextCursor === cursor) break;
+    cursor = nextCursor;
+  }
+
+  return { ...(lastPayload || {}), comments };
+}
+
+function appendContentField(lines, key, value) {
+  lines.push(`${key}\t${JSON.stringify(value ?? null)}`);
 }
 
 /** Store keyword-search posts in the same profile record used by batch downloads. */
@@ -255,6 +417,10 @@ export async function getProfileZipFile(requestId, options = {}) {
   const settings = getSocialDownloaderSettings();
   const onPostProgress = typeof options.onPostProgress === "function" ? options.onPostProgress : null;
   const profileRecord = await cache.getRecord(requestId);
+  const downloadOptions = normalizePostDownloadOptions({
+    ...options,
+    sessionId: options.sessionId || profileRecord.session_id || "",
+  });
 
   if (!isUsableCachedProfileRecord(profileRecord)) {
     throw new AppError(ErrorCode.CACHE_EXPIRED, "主页帖子列表缓存不存在或已过期。", 404);
@@ -263,7 +429,7 @@ export async function getProfileZipFile(requestId, options = {}) {
   const selectedPostIds = normalizeAssetIds(options.postIds);
   const selectedPosts = selectProfilePosts(profileRecord.posts, selectedPostIds);
   const recordDir = cache.recordDir(profileRecord.request_id, profileRecord.platform);
-  const zipSuffix = selectedPostIds.length ? `-selected-${assetSelectionHash(selectedPostIds)}` : "";
+  const zipSuffix = postDownloadZipSuffix(selectedPostIds, downloadOptions);
   const filenameBase = safeFilenamePart(profileRecord.creator_handle || profileRecord.profile?.username || "instagram-profile");
   const zipPath = path.join(recordDir, `${filenameBase}${zipSuffix}.zip`);
 
@@ -303,23 +469,45 @@ export async function getProfileZipFile(requestId, options = {}) {
         const postRecord = await cache.getRecord(resolved.request_id);
         const postFolder = profileZipPostFolderName(postIndex, post);
         const postEntries = [];
+        let contentError = null;
 
-        for (const asset of postRecord.assets) {
-          postEntries.push({
-            name: `${filenameBase}/${postFolder}/${asset.filename}`,
-            path: await cache.assetPath(postRecord, asset),
-          });
+        if (downloadOptions.includeMedia) {
+          for (const asset of postRecord.assets) {
+            postEntries.push({
+              name: `${filenameBase}/${postFolder}/${asset.filename}`,
+              path: await cache.assetPath(postRecord, asset),
+            });
+          }
+        }
+
+        if (downloadOptions.includePostText || downloadOptions.includeComments) {
+          try {
+            const contentPath = path.join(recordDir, `${postFolder}-${assetSelectionHash([post.id, zipSuffix])}-post-content.txt`);
+            const contentText = await buildPostContentExport(postRecord, downloadOptions);
+
+            await fs.writeFile(contentPath, contentText, "utf8");
+            postEntries.push({
+              name: `${filenameBase}/${postFolder}/post-content.txt`,
+              path: contentPath,
+            });
+          } catch (error) {
+            contentError = error;
+          }
         }
 
         postEntryResults[postIndex] = postEntries;
+        const mediaIsPartial = downloadOptions.includeMedia && isPartiallyDownloadedPostRecord(postRecord);
+        const isPartial = Boolean(contentError && postEntries.length > 0) || mediaIsPartial;
+        const isFailed = postEntries.length === 0;
         onPostProgress?.({
           post,
           post_id: post.id,
           post_index: postIndex,
-          status: isPartiallyDownloadedPostRecord(postRecord) ? "partial_failed" : "success",
-          asset_count: postRecord.assets.length,
+          status: isFailed ? "failed" : isPartial ? "partial_failed" : "success",
+          asset_count: downloadOptions.includeMedia ? postRecord.assets.length : 0,
           expected_asset_count: Number(postRecord.asset_count) || postRecord.assets.length,
-          message: isPartiallyDownloadedPostRecord(postRecord) ? "部分资源失败" : "下载成功",
+          message: isFailed ? "帖子内容整理失败" : isPartial ? "部分内容失败" : "下载成功",
+          error: contentError ? { message: contentError?.message || "正文或评论整理失败" } : null,
         });
       } catch (error) {
         postEntryResults[postIndex] = [];

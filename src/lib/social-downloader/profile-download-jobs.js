@@ -11,10 +11,17 @@ export function startProfileDownloadJob(requestId, options = {}) {
   cleanupProfileDownloadJobs();
 
   const postIds = normalizePostIds(options.postIds);
+  const downloadOptions = normalizeProfileDownloadOptions(options);
   const now = new Date().toISOString();
   const job = {
     job_id: crypto.randomUUID().replaceAll("-", ""),
     request_id: requestId,
+    download_options: {
+      includeMedia: downloadOptions.includeMedia,
+      includePostText: downloadOptions.includePostText,
+      includeComments: downloadOptions.includeComments,
+      commentLimit: downloadOptions.commentLimit,
+    },
     status: "queued",
     phase: "queued",
     progress: {
@@ -43,7 +50,7 @@ export function startProfileDownloadJob(requestId, options = {}) {
 
   getProfileDownloadJobStore().set(job.job_id, job);
   queueMicrotask(() => {
-    runProfileDownloadJob(job.job_id, requestId, postIds);
+    runProfileDownloadJob(job.job_id, requestId, postIds, downloadOptions);
   });
 
   return snapshotProfileDownloadJob(job);
@@ -76,7 +83,7 @@ export function getProfileDownloadJobFile(jobId, requestId) {
   };
 }
 
-async function runProfileDownloadJob(jobId, requestId, postIds) {
+async function runProfileDownloadJob(jobId, requestId, postIds, downloadOptions) {
   updateProfileDownloadJob(jobId, {
     status: "running",
     phase: "downloading",
@@ -85,6 +92,7 @@ async function runProfileDownloadJob(jobId, requestId, postIds) {
   try {
     const { filePath, filename, posts } = await getProfileZipFile(requestId, {
       postIds,
+      ...downloadOptions,
       onPostProgress: (event) => updatePostStatus(jobId, event),
     });
 
@@ -112,6 +120,7 @@ async function runProfileDownloadJob(jobId, requestId, postIds) {
         request_id: requestId,
         job_id: jobId,
         selected_post_ids: postIds,
+        download_options: downloadOptions,
         error_code: appError.code,
         error_message: appError.message,
         error_status: appError.status,
@@ -266,6 +275,18 @@ function normalizePostIds(value) {
   }
 
   return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function normalizeProfileDownloadOptions(options = {}) {
+  const parsedCommentLimit = Number.parseInt(String(options.commentLimit ?? ""), 10);
+
+  return {
+    includeMedia: options.includeMedia !== false,
+    includePostText: options.includePostText === true,
+    includeComments: options.includeComments === true,
+    commentLimit: Number.isFinite(parsedCommentLimit) ? Math.min(100, Math.max(1, parsedCommentLimit)) : 20,
+    sessionId: String(options.sessionId || "").trim(),
+  };
 }
 
 function normalizePostStatus(value) {

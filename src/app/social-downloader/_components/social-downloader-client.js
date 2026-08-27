@@ -48,6 +48,14 @@ const copyByLanguage = {
     darkMode: "暗色",
     download: "下载",
     downloadAll: "全部下载",
+    downloadContents: "选择下载内容",
+    downloadMedia: "帖子资源（图片和视频）",
+    downloadPostText: "帖子文案（标题、正文）",
+    downloadComments: "评论",
+    commentCount: "评论数量",
+    commentCountHint: "最多下载前 100 条",
+    startDownload: "开始下载",
+    cancel: "取消",
     downloadSelectedPosts: "下载选中帖子",
     downloadSelected: "下载选中项",
     expiredAt: "过期时间",
@@ -178,6 +186,14 @@ const copyByLanguage = {
     darkMode: "Dark",
     download: "Download",
     downloadAll: "Download All",
+    downloadContents: "Choose download contents",
+    downloadMedia: "Post resources (images and videos)",
+    downloadPostText: "Post text (title and body)",
+    downloadComments: "Comments",
+    commentCount: "Comment count",
+    commentCountHint: "Up to the first 100 comments",
+    startDownload: "Start download",
+    cancel: "Cancel",
     downloadSelectedPosts: "Download Selected Posts",
     downloadSelected: "Download Selected",
     expiredAt: "Expired at",
@@ -1123,6 +1139,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   const [isLoadingMoreProfilePosts, setIsLoadingMoreProfilePosts] = useState(false);
   const [xiaohongshuAuth, setXiaohongshuAuth] = useState({ open: false, status: "anonymous", qr_data_url: null, error: null });
   const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
+  const [downloadContentsRequest, setDownloadContentsRequest] = useState(null);
   const [profilePostDetail, setProfilePostDetail] = useState({
     isOpen: false,
     isLoading: false,
@@ -1911,19 +1928,51 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     triggerBrowserDownload(apiUrl(asset.download_url));
   }
 
-  function downloadAllAssets() {
-    if (!result || result.assets.length === 0) {
+  function startPostDownload(targetResult, options, source = "post_info_modal") {
+    if (!targetResult?.request_id) {
       return;
     }
 
+    const params = new URLSearchParams();
+    params.set("include_media", options.includeMedia ? "1" : "0");
+    params.set("include_post_text", options.includePostText ? "1" : "0");
+    params.set("include_comments", options.includeComments ? "1" : "0");
+    if (options.includeComments) params.set("comment_limit", String(options.commentLimit));
+    if (options.assetIds?.length) params.set("asset_ids", options.assetIds.join(","));
+
     logClientAction("bulk_asset_download_clicked", {
-      request_id: result.request_id,
-      platform: result.platform,
-      shortcode: result.shortcode,
-      selected_asset_ids: result.assets.map((asset) => asset.id),
-      selected_count: result.assets.length,
-      source: "post_info_modal",
+      request_id: targetResult.request_id,
+      platform: targetResult.platform,
+      shortcode: targetResult.shortcode,
+      selected_asset_ids: options.assetIds || [],
+      selected_count: options.assetIds?.length || 0,
+      include_media: options.includeMedia,
+      include_post_text: options.includePostText,
+      include_comments: options.includeComments,
+      comment_limit: options.includeComments ? options.commentLimit : null,
+      source,
     });
+
+    triggerBrowserDownload(apiUrl(`/api/v1/instagram/requests/${targetResult.request_id}/download.zip?${params.toString()}`));
+  }
+
+  function openDownloadContents(targetResult, assetIds, source = "post_info_modal") {
+    if (!targetResult?.request_id) return;
+
+    setDownloadContentsRequest({
+      targetResult,
+      assetIds: Array.isArray(assetIds) ? assetIds : [],
+      source,
+    });
+  }
+
+  function downloadAllAssets() {
+    if (!result || result.assets.length === 0) return;
+
+    if (result.platform === "xiaohongshu") {
+      openDownloadContents(result, result.assets.map((asset) => asset.id));
+      return;
+    }
 
     triggerBrowserDownload(apiUrl(`/api/v1/instagram/requests/${result.request_id}/download.zip`));
   }
@@ -1933,14 +1982,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
       return;
     }
 
-    logClientAction("bulk_asset_download_clicked", {
-      request_id: targetResult.request_id,
-      platform: targetResult.platform,
-      shortcode: targetResult.shortcode,
-      selected_asset_ids: targetResult.assets.map((asset) => asset.id),
-      selected_count: targetResult.assets.length,
-      source,
-    });
+    if (targetResult.platform === "xiaohongshu") {
+      openDownloadContents(targetResult, targetResult.assets.map((asset) => asset.id), source);
+      return;
+    }
 
     triggerBrowserDownload(apiUrl(`/api/v1/instagram/requests/${targetResult.request_id}/download.zip`));
   }
@@ -1958,6 +2003,11 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
       selected_count: selectedAssets.length,
     });
 
+    if (result.platform === "xiaohongshu") {
+      openDownloadContents(result, selectedAssets.map((asset) => asset.id), "result_selection");
+      return;
+    }
+
     if (selectedAssets.length === 1) {
       triggerBrowserDownload(apiUrl(selectedAssets[0].download_url));
       return;
@@ -1969,20 +2019,42 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     triggerBrowserDownload(apiUrl(zipUrl));
   }
 
-  async function downloadSelectedPosts() {
+  function downloadSelectedPosts() {
     if (!isProfileResult || !result?.request_id || selectedPosts.length === 0 || isProfileDownloadPending) {
       return;
     }
 
+    if (result.platform === "xiaohongshu") {
+      setDownloadContentsRequest({
+        kind: "profile",
+        targetResult: result,
+        postIds: selectedPosts.map((post) => post.id),
+        source: "profile_selection",
+      });
+      return;
+    }
+
+    startSelectedPostsDownload({ includeMedia: true, includePostText: false, includeComments: false, commentLimit: 20 });
+  }
+
+  async function startSelectedPostsDownload(downloadOptions, postIds = selectedPosts.map((post) => post.id)) {
+    if (!isProfileResult || !result?.request_id || postIds.length === 0 || isProfileDownloadPending) {
+      return;
+    }
+
     setIsProfileDownloadPending(true);
-    setProfileDownloadJob(createLocalProfileDownloadJob(selectedPosts));
+    setProfileDownloadJob(createLocalProfileDownloadJob(result.posts.filter((post) => postIds.includes(post.id))));
     setError(null);
 
     logClientAction("profile_post_download_clicked", {
       request_id: result.request_id,
       creator_handle: result.creator_handle,
-      selected_post_ids: selectedPosts.map((post) => post.id),
-      selected_count: selectedPosts.length,
+      selected_post_ids: postIds,
+      selected_count: postIds.length,
+      include_media: downloadOptions.includeMedia,
+      include_post_text: downloadOptions.includePostText,
+      include_comments: downloadOptions.includeComments,
+      comment_limit: downloadOptions.includeComments ? downloadOptions.commentLimit : null,
     });
 
     try {
@@ -1993,7 +2065,11 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          post_ids: selectedPosts.map((post) => post.id),
+          post_ids: postIds,
+          include_media: downloadOptions.includeMedia,
+          include_post_text: downloadOptions.includePostText,
+          include_comments: downloadOptions.includeComments,
+          comment_limit: downloadOptions.commentLimit,
         }),
       });
 
@@ -2447,7 +2523,31 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
           result={result}
           theme={resultTheme}
         />
-  ) : null}
+      ) : null}
+      {downloadContentsRequest ? (
+        <DownloadContentsModal
+          copy={copy}
+          onClose={() => setDownloadContentsRequest(null)}
+          onDownload={(options) => {
+            const request = downloadContentsRequest;
+            setDownloadContentsRequest(null);
+            if (request.kind === "profile") {
+              startSelectedPostsDownload(options, request.postIds);
+              return;
+            }
+            if (request.source === "result_selection" && options.includeMedia && !options.includePostText && !options.includeComments && request.assetIds.length === 1) {
+              const asset = request.targetResult.assets.find((item) => item.id === request.assetIds[0]);
+              if (asset) {
+                triggerBrowserDownload(apiUrl(asset.download_url));
+                return;
+              }
+            }
+            startPostDownload(request.targetResult, { ...options, assetIds: request.assetIds }, request.source);
+          }}
+          result={downloadContentsRequest.targetResult}
+          theme={getButtonTheme(downloadContentsRequest.targetResult.platform, colorMode, themeName)}
+        />
+      ) : null}
       {profilePostDetail.isOpen && profilePostDetail.result ? (
         <PostInfoModal
           copy={copy}
@@ -3321,6 +3421,87 @@ function AudioIcon() {
       <circle cx="7" cy="18" r="3" stroke="currentColor" strokeWidth="2" />
       <circle cx="15" cy="16" r="3" stroke="currentColor" strokeWidth="2" />
     </svg>
+  );
+}
+
+function DownloadContentsModal({ copy, onClose, onDownload, result, theme }) {
+  const chrome = getPostChrome(result.platform, theme);
+  const [includeMedia, setIncludeMedia] = useState(true);
+  const [includePostText, setIncludePostText] = useState(false);
+  const [includeComments, setIncludeComments] = useState(false);
+  const [commentLimit, setCommentLimit] = useState(20);
+  const canDownload = includeMedia || includePostText || includeComments;
+
+  function submit(event) {
+    event.preventDefault();
+    if (!canDownload) return;
+
+    onDownload({
+      includeMedia,
+      includePostText,
+      includeComments,
+      commentLimit: Math.min(100, Math.max(1, Number.parseInt(commentLimit, 10) || 20)),
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center px-5 py-6 backdrop-blur-[14px]" onMouseDown={onClose} role="presentation" style={buildPostModalBackdropStyle(theme)}>
+      <form
+        aria-label={copy.downloadContents}
+        aria-modal="true"
+        className="w-full max-w-[30rem] rounded-[1.25rem] border p-5 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={submit}
+        role="dialog"
+        style={{ background: chrome.contentBackground, borderColor: chrome.divider, color: chrome.text, boxShadow: chrome.shellShadow }}
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-black" style={{ color: chrome.text }}>{copy.downloadContents}</h2>
+            <p className="mt-1 text-xs font-medium" style={{ color: chrome.muted }}>{result.shortcode}</p>
+          </div>
+          <button aria-label={copy.closeDetails} className="grid size-9 cursor-pointer place-items-center rounded-full border" onClick={onClose} style={buildPostCloseButtonStyle(chrome)} type="button">
+            <ClearIcon />
+          </button>
+        </div>
+
+        <div className="grid gap-3">
+          <DownloadOptionRow checked={includeMedia} chrome={chrome} label={copy.downloadMedia} onChange={setIncludeMedia} />
+          <DownloadOptionRow checked={includePostText} chrome={chrome} label={copy.downloadPostText} onChange={setIncludePostText} />
+          <DownloadOptionRow checked={includeComments} chrome={chrome} label={copy.downloadComments} onChange={setIncludeComments} />
+        </div>
+
+        {includeComments ? (
+          <label className="mt-4 grid gap-2 text-sm font-bold" style={{ color: chrome.text }}>
+            <span>{copy.commentCount}</span>
+            <input
+              className="h-10 rounded-xl border px-3 text-sm font-semibold outline-none"
+              max="100"
+              min="1"
+              onChange={(event) => setCommentLimit(event.target.value)}
+              style={{ background: chrome.metricBackground, borderColor: chrome.divider, color: chrome.text }}
+              type="number"
+              value={commentLimit}
+            />
+            <span className="text-xs font-medium" style={{ color: chrome.muted }}>{copy.commentCountHint}</span>
+          </label>
+        ) : null}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button className={`${actionButtonBaseClass} h-10 px-4 text-sm`} onClick={onClose} style={buildSecondaryButtonStyle(theme)} type="button">{copy.cancel}</button>
+          <button className={`${actionButtonBaseClass} h-10 px-4 text-sm`} disabled={!canDownload} style={buildPrimaryButtonStyle(theme, !canDownload)} type="submit">{copy.startDownload}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function DownloadOptionRow({ checked, chrome, label, onChange }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-3 text-sm font-bold" style={{ background: checked ? chrome.pillBackground : chrome.metricBackground, borderColor: checked ? chrome.accent : chrome.divider, color: chrome.text }}>
+      <input checked={checked} onChange={(event) => onChange(event.target.checked)} style={{ accentColor: chrome.accent }} type="checkbox" />
+      <span>{label}</span>
+    </label>
   );
 }
 

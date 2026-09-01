@@ -23,6 +23,8 @@ services:
       LINKMIGO_THEME: ""
       # 输入框占位文案；留空时使用内置默认文案。
       LINKMIGO_URL_PLACEHOLDER: ""
+      # 英文版输入框占位文案；留空时使用内置英文文案。
+      LINKMIGO_URL_PLACEHOLDER_EN: ""
       YTDL_NO_DEBUG_FILE: "1"
 
       # 下载资源和缓存配置

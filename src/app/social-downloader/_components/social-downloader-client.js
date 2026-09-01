@@ -1121,7 +1121,7 @@ const buttonThemes = {
   },
 };
 
-export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "default", urlPlaceholder = "" }) {
+export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "default", urlPlaceholder = "", urlPlaceholderEn = "" }) {
   const [language, setLanguage] = useState("zh");
   const [colorMode, setColorMode] = useState("light");
   const [url, setUrl] = useState("");
@@ -1167,6 +1167,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   const copy = {
     ...(copyByLanguage[language] ?? copyByLanguage.zh),
     ...(language === "zh" && urlPlaceholder ? { urlPlaceholder } : {}),
+    ...(language === "en" && urlPlaceholderEn ? { urlPlaceholder: urlPlaceholderEn } : {}),
   };
   const inputTheme = getButtonTheme(inputPlatform, colorMode, themeName);
   const resolvingTheme = getButtonTheme(resolvingPlatform, colorMode, themeName);
@@ -5558,9 +5559,12 @@ function buildControlGroupStyle(theme) {
 }
 
 function buildSegmentStyle(theme, isActive) {
+  const isCohere = theme.uiTheme === "cohere";
+
   return {
     color: isActive ? theme.buttonText : theme.mutedText,
     backgroundColor: isActive ? hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.2 : 0.12) : "transparent",
+    backgroundImage: isActive && isCohere ? theme.buttonGradient : undefined,
     boxShadow: isActive ? theme.buttonShadow : "none",
     transition: themeTransition,
   };

@@ -39,6 +39,7 @@ import {
 } from "./shared";
 import {
   renderXiaohongshuPage,
+  resolveXiaohongshuProfileInSession,
   searchXiaohongshuInSession,
   xiaohongshuSessionSnapshot,
 } from "./xiaohongshu-sessions";
@@ -146,7 +147,74 @@ export function normalizeXiaohongshuUrl(parsed) {
 /** Resolve the public snapshot embedded in an XHS creator profile page. */
 export async function resolveXiaohongshuProfile(normalized, settings) {
   const pageHeaders = xiaohongshuPageHeaders(settings);
-  const response = await fetchXiaohongshuPageTextWithMobileFallback({
+  const sessionAuthenticated = settings.xiaohongshuSessionId
+    && xiaohongshuSessionSnapshot(settings.xiaohongshuSessionId).status === "authenticated";
+  let response = null;
+  if (sessionAuthenticated) {
+    const rendered = await resolveXiaohongshuProfileInSession(
+      settings.xiaohongshuSessionId,
+      normalized.canonical_url,
+      Math.min(Math.max(settings.httpTimeoutMs ?? 20_000, 10_000), 25_000),
+    ).catch(() => null);
+    if (rendered?.html || rendered?.payload) {
+      response = { text: rendered.html || "", source: "xiaohongshu_browser_profile" };
+      if (rendered.payload) {
+        const profileId = String(normalized.profile_id || normalized.creator_handle || "").trim();
+        const browserProfile = xiaohongshuProfileFromState(
+          extractXiaohongshuInitialState(rendered.html || "") || rendered.payload,
+          profileId,
+          rendered.html || "",
+        );
+        const browserPosts = xiaohongshuProfilePostsFromState(rendered.payload, browserProfile, normalized.canonical_url);
+        if (browserPosts.length) {
+          return {
+            mode: "profile",
+            creator_handle: browserProfile.username || browserProfile.user_id || profileId,
+            profile: browserProfile,
+            posts: browserPosts,
+            profile_pagination: {
+              source: "xiaohongshu_profile_api",
+              user_id: browserProfile.user_id || profileId,
+              next_cursor: pickSingleLineText(
+                rendered.payload?.data?.cursor,
+                rendered.payload?.data?.next_cursor,
+                rendered.payload?.cursor,
+                rendered.payload?.next_cursor,
+              ),
+              has_more: Boolean(
+                rendered.payload?.data?.has_more
+                  ?? rendered.payload?.has_more
+                  ?? rendered.payload?.data?.cursor
+                  ?? rendered.payload?.cursor,
+              ),
+            },
+          };
+        }
+      }
+      const profileId = String(normalized.profile_id || normalized.creator_handle || "").trim();
+      const browserProfile = xiaohongshuProfileFromState(
+        rendered.payload || extractXiaohongshuInitialState(rendered.html || ""),
+        profileId,
+        rendered.html || "",
+      );
+      const renderedPosts = xiaohongshuSearchPostsFromRenderedHtml(rendered.html || "", normalized.canonical_url);
+      if (renderedPosts.length) {
+        return {
+          mode: "profile",
+          creator_handle: browserProfile.username || browserProfile.user_id || profileId,
+          profile: browserProfile,
+          posts: renderedPosts,
+          profile_pagination: {
+            source: "xiaohongshu_browser_profile_dom",
+            user_id: browserProfile.user_id || profileId,
+            next_cursor: "",
+            has_more: false,
+          },
+        };
+      }
+    }
+  }
+  response ||= await fetchXiaohongshuPageTextWithMobileFallback({
     pageUrl: normalized.canonical_url,
     pageHeaders,
     shortcode: "",
@@ -178,6 +246,14 @@ export async function resolveXiaohongshuProfile(normalized, settings) {
   }
 
   if (!posts.length) {
+    if (!sessionAuthenticated && !xiaohongshuCookieHeader(settings) && /class=["'][^"']*note-item\b/i.test(response.text)) {
+      throw new AppError(
+        ErrorCode.LOGIN_REQUIRED,
+        "小红书主页已隐藏帖子 ID，请先完成小红书扫码登录后重试。",
+        401,
+        { requires_login: true, login_platforms: ["xiaohongshu"] },
+      );
+    }
     throw new AppError(ErrorCode.NO_MEDIA_FOUND, "没有在这个小红书主页里发现可下载的帖子。", 404);
   }
 
@@ -427,6 +503,38 @@ function xiaohongshuSearchPagination(payload, page, postCount, limit) {
 export async function resolveXiaohongshuProfilePostsPage(options = {}, settings = {}) {
   const userId = pickSingleLineText(options.userId);
   if (!userId) return { posts: [], user_id: "", next_cursor: "", has_more: false };
+  const profile = { username: options.creatorHandle || "", user_id: userId };
+  const sessionAuthenticated = settings.xiaohongshuSessionId
+    && xiaohongshuSessionSnapshot(settings.xiaohongshuSessionId).status === "authenticated";
+  if (sessionAuthenticated) {
+    const rendered = await resolveXiaohongshuProfileInSession(
+      settings.xiaohongshuSessionId,
+      options.pageUrl || "https://www.xiaohongshu.com/",
+      Math.min(Math.max(settings.httpTimeoutMs ?? 20_000, 10_000), 25_000),
+      { loadMore: true },
+    ).catch(() => null);
+    if (rendered?.payload) {
+      const posts = xiaohongshuProfilePostsFromState(
+        rendered.payload,
+        profile,
+        options.pageUrl || "https://www.xiaohongshu.com/",
+      );
+      if (posts.length) {
+        const nextCursor = pickSingleLineText(
+          rendered.payload?.data?.cursor,
+          rendered.payload?.data?.next_cursor,
+          rendered.payload?.cursor,
+          rendered.payload?.next_cursor,
+        );
+        return {
+          posts,
+          user_id: userId,
+          next_cursor: nextCursor,
+          has_more: Boolean(rendered.payload?.data?.has_more ?? rendered.payload?.has_more ?? nextCursor),
+        };
+      }
+    }
+  }
   const page = await requestXiaohongshuProfilePostsPage({
     userId,
     cursor: String(options.cursor || "").replace(/^live:/, ""),
@@ -434,39 +542,62 @@ export async function resolveXiaohongshuProfilePostsPage(options = {}, settings 
     pageText: options.pageText || "",
     settings,
   });
-  const profile = { username: options.creatorHandle || "", user_id: userId };
   const posts = xiaohongshuProfilePostsFromState({ posts: page.posts }, profile, options.pageUrl || "https://www.xiaohongshu.com/");
   return { posts, user_id: userId, next_cursor: page.next_cursor, has_more: page.has_more };
 }
 
 async function requestXiaohongshuProfilePostsPage({ userId, cursor, pageUrl, pageText, settings }) {
-  const url = new URL(XIAOHONGSHU_PROFILE_POSTS_PATH, "https://www.xiaohongshu.com");
-  url.searchParams.set("user_id", userId);
-  url.searchParams.set("num", "30");
-  url.searchParams.set("cursor", cursor || "");
-  url.searchParams.set("image_formats", "jpg,webp,avif");
-  try {
-    const pageParsed = new URL(pageUrl);
+  const pageParsed = (() => { try { return new URL(pageUrl); } catch { return null; } })();
+  const hosts = ["https://edith.xiaohongshu.com", "https://www.xiaohongshu.com"];
+  const deadline = Date.now() + Math.min(Math.max(settings.httpTimeoutMs ?? 20_000, 6_000), 12_000);
+  let lastError = null;
+
+  for (const host of hosts) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const url = new URL(XIAOHONGSHU_PROFILE_POSTS_PATH, host);
+    url.searchParams.set("user_id", userId);
+    url.searchParams.set("num", "30");
+    url.searchParams.set("cursor", cursor || "");
+    url.searchParams.set("image_formats", "jpg,webp,avif");
     for (const key of ["xsec_token", "xsec_source"]) {
-      const value = pageParsed.searchParams.get(key);
+      const value = pageParsed?.searchParams.get(key);
       if (value) url.searchParams.set(key, value);
     }
-  } catch {}
-  const headers = await xiaohongshuCommentApiHeaders({
-    pageUrl,
-    pageText,
-    pathWithQuery: `${url.pathname}${url.search}`,
-    cookieHeader: xiaohongshuCookieHeader(settings),
-    settings,
-  });
-  const response = await fetchWithTimeout(url.toString(), { headers, cache: "no-store" }, settings.httpTimeoutMs);
-  const text = await response.text();
-  if (response.status >= 400) throw new AppError(ErrorCode.UPSTREAM_BLOCKED, `小红书主页接口返回异常状态码 ${response.status}。`, 502);
-  let data;
-  try { data = JSON.parse(text); } catch { throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "小红书主页接口没有返回 JSON。", 502); }
-  const items = Array.isArray(data?.data?.notes) ? data.data.notes : Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.notes) ? data.notes : [];
-  const nextCursor = pickSingleLineText(data?.data?.cursor, data?.data?.next_cursor, data?.cursor, data?.next_cursor);
-  return { posts: items, next_cursor: nextCursor, has_more: Boolean(data?.data?.has_more ?? data?.has_more ?? nextCursor) };
+    try {
+      const headers = await xiaohongshuCommentApiHeaders({
+        pageUrl,
+        pageText,
+        pathWithQuery: `${url.pathname}${url.search}`,
+        cookieHeader: xiaohongshuCookieHeader(settings),
+        settings,
+      });
+      const response = await fetchWithTimeout(url.toString(), { headers, cache: "no-store" }, Math.min(remaining, 6_000));
+      const text = await response.text();
+      if (response.status >= 400) {
+        lastError = new AppError(ErrorCode.UPSTREAM_BLOCKED, `小红书主页接口返回异常状态码 ${response.status}。`, 502);
+        continue;
+      }
+      let data;
+      try { data = JSON.parse(text); } catch {
+        lastError = new AppError(ErrorCode.UPSTREAM_BLOCKED, "小红书主页接口没有返回 JSON。", 502);
+        continue;
+      }
+      const items = Array.isArray(data?.data?.notes) ? data.data.notes : Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.notes) ? data.notes : [];
+      const nextCursor = pickSingleLineText(data?.data?.cursor, data?.data?.next_cursor, data?.cursor, data?.next_cursor);
+      if (items.length || data?.success === true || data?.code === 0) {
+        return { posts: items, next_cursor: nextCursor, has_more: Boolean(data?.data?.has_more ?? data?.has_more ?? nextCursor) };
+      }
+      lastError = new AppError(ErrorCode.UPSTREAM_BLOCKED, "小红书主页接口拒绝了当前请求。", 502, {
+        code: data?.code,
+        message: pickSingleLineText(data?.msg, data?.message),
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new AppError(ErrorCode.UPSTREAM_BLOCKED, "小红书主页接口请求失败。", 502);
 }
 
 function xiaohongshuProfileFromState(state, profileId, html) {

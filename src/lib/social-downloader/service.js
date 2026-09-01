@@ -20,6 +20,7 @@ let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
 const mediaCacheVersion = 39;
 const profileCacheVersion = 12;
+const xiaohongshuProfileCacheVersion = 13;
 const profileInitialPostsPageSize = 30;
 const profileMaxPostsPageSize = 60;
 let sharpFactoryPromise = null;
@@ -51,6 +52,7 @@ export async function resolveUrl(rawUrl, options = {}) {
   const settings = options.sessionId
     ? { ...baseSettings, xiaohongshuCookie: options.xiaohongshuCookie || xiaohongshuSessionCookie(options.sessionId) || "" }
     : baseSettings;
+  settings.xiaohongshuSessionId = options.sessionId || "";
   const cache = getCacheStore();
   const normalized = normalizeSocialUrl(rawUrl);
 
@@ -550,6 +552,7 @@ export async function getProfilePostsPage(requestId, options = {}) {
   const settings = profileRecord.session_id
     ? { ...baseSettings, xiaohongshuCookie: xiaohongshuSessionCookie(profileRecord.session_id) || "" }
     : baseSettings;
+  settings.xiaohongshuSessionId = profileRecord.session_id || "";
 
   if (!isUsableCachedProfileRecord(profileRecord)) {
     throw new AppError(ErrorCode.CACHE_EXPIRED, "主页帖子列表缓存不存在或已过期。", 404);
@@ -876,7 +879,10 @@ function isUsableCachedProfileRecord(record, normalized = null) {
     return false;
   }
 
-  return Number(record.profile_cache_version || 0) >= profileCacheVersion;
+  const expectedVersion = record.platform === "xiaohongshu"
+    ? xiaohongshuProfileCacheVersion
+    : profileCacheVersion;
+  return Number(record.profile_cache_version || 0) >= expectedVersion;
 }
 
 function resolveResponse(record) {
@@ -1150,7 +1156,9 @@ async function saveProfileRecord({ cache, normalized, parsedProfile, settings, s
   const record = {
     request_id: requestId,
     record_type: `${normalized.platform}_profile`,
-    profile_cache_version: profileCacheVersion,
+    profile_cache_version: normalized.platform === "xiaohongshu"
+      ? xiaohongshuProfileCacheVersion
+      : profileCacheVersion,
     canonical_url: normalized.canonical_url,
     shortcode: "",
     kind: "profile",

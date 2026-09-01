@@ -154,6 +154,7 @@ http://<NAS IP>:3000
 | `LINKMIGO_APP_NAME` | `LinkMigo` | 自定义页面标题和首页主标题；Docker/NAS 部署时可在环境变量里改成自己的应用名。 |
 | `THEME`（或 `LINKMIGO_THEME`） | `default` | 全局 UI 风格。未设置、留空或填入未知值时使用现有默认主题；填 `cohere` 启用 `design-md/cohere/DESIGN.md` 规范的 Cohere 风格。支持亮色/暗色切换。 |
 | `LINKMIGO_URL_PLACEHOLDER` | `支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...` | 自定义首页输入框的占位文案；留空时使用默认文案。 |
+| `LINKMIGO_URL_PLACEHOLDER_EN` | `Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...` | 自定义英文版首页输入框的占位文案；留空时使用内置英文文案。 |
 | `SOCIAL_CACHE_DIR` | `.cache/social-downloader`；Docker 示例为 `/data/social-downloader` | 服务端缓存已解析媒体资源的位置。Docker 部署时建议映射到 NAS/服务器持久化目录。 |
 | `SOCIAL_CACHE_TTL_SECONDS` | `7200` | 缓存资源保留时长，单位秒。 |
 | `SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS` | `300` | 过期缓存清理间隔，单位秒。 |

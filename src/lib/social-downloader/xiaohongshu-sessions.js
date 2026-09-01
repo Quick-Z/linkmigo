@@ -177,6 +177,10 @@ export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs =
     await session.searchPromise.catch(() => {});
     if (session.status !== "authenticated" || !session.cdp) return { html: "", payload: null };
   }
+  if (session.profilePromise) {
+    await session.profilePromise.catch(() => {});
+    if (session.status !== "authenticated" || !session.cdp) return { html: "", payload: null };
+  }
   const cachedPage = session.searchState?.keyword === query
     ? session.searchState.pages?.[requestedPage]
     : null;
@@ -240,6 +244,7 @@ export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs =
       }).catch(() => null);
       baselineCardHrefs = Array.isArray(baseline?.result?.value) ? baseline.result.value : [];
     } else {
+      session.profileState = null;
       await cdp.send("Page.navigate", { url: searchUrl.toString() });
     }
 
@@ -397,6 +402,132 @@ export async function searchXiaohongshuInSession(sessionId, keyword, timeoutMs =
   });
 
   return session.searchPromise;
+}
+
+/** Load a creator profile in the authenticated browser and capture its posts API response. */
+export async function resolveXiaohongshuProfileInSession(sessionId, profileUrl, timeoutMs = 25_000, options = {}) {
+  const session = store().get(String(sessionId || ""));
+  if (!session || session.status !== "authenticated" || !session.cdp || !profileUrl) {
+    return { html: "", payload: null };
+  }
+  const isLoadMore = Boolean(options.loadMore);
+  if (isLoadMore && session.profileState?.url !== profileUrl) {
+    return { html: "", payload: null };
+  }
+
+  if (session.searchPromise) await session.searchPromise.catch(() => {});
+  if (session.profilePromise) await session.profilePromise.catch(() => {});
+
+  session.profilePromise = (async () => {
+    const cdp = session.cdp;
+    const responseIds = new Set();
+    const payloads = [];
+    const capturePromises = new Map();
+    const captureResponseBody = async (requestId) => {
+      if (!requestId || capturePromises.has(requestId)) return capturePromises.get(requestId);
+      const promise = (async () => {
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          try {
+            const bodyResult = await cdp.send("Network.getResponseBody", { requestId }, 5_000);
+            let body = String(bodyResult?.body || "");
+            if (bodyResult?.base64Encoded) body = Buffer.from(body, "base64").toString("utf8");
+            const payload = JSON.parse(body);
+            const items = Array.isArray(payload?.data?.notes)
+              ? payload.data.notes
+              : Array.isArray(payload?.data?.items)
+                ? payload.data.items
+                : Array.isArray(payload?.notes)
+                  ? payload.notes
+                  : [];
+            if (items.length || payload?.success === true || payload?.code === 0) payloads.push(payload);
+            return;
+          } catch {
+            if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+        }
+      })();
+      capturePromises.set(requestId, promise);
+      return promise;
+    };
+    const removeResponse = cdp.on?.("Network.responseReceived", (params) => {
+      const responseUrl = String(params?.response?.url || "");
+      if (/\/api\/sns\/web\/(?:v1|v2)\/user_posted(?:\?|$)/.test(responseUrl)) {
+        responseIds.add(String(params.requestId || ""));
+      }
+    });
+    const removeFinished = cdp.on?.("Network.loadingFinished", (params) => {
+      const requestId = String(params?.requestId || "");
+      if (responseIds.has(requestId)) captureResponseBody(requestId);
+    });
+
+    try {
+      await cdp.send("Page.enable");
+      await cdp.send("Network.enable");
+      if (!isLoadMore) {
+        session.profileState = { url: profileUrl };
+        await cdp.send("Page.navigate", { url: profileUrl });
+      }
+      const deadline = Date.now() + Math.max(3_000, timeoutMs);
+      let cardsSeenAt = 0;
+      while (Date.now() < deadline) {
+        if (payloads.length > 0) break;
+        if (isLoadMore) {
+          await cdp.send("Runtime.evaluate", {
+            expression: `(() => {
+              const scrollingElement = document.scrollingElement || document.documentElement;
+              scrollingElement.scrollTop = scrollingElement.scrollHeight;
+              window.scrollTo(0, scrollingElement.scrollHeight);
+              for (const element of document.querySelectorAll('main, section, div')) {
+                const style = getComputedStyle(element);
+                if (!/(?:auto|scroll)/.test(style.overflowY) || element.scrollHeight <= element.clientHeight + 80) continue;
+                element.scrollTop = element.scrollHeight;
+                element.dispatchEvent(new Event('scroll', { bubbles: true }));
+              }
+              window.dispatchEvent(new Event('scroll'));
+              return true;
+            })()`,
+            returnByValue: true,
+          }).catch(() => {});
+          await cdp.send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: 640,
+            y: 850,
+            deltaX: 0,
+            deltaY: 1800,
+          }).catch(() => {});
+        }
+        const state = await cdp.send("Runtime.evaluate", {
+          expression: `(() => ({
+            ready: document.readyState,
+            cards: Array.from(document.querySelectorAll('a[href*="/explore/"], a[href*="/discovery/item/"]')).filter((node) => {
+              const href = node.getAttribute('href') || '';
+              return /\\/(?:explore|discovery\\/item)\\/[A-Za-z0-9_-]{8,80}/.test(href) && node.querySelector('img, source, video');
+            }).length,
+          }))()`,
+          returnByValue: true,
+        }).catch(() => null);
+        const value = state?.result?.value || {};
+        if (!isLoadMore && value.cards > 0) {
+          cardsSeenAt ||= Date.now();
+          if (value.ready === "complete" && Date.now() - cardsSeenAt >= 1_000) break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      await Promise.all([...responseIds].map((requestId) => captureResponseBody(requestId)));
+      const html = await cdp.send("Runtime.evaluate", {
+        expression: "document.documentElement?.outerHTML || ''",
+        returnByValue: true,
+      }).catch(() => null);
+      touch(session.id);
+      return { html: String(html?.result?.value || ""), payload: payloads.at(-1) || null };
+    } finally {
+      removeResponse?.();
+      removeFinished?.();
+      session.profilePromise = null;
+    }
+  })();
+
+  return session.profilePromise;
 }
 
 /**

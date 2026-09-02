@@ -20,6 +20,7 @@ LinkMigo「链密狗」是一款社媒公开资源解析下载工具。你可以
 | Threads | 公开图片、视频 |
 | TikTok | 公开视频 |
 | 抖音 | 公开视频 |
+| 微信视频号 | 公开视频号图片、视频 |
 | 小红书 | 公开图文、视频 |
 | 快手 | 公开视频 |
 | AcFun | 公开视频 |
@@ -152,9 +153,14 @@ http://<NAS IP>:3000
 | 变量名 | 默认值 | 说明 |
 | --- | --- | --- |
 | `LINKMIGO_APP_NAME` | `LinkMigo` | 自定义页面标题和首页主标题；Docker/NAS 部署时可在环境变量里改成自己的应用名。 |
+| `WECHAT_EXTRACT_API_KEY` | 空 | 微信视频号服务端提取 API key。公开视频接口只返回封面时，用该 key 请求 MeowLoad 同源提取服务获取视频直链。 |
+| `WECHAT_EXTRACT_API_URL` | `https://api.feeprint.com/extract/post` | 微信视频号服务端提取地址；部署了自有兼容服务时可覆盖。 |
+| `WECHAT_CHANNELS_API_URL` | `https://changfengbox.top/api/download/channels/parse` | 微信视频号 MP4 中转解析地址；默认按该站点公开的时间戳 + MD5 签名协议请求。 |
+| `WECHAT_CHANNELS_API_SECRET` | `changfengbox.top` | 中转解析服务签名密钥；仅在使用兼容服务时覆盖。 |
+| `WECHAT_CHANNELS_API_ENABLED` | `1` | 设为 `0` 可关闭微信视频号中转解析兜底。 |
 | `THEME`（或 `LINKMIGO_THEME`） | `default` | 全局 UI 风格。未设置、留空或填入未知值时使用现有默认主题；填 `cohere` 启用 `design-md/cohere/DESIGN.md` 规范的 Cohere 风格。支持亮色/暗色切换。 |
-| `LINKMIGO_URL_PLACEHOLDER` | `支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...` | 自定义首页输入框的占位文案；留空时使用默认文案。 |
-| `LINKMIGO_URL_PLACEHOLDER_EN` | `Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...` | 自定义英文版首页输入框的占位文案；留空时使用内置英文文案。 |
+| `LINKMIGO_URL_PLACEHOLDER` | `支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、视频号、B 站、A 站链接...` | 自定义首页输入框的占位文案；留空时使用默认文案。 |
+| `LINKMIGO_URL_PLACEHOLDER_EN` | `Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, WeChat Channels, Bilibili, or AcFun URL...` | 自定义英文版首页输入框的占位文案；留空时使用内置英文文案。 |
 | `SOCIAL_CACHE_DIR` | `.cache/social-downloader`；Docker 示例为 `/data/social-downloader` | 服务端缓存已解析媒体资源的位置。Docker 部署时建议映射到 NAS/服务器持久化目录。 |
 | `SOCIAL_CACHE_TTL_SECONDS` | `7200` | 缓存资源保留时长，单位秒。 |
 | `SOCIAL_CACHE_CLEANUP_INTERVAL_SECONDS` | `300` | 过期缓存清理间隔，单位秒。 |

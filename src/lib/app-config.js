@@ -1,9 +1,9 @@
 const DEFAULT_APP_NAME = "LinkMigo";
 const MAX_APP_NAME_LENGTH = 80;
 export const DEFAULT_URL_PLACEHOLDER =
-  "支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...";
+  "支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、视频号、B 站、A 站链接...";
 export const DEFAULT_URL_PLACEHOLDER_EN =
-  "Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...";
+  "Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, WeChat Channels, Bilibili, or AcFun URL...";
 const MAX_URL_PLACEHOLDER_LENGTH = 240;
 const DEFAULT_THEME = "default";
 const SUPPORTED_THEMES = new Set([DEFAULT_THEME, "cohere"]);

@@ -18,6 +18,7 @@ import { isV2exHost, normalizeV2exUrl, resolveV2exPost } from "./v2ex";
 import { isXiaohongshuHost, normalizeXiaohongshuUrl, resolveXiaohongshuPost } from "./xiaohongshu";
 import { isXiaoyuzhouHost, normalizeXiaoyuzhouUrl, resolveXiaoyuzhouPost } from "./xiaoyuzhou";
 import { isYoutubeHost, normalizeYoutubeUrl, resolveYoutubePost } from "./youtube";
+import { isWechatHost, normalizeWechatUrl, resolveWechatPost } from "./wechat";
 
 const PLATFORM_HANDLERS = [
   {
@@ -44,6 +45,7 @@ const PLATFORM_HANDLERS = [
   { platform: "xiaoyuzhou", isHost: isXiaoyuzhouHost, normalize: normalizeXiaoyuzhouUrl, resolve: resolveXiaoyuzhouPost },
   { platform: "youtube", isHost: isYoutubeHost, normalize: normalizeYoutubeUrl, resolve: resolveYoutubePost },
   { platform: "pornhub", isHost: isPornhubHost, normalize: normalizePornhubUrl, resolve: resolvePornhubPost },
+  { platform: "wechat", isHost: isWechatHost, normalize: normalizeWechatUrl, resolve: resolveWechatPost },
 ];
 
 export function normalizeSocialUrl(rawUrl) {

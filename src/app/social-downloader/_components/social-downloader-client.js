@@ -30,6 +30,7 @@ const platformLabels = {
   xiaohongshu: "Xiaohongshu",
   youtube: "YouTube",
   pornhub: "Pornhub",
+  wechat: "WeChat Channels",
 };
 
 const keywordSearchPlatforms = [
@@ -134,6 +135,7 @@ const copyByLanguage = {
       xiaohongshu: "小红书",
       youtube: "YouTube",
       pornhub: "Pornhub",
+      wechat: "视频号",
     },
     preferences: "偏好设置",
     previous: "上一张",
@@ -167,7 +169,7 @@ const copyByLanguage = {
     selectPost: "选中帖子",
     subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
-    urlPlaceholder: "支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、B 站、A 站链接...",
+    urlPlaceholder: "支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、视频号、B 站、A 站链接...",
     unselectPost: "取消选中帖子",
     video: "视频",
     audio: "音频",
@@ -273,6 +275,7 @@ const copyByLanguage = {
       xiaohongshu: "Xiaohongshu",
       youtube: "YouTube",
       pornhub: "Pornhub",
+      wechat: "WeChat Channels",
     },
     preferences: "Preferences",
     previous: "Previous",
@@ -306,7 +309,7 @@ const copyByLanguage = {
     selectPost: "Select post",
     subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
-    urlPlaceholder: "Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, Bilibili, or AcFun URL...",
+    urlPlaceholder: "Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, WeChat Channels, Bilibili, or AcFun URL...",
     unselectPost: "Unselect post",
     video: "Video",
     audio: "Audio",
@@ -3148,9 +3151,6 @@ function CohereEmptyState({ copy, theme }) {
       </div>
 
       <div className="mt-[clamp(4rem,8vh,5.5rem)] max-w-2xl">
-        <h2 className="max-w-xl text-[2.15rem] leading-[1.02] tracking-[-0.05em] sm:text-[3.5rem]" style={{ color: theme.titleText }}>
-          {isEnglish ? "Your next signal starts here." : "从这里开始，捕捉下一条灵感。"}
-        </h2>
         <p className="mt-5 max-w-lg text-base leading-7" style={{ color: theme.mutedText }}>
           {isEnglish
             ? "Paste a public social link or search a keyword. Results, media, and post details will gather in this workspace."
@@ -5723,7 +5723,7 @@ function platformMediaLabel(platform, copy = copyByLanguage.zh) {
     return copy.audio;
   }
 
-  if (["youtube", "tiktok", "douyin", "kuaishou", "acfun", "bilibili", "facebook", "pinterest", "pornhub"].includes(platform)) {
+  if (["youtube", "tiktok", "douyin", "kuaishou", "acfun", "bilibili", "facebook", "pinterest", "pornhub", "wechat"].includes(platform)) {
     return copy.video;
   }
 
@@ -6260,6 +6260,10 @@ function detectPlatform(value) {
 
     if (hostname === "xiaohongshu.com" || hostname.endsWith(".xiaohongshu.com") || hostname === "xhslink.com" || hostname.endsWith(".xhslink.com") || hostname === "xhslink.cn" || hostname.endsWith(".xhslink.cn") || hostname === "xhs.cn" || hostname.endsWith(".xhs.cn") || hostname === "rednote.com" || hostname.endsWith(".rednote.com")) {
       return "xiaohongshu";
+    }
+
+    if (hostname === "weixin.qq.com" || hostname.endsWith(".weixin.qq.com")) {
+      return "wechat";
     }
   } catch {
     return "";

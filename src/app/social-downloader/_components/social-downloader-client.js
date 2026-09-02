@@ -2149,6 +2149,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     isInputFocused,
     normalizedUrl && !canSubmit,
   );
+  const isCohereTheme = themeName === "cohere";
   const searchButtonStyle = buildPrimaryButtonStyle(submitTheme, !canSubmit || isLoading);
   const resetButtonStyle = buildSecondaryButtonStyle(inputDrivenTheme);
   const resultSecondaryButtonStyle = buildSecondaryButtonStyle(resultTheme);
@@ -2167,10 +2168,11 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
         <div className="absolute bottom-[-14%] left-[18%] h-[20rem] w-[20rem] rounded-full blur-[80px] transition-colors duration-700" style={{ backgroundColor: inputDrivenTheme.glowC }} />
       </div>
 
-      <section className="relative mx-auto flex h-full w-full max-w-[1480px] flex-col overflow-hidden px-3 py-4 sm:px-7 sm:py-6 lg:px-10">
+      <section className={`relative mx-auto flex h-full w-full max-w-[1480px] flex-col overflow-hidden px-3 py-4 sm:px-7 sm:py-6 lg:px-10 ${isCohereTheme ? "lg:mx-0 lg:max-w-none lg:grid lg:grid-cols-[minmax(19rem,23rem)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-x-6 lg:px-0 lg:py-3 lg:pr-12" : ""}`}>
         <PreferenceControls
           colorMode={colorMode}
           copy={copy}
+          isCohereTheme={isCohereTheme}
           language={language}
           onColorModeChange={setColorMode}
           onLanguageChange={setLanguage}
@@ -2178,31 +2180,27 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
         />
 
         <div
-          className="mx-auto w-full max-w-6xl pb-3 pt-0 transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
-          style={{
-            transform: hasOutput ? "translate3d(0,0,0)" : "translate3d(0, clamp(2.75rem, 11svh, 7.5rem), 0)",
-          }}
+          className={`mx-auto w-full max-w-6xl pb-3 pt-0 transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${isCohereTheme ? "lg:col-start-1 lg:row-start-1 lg:row-span-1 lg:mx-0 lg:flex lg:min-h-0 lg:max-w-none lg:flex-col lg:pb-0 lg:pt-0" : ""}`}
+          style={{ transform: isCohereTheme || hasOutput ? "translate3d(0,0,0)" : "translate3d(0, clamp(2.75rem, 11svh, 7.5rem), 0)" }}
         >
-          <div className={`relative ${hasOutput ? "pt-12 sm:pt-14" : "pt-20 sm:pt-24 lg:pt-28"}`}>
-            {!hasOutput ? (
-              <MediaStack mutedDarkPlayIcon={colorMode === "dark" && !normalizedUrl} theme={inputDrivenTheme} />
-            ) : (
-              <MediaStack compact theme={inputDrivenTheme} />
-            )}
+          <div className={`relative ${isCohereTheme ? "flex min-h-0 flex-1 flex-col rounded-[1.5rem] border p-4 sm:p-5 lg:rounded-[1.75rem]" : hasOutput ? "pt-12 sm:pt-14" : "pt-20 sm:pt-24 lg:pt-28"}`} style={isCohereTheme ? buildCohereSidebarStyle(inputDrivenTheme) : undefined}>
+            {!isCohereTheme ? (
+              <MediaStack compact={hasOutput} mutedDarkPlayIcon={colorMode === "dark" && !normalizedUrl} theme={inputDrivenTheme} />
+            ) : null}
 
             <div className="relative z-10">
-              <div className="text-center">
+              <div className={isCohereTheme ? "text-left" : "text-center"}>
                 <h1
                   className={`${themeName === "cohere" ? "font-sans not-italic tracking-[-0.06em]" : "font-serif italic"} leading-[0.98] transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                    hasOutput ? "text-[2rem] sm:text-[2.75rem]" : "text-[3.2rem] sm:text-[5.4rem] lg:text-[6.25rem]"
+                    isCohereTheme ? "text-[2.6rem] sm:text-[3.2rem] lg:text-[3.65rem]" : hasOutput ? "text-[2rem] sm:text-[2.75rem]" : "text-[3.2rem] sm:text-[5.4rem] lg:text-[6.25rem]"
                   }`}
                   style={{ color: inputDrivenTheme.titleText }}
                 >
                   {appName}
                 </h1>
                 <p
-                  className={`mx-auto max-w-2xl overflow-hidden transition-all duration-500 ${
-                    hasOutput ? "mt-1 max-h-0 text-sm opacity-0" : "mt-4 max-h-14 text-base opacity-100 sm:text-lg"
+                  className={`${isCohereTheme ? "max-w-[18rem]" : "mx-auto max-w-2xl"} overflow-hidden transition-all duration-500 ${
+                    isCohereTheme ? "mt-3 max-h-20 text-sm opacity-100 sm:text-base" : hasOutput ? "mt-1 max-h-0 text-sm opacity-0" : "mt-4 max-h-14 text-base opacity-100 sm:text-lg"
                   }`}
                   style={{ color: inputDrivenTheme.mutedText }}
                 >
@@ -2212,9 +2210,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
 
               <form
                 noValidate
-                className={`mx-auto w-full max-w-6xl rounded-[2rem] transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                  hasOutput ? "mt-4 rounded-[1.5rem] p-3 sm:p-4" : "mt-6 p-4 sm:p-5"
-                } ${glassPanelClass} ${inputDrivenTheme.panelClass}`}
+                className={`${isCohereTheme
+                  ? "mt-7 rounded-[1.25rem] p-3.5 sm:p-4"
+                  : `mx-auto max-w-6xl ${hasOutput ? "mt-4 rounded-[1.5rem] p-3 sm:p-4" : "mt-6 rounded-[2rem] p-4 sm:p-5"}`
+                } w-full transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${glassPanelClass} ${inputDrivenTheme.panelClass}`}
                 onSubmit={onSubmit}
                 style={formStyle}
               >
@@ -2232,7 +2231,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                     autoCapitalize="none"
                     autoComplete="off"
                     className={`lm-url-input w-full appearance-none bg-transparent py-0 pl-1 pr-12 text-base font-medium outline-none sm:text-[1.15rem] ${
-                      hasOutput ? "h-11 sm:h-12" : "h-14 sm:h-16"
+                      isCohereTheme ? "h-12 sm:h-14" : hasOutput ? "h-11 sm:h-12" : "h-14 sm:h-16"
                     }`}
                     id="social-url"
                     inputMode={isKeywordMode ? "search" : "url"}
@@ -2256,7 +2255,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                     <button
                       aria-label={copy.clearUrl}
                       aria-hidden={!isUrlInputHovered}
-                      className={`lm-themed-action absolute right-0 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-full border transition-[background-color,border-color,box-shadow,color,opacity,transform] duration-300 ease-out ${
+                      className={`lm-themed-action ${isCohereTheme ? "lm-cohere-contrast-hover" : ""} absolute right-0 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-full border transition-[background-color,border-color,box-shadow,color,opacity,transform] duration-300 ease-out ${
                         isUrlInputHovered ? "cursor-pointer opacity-100" : "pointer-events-none cursor-default opacity-0"
                       }`}
                       onClick={clearUrl}
@@ -2271,7 +2270,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                   ) : null}
                 </div>
 
-                {isKeywordMode ? (
+                {isKeywordMode && !isCohereTheme ? (
                   <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: inputDrivenTheme.panelBorder }}>
                     <span className="mr-1 text-xs font-semibold" style={{ color: inputDrivenTheme.mutedText }}>
                       {copy.searchPlatform}
@@ -2301,10 +2300,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                   </div>
                 ) : null}
 
-                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-center">
-                  {!isKeywordMode && inputPlatform === "xiaohongshu" ? (
+                <div className={`mt-3 flex flex-col gap-3 ${isCohereTheme ? "items-stretch" : "sm:flex-row sm:flex-nowrap sm:items-center"}`}>
+                  {!isCohereTheme && !isKeywordMode && inputPlatform === "xiaohongshu" ? (
                     <button
-                      className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-11 shrink-0 px-4 text-[13px]`}
+                      className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-11 shrink-0 px-4 text-[13px] ${isCohereTheme ? "w-full rounded-lg" : ""}`}
                       onClick={openXiaohongshuLogin}
                       style={buildSecondaryButtonStyle(inputDrivenTheme)}
                       type="button"
@@ -2315,7 +2314,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
 
                   {result ? (
                     <button
-                      className={`${actionButtonBaseClass} lm-cohere-contrast-hover`}
+                      className={`${actionButtonBaseClass} lm-cohere-contrast-hover ${isCohereTheme ? "w-full rounded-lg" : ""}`}
                       onClick={reset}
                       style={resetButtonStyle}
                       type="button"
@@ -2330,9 +2329,9 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                     </span>
                   ) : null}
 
-                  <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+                  <div className={`flex w-full items-center gap-2 ${isCohereTheme ? "" : "sm:ml-auto sm:w-auto"}`}>
                     <button
-                      className={`${actionButtonBaseClass} h-11 w-full min-w-[6rem] px-6 sm:w-auto`}
+                      className={`${actionButtonBaseClass} h-11 w-full min-w-[6rem] px-6 ${isCohereTheme ? "rounded-lg" : "sm:w-auto"}`}
                       disabled={!canSubmit || isLoading}
                       style={searchButtonStyle}
                       type="submit"
@@ -2349,15 +2348,61 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                   </div>
                 </div>
               </form>
+
+              {isKeywordMode && isCohereTheme ? (
+                <div className="mt-3 px-1">
+                  <span className="block text-xs font-semibold" style={{ color: inputDrivenTheme.mutedText }}>
+                    {copy.searchPlatform}
+                  </span>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {keywordSearchPlatforms.map((platform) => {
+                      const isSelected = searchPlatforms.includes(platform.id);
+                      const label = getPlatformLabel(platform.id, copy);
+
+                      return (
+                        <button
+                          aria-disabled={!platform.enabled}
+                          aria-pressed={isSelected}
+                          className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-[13px] font-semibold transition ${platform.enabled ? "" : "cursor-not-allowed opacity-60"}`}
+                          disabled={!platform.enabled}
+                          key={platform.id}
+                          onClick={() => setSearchPlatforms((current) => current.includes(platform.id) ? current.filter((item) => item !== platform.id) : [...current, platform.id])}
+                          style={isSelected ? buildPrimaryButtonStyle(inputDrivenTheme, false) : buildSecondaryButtonStyle(inputDrivenTheme)}
+                          title={platform.enabled ? label : `${label} · ${copy.comingSoon}`}
+                          type="button"
+                        >
+                          <span aria-hidden="true" className="size-2 rounded-full" style={{ backgroundColor: platform.color }} />
+                          {label}
+                          {!platform.enabled ? <span className="text-[10px] font-medium opacity-80">{copy.comingSoon}</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
+
+            {isCohereTheme && !isKeywordMode && inputPlatform === "xiaohongshu" ? (
+              <div className="mt-auto flex justify-end pt-6">
+                <button
+                  className={`${actionButtonBaseClass} lm-cohere-contrast-hover h-11 rounded-lg px-4 text-[13px]`}
+                  onClick={openXiaohongshuLogin}
+                  style={buildSecondaryButtonStyle(inputDrivenTheme)}
+                  type="button"
+                >
+                  {xiaohongshuAuth.status === "authenticated" ? "小红书已登录" : "小红书扫码登录"}
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
 
         <div
           className={`mx-auto flex min-h-0 w-full max-w-6xl flex-1 transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-            hasOutput ? "mt-4 translate-y-0 opacity-100" : "pointer-events-none mt-0 translate-y-6 opacity-0"
-          }`}
+            hasOutput ? "mt-4 translate-y-0 opacity-100" : isCohereTheme ? "mt-0 translate-y-0 opacity-100" : "pointer-events-none mt-0 translate-y-6 opacity-0"
+          } ${isCohereTheme ? "lg:col-start-2 lg:row-start-1 lg:mx-0 lg:max-w-none lg:pt-14" : ""}`}
         >
+          {!hasOutput && isCohereTheme ? <CohereEmptyState copy={copy} theme={inputDrivenTheme} /> : null}
           {error ? (
             <div
               className={`${glassPanelClass} ${inputDrivenTheme.panelClass} flex w-full gap-3 rounded-[1.75rem] p-5 backdrop-blur-2xl`}
@@ -2803,7 +2848,7 @@ function ProfileResultSection({
 
 function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, language, onOpenPostDetail, onTogglePost, platform, postDownloadStatuses, posts, selectedPostIds, theme }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] xl:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,11.5rem),1fr))] gap-2.5 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(min(100%,12rem),1fr))] sm:gap-3 xl:grid-cols-[repeat(auto-fill,minmax(min(100%,14rem),1fr))]">
       {posts.map((post) => {
         const isSelected = selectedPostIds.includes(post.id);
         const downloadStatus = postDownloadStatuses?.[post.id] ?? null;
@@ -3038,6 +3083,7 @@ function profileImageUrl(sourceUrl, platform, kind) {
 function PreferenceControls({
   colorMode,
   copy,
+  isCohereTheme = false,
   language,
   onColorModeChange,
   onLanguageChange,
@@ -3046,9 +3092,11 @@ function PreferenceControls({
   return (
     <div
       aria-label={copy.preferences}
-      className="absolute inset-x-3 top-3 z-30 sm:inset-x-7 sm:top-5 lg:inset-x-10"
+      className={isCohereTheme
+        ? "relative z-30 flex w-full shrink-0 justify-end pb-1 pt-3 lg:absolute lg:inset-x-0 lg:top-3 lg:pr-12 lg:pt-0"
+        : "absolute inset-x-3 top-3 z-30 sm:inset-x-7 sm:top-5 lg:inset-x-10"}
     >
-      <div className="mx-auto flex w-full max-w-6xl flex-wrap justify-end gap-2">
+      <div className={isCohereTheme ? "flex w-full flex-wrap justify-end gap-2" : "mx-auto flex w-full max-w-6xl flex-wrap justify-end gap-2"}>
         <div className="flex rounded-full border p-1 backdrop-blur-xl" style={buildControlGroupStyle(theme)}>
           {["zh", "en"].map((item) => (
             <button
@@ -3080,6 +3128,37 @@ function PreferenceControls({
         </div>
       </div>
     </div>
+  );
+}
+
+function CohereEmptyState({ copy, theme }) {
+  const isEnglish = copy.search === "Search";
+
+  return (
+    <section
+      aria-label={copy.resultAria}
+      className="flex min-h-0 w-full flex-1 flex-col justify-start overflow-hidden rounded-[1.75rem] border p-6 sm:p-8 lg:p-10"
+      style={buildResultShellStyle(theme)}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <span className="font-mono text-xs uppercase tracking-[0.14em]" style={{ color: theme.accentStrong }}>
+          Workspace / Ready
+        </span>
+        <span className="size-2.5 rounded-full" style={{ backgroundColor: theme.accent }} />
+      </div>
+
+      <div className="mt-[clamp(4rem,8vh,5.5rem)] max-w-2xl">
+        <h2 className="max-w-xl text-[2.15rem] leading-[1.02] tracking-[-0.05em] sm:text-[3.5rem]" style={{ color: theme.titleText }}>
+          {isEnglish ? "Your next signal starts here." : "从这里开始，捕捉下一条灵感。"}
+        </h2>
+        <p className="mt-5 max-w-lg text-base leading-7" style={{ color: theme.mutedText }}>
+          {isEnglish
+            ? "Paste a public social link or search a keyword. Results, media, and post details will gather in this workspace."
+            : "粘贴公开社媒链接，或输入关键词开始搜索。搜索结果、媒体资源和帖子信息会集中显示在这里。"}
+        </p>
+      </div>
+
+    </section>
   );
 }
 
@@ -5059,6 +5138,16 @@ function buildSearchShellStyle(theme, isFocused, isInvalid) {
       ? `${active.panelShadow}, 0 0 0 4px ${active.ring}`
       : active.panelShadow,
     transition: themeTransition,
+  };
+}
+
+function buildCohereSidebarStyle(theme) {
+  return {
+    backgroundColor: theme.colorMode === "dark" ? "rgba(7,24,41,0.74)" : "rgba(255,255,255,0.58)",
+    borderColor: theme.panelBorder,
+    boxShadow: theme.colorMode === "dark"
+      ? "0 28px 70px rgba(0,0,0,0.24)"
+      : "0 24px 60px rgba(33,33,33,0.06)",
   };
 }
 

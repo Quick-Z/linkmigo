@@ -99,7 +99,7 @@ export function AssetPreviewGrid({
   }
 
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(9.75rem,1fr))] gap-2.5 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(12rem,1fr))]">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,9rem),1fr))] gap-2 pb-1 sm:grid-cols-[repeat(auto-fill,minmax(min(100%,10rem),1fr))] sm:gap-2.5 lg:grid-cols-[repeat(auto-fill,minmax(min(100%,10.5rem),1fr))] xl:grid-cols-[repeat(auto-fill,minmax(min(100%,12rem),1fr))]">
       {assets.map((asset, index) => {
         const previewUrl = apiUrl(asset.preview_url);
         const isSelected = selectedAssetIds.includes(asset.id);

@@ -1,6 +1,6 @@
 {
   "name": "linkmigo",
-  "version": "0.2.6",
+  "version": "0.2.8",
   "private": true,
   "scripts": {
     "dev": "YTDL_NO_DEBUG_FILE=1 next dev -H 0.0.0.0",

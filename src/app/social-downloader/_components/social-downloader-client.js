@@ -1194,6 +1194,10 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   const expiryText = result ? formatExpiry(result.expires_at, language) : "";
 
   useEffect(() => {
+    logClientAction("page_view");
+  }, []);
+
+  useEffect(() => {
     const savedLanguage = window.localStorage.getItem("linkmigo-language");
     const savedColorMode = window.localStorage.getItem("linkmigo-color-mode");
 

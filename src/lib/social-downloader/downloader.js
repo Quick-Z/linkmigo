@@ -1116,6 +1116,7 @@ async function estimateSingleMediaSize({ asset, maxBytes, timeoutMs }) {
         headers,
         maxBytes,
         timeoutMs,
+        preferRange: asset.size_probe === "range",
       });
 
       if (info.contentLength) {
@@ -1253,7 +1254,15 @@ function isYoutubeMediaUrl(value) {
   }
 }
 
-async function probeContentInfo({ asset, headers, maxBytes, timeoutMs }) {
+async function probeContentInfo({ asset, headers, maxBytes, timeoutMs, preferRange = false }) {
+  if (preferRange) {
+    const rangedInfo = await probeContentInfoWithRange({ asset, headers, maxBytes, timeoutMs });
+
+    if (rangedInfo.contentLength) {
+      return rangedInfo;
+    }
+  }
+
   let response;
 
   try {
@@ -1275,6 +1284,8 @@ async function probeContentInfo({ asset, headers, maxBytes, timeoutMs }) {
   }
 
   const contentLength = safeInt(response.headers.get("content-length"));
+
+  response.body?.cancel().catch(() => {});
 
   if (contentLength && contentLength > maxBytes) {
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
@@ -1312,7 +1323,12 @@ async function probeContentInfoWithRange({ asset, headers, maxBytes, timeoutMs }
 
   const contentRange = String(response.headers.get("content-range") || "");
   const contentRangeMatch = /\/(\d+)\s*$/i.exec(contentRange);
-  const contentLength = safeInt(contentRangeMatch?.[1]) || safeInt(response.headers.get("content-length"));
+  // For a 206 response, Content-Length is only the returned range (often 1
+  // byte), so only Content-Range's total is a usable size estimate.
+  const contentLength = safeInt(contentRangeMatch?.[1]) ||
+    (response.status === 206 ? null : safeInt(response.headers.get("content-length")));
+
+  response.body?.cancel().catch(() => {});
 
   if (contentLength && contentLength > maxBytes) {
     throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);

@@ -315,6 +315,9 @@ function pinterestAssetsFromPin(pin, filenameBase, mediaHeaders) {
       height: videoUrl.height,
       filename_hint: `${filenameBase}.mp4`,
       request_headers: mediaHeaders,
+      // Pinterest CDN HEAD responses can describe a preview/transcoded body.
+      // Use Content-Range for the pre-download size estimate instead.
+      size_probe: "range",
     });
   }
 
@@ -327,6 +330,7 @@ function pinterestAssetsFromPin(pin, filenameBase, mediaHeaders) {
       height: imageUrl.height,
       filename_hint: `${filenameBase}_photo_${index + 1}.jpg`,
       request_headers: mediaHeaders,
+      size_probe: "range",
     });
   }
 
@@ -717,6 +721,7 @@ function pinterestMetaAssets(text, shortcode, mediaHeaders) {
       media_type: "video",
       filename_hint: `pinterest_${shortcode}.mp4`,
       request_headers: mediaHeaders,
+      size_probe: "range",
     });
   }
 
@@ -727,6 +732,7 @@ function pinterestMetaAssets(text, shortcode, mediaHeaders) {
       media_type: "image",
       filename_hint: `pinterest_${shortcode}.jpg`,
       request_headers: mediaHeaders,
+      size_probe: "range",
     });
   }
 

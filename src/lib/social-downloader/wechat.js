@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
+import { execFile as execFileCallback } from "node:child_process";
+import fs from "node:fs/promises";
 import { URL } from "node:url";
+import { promisify } from "node:util";
 
 import { AppError, ErrorCode } from "./errors";
 import {
@@ -21,6 +24,8 @@ const WECHAT_HOSTS = new Set(["weixin.qq.com", "www.weixin.qq.com", "channels.we
 const WECHAT_API_URL = "https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info";
 const WECHAT_EXTRACT_API_URL = "https://api.feeprint.com/extract/post";
 const WECHAT_CHANNELS_API_URL = "https://changfengbox.top/api/download/channels/parse";
+const WECHAT_MEOWLOAD_CLI_PATH = "/Applications/MeowLoad.app/Contents/MacOS/meowload-cli";
+const execFile = promisify(execFileCallback);
 const WECHAT_PAGE_HEADERS = {
   ...PAGE_HEADERS,
   "user-agent":
@@ -108,21 +113,29 @@ export async function resolveWechatPost(normalized, settings) {
   const feed = data.feedInfo && typeof data.feedInfo === "object" ? data.feedInfo : {};
   const author = data.authorInfo && typeof data.authorInfo === "object" ? data.authorInfo : {};
   let assets = wechatAssetsFromFeed(feed, normalized.shortcode, pageUrl, author.nickname);
+  const fallbackErrors = [];
 
-  // The public Finder preview API often omits videoUrl. MeowLoad uses the
-  // same server-side extractor endpoint to obtain a signed finder.video.qq.com
-  // URL, so support that endpoint when an API key is configured.
+  if (!assets.some((asset) => asset.media_type === "video")) {
+    const extracted = await resolveWechatWithLocalMeowLoad(pageUrl, settings);
+    fallbackErrors.push(extracted.error);
+    if (extracted.assets.length > 0) {
+      assets = [...extracted.assets, ...assets];
+    }
+  }
+
   if (!assets.some((asset) => asset.media_type === "video")) {
     const extracted = await resolveWechatWithChannelsService(pageUrl, settings);
-    if (extracted.length > 0) {
-      assets = [...extracted, ...assets];
+    fallbackErrors.push(extracted.error);
+    if (extracted.assets.length > 0) {
+      assets = [...extracted.assets, ...assets];
     }
   }
 
   if (!assets.some((asset) => asset.media_type === "video")) {
     const extracted = await resolveWechatWithServerExtractor(pageUrl, settings);
-    if (extracted.length > 0) {
-      assets = [...extracted, ...assets];
+    fallbackErrors.push(extracted.error);
+    if (extracted.assets.length > 0) {
+      assets = [...extracted.assets, ...assets];
     }
   }
 
@@ -131,9 +144,10 @@ export async function resolveWechatPost(normalized, settings) {
   }
 
   if (!assets.some((asset) => asset.media_type === "video")) {
+    const details = fallbackErrors.filter(Boolean).join("；");
     throw new AppError(
       ErrorCode.NO_MEDIA_FOUND,
-      "微信视频号公开接口只返回了封面，暂时无法获取视频文件。请配置 WECHAT_EXTRACT_API_KEY 后重试。",
+      `微信视频号公开接口只返回了封面，其他视频解析方式也未成功${details ? `：${details}` : ""}。`,
       404,
     );
   }
@@ -169,9 +183,46 @@ export async function resolveWechatPost(normalized, settings) {
   };
 }
 
+async function resolveWechatWithLocalMeowLoad(pageUrl, settings) {
+  if (process.env.WECHAT_MEOWLOAD_CLI_ENABLED === "0" || process.platform !== "darwin") {
+    return { assets: [], error: null };
+  }
+
+  const executable = process.env.WECHAT_MEOWLOAD_CLI_PATH?.trim() || WECHAT_MEOWLOAD_CLI_PATH;
+
+  try {
+    await fs.access(executable);
+  } catch {
+    return { assets: [], error: "本机未安装哼哼猫" };
+  }
+
+  try {
+    const { stdout } = await execFile(executable, ["info", pageUrl], {
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: Math.min(Math.max(settings.httpTimeoutMs * 3, 30_000), 120_000),
+      windowsHide: true,
+    });
+    const payload = JSON.parse(stdout.trim());
+    const assets = wechatAssetsFromExtractorPayload(payload, pageUrl);
+    return {
+      assets,
+      error: assets.some((asset) => asset.media_type === "video")
+        ? null
+        : "哼哼猫没有返回视频文件",
+    };
+  } catch (error) {
+    const message = pickSingleLineText(error?.stderr, error?.message);
+    const reason = /Failed to connect to the MeowLoad desktop app/i.test(message)
+      ? "哼哼猫桌面应用未运行"
+      : "哼哼猫本机解析失败";
+    return { assets: [], error: reason };
+  }
+}
+
 async function resolveWechatWithChannelsService(pageUrl, settings) {
   if (process.env.WECHAT_CHANNELS_API_ENABLED === "0") {
-    return [];
+    return { assets: [], error: null };
   }
 
   const endpoint = process.env.WECHAT_CHANNELS_API_URL?.trim() || WECHAT_CHANNELS_API_URL;
@@ -196,42 +247,48 @@ async function resolveWechatWithChannelsService(pageUrl, settings) {
       },
       settings.httpTimeoutMs,
     );
-  } catch {
-    return [];
+  } catch (error) {
+    return {
+      assets: [],
+      error: error?.name === "AbortError" ? "微信视频中转服务请求超时" : "无法访问微信视频中转服务",
+    };
   }
 
   if (!response.ok) {
-    return [];
+    return { assets: [], error: `微信视频中转服务返回 ${response.status}` };
   }
 
   let payload;
   try {
     payload = await response.json();
   } catch {
-    return [];
+    return { assets: [], error: "微信视频中转服务返回了无效响应" };
   }
 
   const urls = Array.isArray(payload?.urls) ? payload.urls : [];
   const base = safeFilenamePart(payload?.filename?.replace(/\.[^.]+$/, "")) || "wechat_video";
   const source = urls.find((url) => typeof url === "string" && /^https?:\/\//i.test(url));
   if (!source) {
-    return [];
+    return { assets: [], error: "微信视频中转服务没有返回视频地址" };
   }
 
-  return [{
-    source_url: htmlUnescape(source),
-    media_type: "video",
-    width: null,
-    height: null,
-    filename_hint: `${base}.mp4`,
-    request_headers: { "user-agent": WECHAT_PAGE_HEADERS["user-agent"] },
-  }];
+  return {
+    assets: [{
+      source_url: htmlUnescape(source),
+      media_type: "video",
+      width: null,
+      height: null,
+      filename_hint: `${base}.mp4`,
+      request_headers: { "user-agent": WECHAT_PAGE_HEADERS["user-agent"] },
+    }],
+    error: null,
+  };
 }
 
 async function resolveWechatWithServerExtractor(pageUrl, settings) {
   const apiKey = process.env.WECHAT_EXTRACT_API_KEY?.trim();
   if (!apiKey) {
-    return [];
+    return { assets: [], error: "未配置 WECHAT_EXTRACT_API_KEY" };
   }
 
   const endpoint = process.env.WECHAT_EXTRACT_API_URL?.trim() || WECHAT_EXTRACT_API_URL;
@@ -253,21 +310,34 @@ async function resolveWechatWithServerExtractor(pageUrl, settings) {
       },
       settings.httpTimeoutMs,
     );
-  } catch {
-    return [];
+  } catch (error) {
+    return {
+      assets: [],
+      error: error?.name === "AbortError" ? "微信提取 API 请求超时" : "无法访问微信提取 API",
+    };
   }
 
   if (!response.ok) {
-    return [];
+    return { assets: [], error: `微信提取 API 返回 ${response.status}` };
   }
 
   let payload;
   try {
     payload = await response.json();
   } catch {
-    return [];
+    return { assets: [], error: "微信提取 API 返回了无效响应" };
   }
 
+  const assets = wechatAssetsFromExtractorPayload(payload, pageUrl);
+  return {
+    assets,
+    error: assets.some((asset) => asset.media_type === "video")
+      ? null
+      : "微信提取 API 没有返回视频文件",
+  };
+}
+
+function wechatAssetsFromExtractorPayload(payload, pageUrl) {
   const candidates = [payload, payload?.data, payload?.result, payload?.post].filter(Boolean);
   const medias = candidates.flatMap((value) => Array.isArray(value) ? value : value?.medias || []);
   const base = `wechat_${safeFilenamePart(pageUrl.split("/").pop())}`;

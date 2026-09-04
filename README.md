@@ -155,6 +155,8 @@ http://<NAS IP>:3000
 | `LINKMIGO_APP_NAME` | `LinkMigo` | 自定义页面标题和首页主标题；Docker/NAS 部署时可在环境变量里改成自己的应用名。 |
 | `WECHAT_EXTRACT_API_KEY` | 空 | 微信视频号服务端提取 API key。公开视频接口只返回封面时，用该 key 请求 MeowLoad 同源提取服务获取视频直链。 |
 | `WECHAT_EXTRACT_API_URL` | `https://api.feeprint.com/extract/post` | 微信视频号服务端提取地址；部署了自有兼容服务时可覆盖。 |
+| `WECHAT_MEOWLOAD_CLI_ENABLED` | `1` | macOS 本机安装了哼哼猫时，允许通过其 CLI 和正在运行的桌面应用匿名解析视频号；设为 `0` 可关闭。 |
+| `WECHAT_MEOWLOAD_CLI_PATH` | `/Applications/MeowLoad.app/Contents/MacOS/meowload-cli` | 哼哼猫 CLI 路径；仅 macOS 本机部署使用。Docker/NAS 仍需可用的中转服务或 `WECHAT_EXTRACT_API_KEY`。 |
 | `WECHAT_CHANNELS_API_URL` | `https://changfengbox.top/api/download/channels/parse` | 微信视频号 MP4 中转解析地址；默认按该站点公开的时间戳 + MD5 签名协议请求。 |
 | `WECHAT_CHANNELS_API_SECRET` | `changfengbox.top` | 中转解析服务签名密钥；仅在使用兼容服务时覆盖。 |
 | `WECHAT_CHANNELS_API_ENABLED` | `1` | 设为 `0` 可关闭微信视频号中转解析兜底。 |

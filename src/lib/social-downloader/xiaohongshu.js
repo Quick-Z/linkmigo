@@ -2949,7 +2949,7 @@ function looksLikeXiaohongshuVerification(text) {
 }
 
 function looksLikeXiaohongshuRestrictedText(text) {
-  return /captcha|verify|安全验证|滑块验证|环境异常|访问频繁|\/404\/sec_|error_code=300031|当前笔记暂时无法浏览|当前内容仅支持在小红书 APP 内查看|sec_WZRZJKCu/i.test(String(text || ""));
+  return /captcha|\bverify\b|安全验证|滑块验证|环境异常|访问频繁|\/404\/sec_|error_code=300031|当前笔记暂时无法浏览|当前内容仅支持在小红书 APP 内查看|sec_WZRZJKCu/i.test(String(text || ""));
 }
 
 function postInfoFromXiaohongshu(note, metrics, creatorHandle) {

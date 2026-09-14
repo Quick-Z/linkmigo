@@ -18,8 +18,9 @@ import { xiaohongshuSessionCookie } from "./xiaohongshu-sessions";
 
 let cacheStore;
 const cacheCleanupSchedulerKey = "__linkmigoSocialCacheCleanupScheduler";
-// Bump when asset semantics change so stale cover-only WeChat records are re-resolved.
-const mediaCacheVersion = 40;
+// Bump when Instagram asset extraction changes so previously cached cover-only
+// (and other stale media) records are resolved again.
+const mediaCacheVersion = 43;
 const profileCacheVersion = 12;
 const xiaohongshuProfileCacheVersion = 13;
 const profileInitialPostsPageSize = 30;

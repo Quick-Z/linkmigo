@@ -111,6 +111,13 @@ const EMBED_HEADERS = {
   "user-agent": PAGE_HEADERS["user-agent"],
 };
 
+// Instagram serves the real logged-out media page only to requests that look
+// like a top-level document navigation. Without the sec-fetch-* headers the
+// response is a Polaris error page that contains no media JSON at all.
+const PUBLIC_PAGE_HEADERS = {
+  ...EMBED_HEADERS,
+};
+
 function instagramRequestHeaders(baseHeaders, settings = {}, options = {}) {
   const headers = { ...baseHeaders };
   const includeCookie = options.includeCookie !== false;
@@ -205,8 +212,11 @@ const MEDIA_KEY_HINTS = {
   video_url: "video",
   playable_url: "video",
   playable_url_quality_hd: "video",
+  video_versions: "video",
+  video_dash_manifest: "video",
   contentUrl: "unknown",
   display_url: "image",
+  display_uri: "image",
   thumbnail_src: "image",
   thumbnail_url: "image",
   thumbnailUrl: "image",
@@ -302,14 +312,37 @@ export async function resolveInstagramPost(normalized, settings) {
   }
 
   const htmlText = attempts.map((attempt) => attempt.htmlText).filter(Boolean).join("\n");
-  merged.assets = upgradeInstagramAssetsFromText(merged.assets, htmlText);
-  merged.assets = await upgradeInstagramAssetsFromRenderedPage(merged.assets, normalized.shortcode, settings);
+  const videoHint = attempts.some((attempt) =>
+    (attempt.posts || []).some((post) => post?.video_hint),
+  );
+
+  merged.assets = upgradeInstagramAssetsFromText(merged.assets, htmlText, normalized.shortcode);
+
+  // Copyright-blocked or gated posts expose only the cover frame through the
+  // public/embed payloads. When the post is a video but no video asset was
+  // found, render the page so the player data can provide the video URL.
+  const missingVideo = videoHint && !merged.assets.some((asset) => asset.media_type === "video");
+  let renderedPost = null;
+
+  if (missingVideo) {
+    renderedPost = await resolveFromRenderedPage(normalized.shortcode, settings);
+
+    if (renderedPost.assets.length > 0) {
+      merged = mergeInstagramResolverPosts([merged, renderedPost]);
+    }
+  } else {
+    merged.assets = await upgradeInstagramAssetsFromRenderedPage(
+      merged.assets,
+      normalized.shortcode,
+      settings,
+    );
+  }
 
   if (merged.assets.length > 0) {
     return merged;
   }
 
-  const renderedPost = await resolveFromRenderedPage(normalized.shortcode, settings);
+  renderedPost ??= await resolveFromRenderedPage(normalized.shortcode, settings);
 
   if (renderedPost.assets.length > 0) {
     return mergeInstagramResolverPosts([merged, renderedPost]);
@@ -367,7 +400,7 @@ async function collectInstagramPostSources(normalized, settings, options = {}) {
 
     htmlText = html;
     resolvedPosts.push({
-      assets: parseAssetsFromHtml(html),
+      assets: parseAssetsFromHtml(html, { shortcode: normalized.shortcode }),
       metrics,
       creator_handle: creatorHandle,
       post_info: parsePostInfoFromHtml(html, {
@@ -375,6 +408,7 @@ async function collectInstagramPostSources(normalized, settings, options = {}) {
         creatorHandle,
         shortcode: normalized.shortcode,
       }),
+      video_hint: instagramHtmlSuggestsVideo(html, normalized.shortcode),
     });
   } catch (error) {
     htmlError = error;
@@ -804,11 +838,13 @@ async function ensureInstagramNetwork(settings) {
 export async function fetchPublicPage(canonicalUrl, settings, options = {}) {
   let response;
 
+  throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "debug force page fetch failure", 502);
+
   try {
     response = await fetchWithTimeout(
       canonicalUrl,
       {
-        headers: instagramRequestHeaders(COMMON_PAGE_HEADERS, settings, options),
+        headers: instagramRequestHeaders(PUBLIC_PAGE_HEADERS, settings, options),
         cache: "no-store",
       },
       settings.httpTimeoutMs,
@@ -1005,6 +1041,7 @@ export function parseMetricsFromHtml(html) {
       "image_versions2",
       "carousel_media",
       "xdt_shortcode_media",
+      "xig_polaris_media",
     ])) {
       extractMetricsFromJson(data, metrics);
     }
@@ -1023,32 +1060,80 @@ export function parseMetricsFromHtml(html) {
   return metrics;
 }
 
-export function parseAssetsFromHtml(html) {
-  const candidates = new Map();
+const EMBEDDED_JSON_MARKERS = [
+  "window._sharedData",
+  "__additionalDataLoaded",
+  "__bbox",
+  "edge_sidecar_to_children",
+  "image_versions2",
+  "carousel_media",
+  "xdt_shortcode_media",
+  "xig_polaris_media",
+];
 
-  for (const text of scriptTexts(html, { type: "application/ld+json" })) {
-    for (const data of loadsJsonVariants(text)) {
-      extractFromJson(data, candidates);
+const MEDIA_NODE_KEYS = [
+  "image_versions2",
+  "video_versions",
+  "video_dash_manifest",
+  "carousel_media",
+  "edge_sidecar_to_children",
+  "display_url",
+  "display_uri",
+  "display_resources",
+  "video_url",
+  "playable_url",
+  "playable_url_quality_hd",
+  "thumbnail_src",
+  "if_not_gated_logged_out",
+  "__isXIGPolarisMedia",
+];
+
+export function parseAssetsFromHtml(html, options = {}) {
+  const shortcode = typeof options?.shortcode === "string" ? options.shortcode.trim() : "";
+  const candidates = new Map();
+  let matchedTarget = false;
+
+  if (shortcode) {
+    for (const text of scriptTexts(html, { type: "application/ld+json" })) {
+      for (const data of loadsJsonVariants(text)) {
+        extractTargetMediaFromJson(data, candidates, shortcode);
+      }
     }
+
+    for (const text of scriptTexts(html)) {
+      if (!text) {
+        continue;
+      }
+
+      for (const data of extractEmbeddedJsonObjects(text, EMBEDDED_JSON_MARKERS)) {
+        extractTargetMediaFromJson(data, candidates, shortcode);
+      }
+    }
+
+    // A live page embeds the creator's other posts next to the requested one.
+    // Only fall back to the unscoped walk when the target media was not found,
+    // so assets belonging to related posts are never downloaded as this post.
+    matchedTarget = candidates.size > 0;
   }
 
-  for (const text of scriptTexts(html)) {
-    if (!text) {
-      continue;
+  if (!shortcode || !matchedTarget) {
+    for (const text of scriptTexts(html, { type: "application/ld+json" })) {
+      for (const data of loadsJsonVariants(text)) {
+        extractFromJson(data, candidates);
+      }
     }
 
-    extractRegexKeyedUrls(text, candidates);
+    for (const text of scriptTexts(html)) {
+      if (!text) {
+        continue;
+      }
 
-    for (const data of extractEmbeddedJsonObjects(text, [
-      "window._sharedData",
-      "__additionalDataLoaded",
-      "__bbox",
-      "edge_sidecar_to_children",
-      "image_versions2",
-      "carousel_media",
-      "xdt_shortcode_media",
-    ])) {
-      extractFromJson(data, candidates);
+      extractRegexKeyedUrls(text, candidates);
+      extractRegexVideoVersionUrls(text, candidates);
+
+      for (const data of extractEmbeddedJsonObjects(text, EMBEDDED_JSON_MARKERS)) {
+        extractFromJson(data, candidates);
+      }
     }
   }
 
@@ -1069,6 +1154,143 @@ export function parseAssetsFromHtml(html) {
 
     return a.media_type === "video" ? -1 : 1;
   });
+}
+
+function extractTargetMediaFromJson(data, candidates, shortcode) {
+  return walkTargetMediaNodes(data, shortcode, (media) => {
+    collectTargetMediaAssets(media, candidates);
+  });
+}
+
+function instagramHtmlSuggestsVideo(html, shortcode) {
+  let suggestsVideo = false;
+
+  const visitTarget = (media) => {
+    const target =
+      media.if_not_gated_logged_out && typeof media.if_not_gated_logged_out === "object"
+        ? media.if_not_gated_logged_out
+        : media;
+
+    suggestsVideo = suggestsVideo || instagramMediaNodeIsVideo(target);
+  };
+
+  for (const text of scriptTexts(html, { type: "application/ld+json" })) {
+    for (const data of loadsJsonVariants(text)) {
+      walkTargetMediaNodes(data, shortcode, visitTarget);
+
+      if (suggestsVideo) {
+        return true;
+      }
+    }
+  }
+
+  for (const text of scriptTexts(html)) {
+    if (!text) {
+      continue;
+    }
+
+    for (const data of extractEmbeddedJsonObjects(text, EMBEDDED_JSON_MARKERS)) {
+      walkTargetMediaNodes(data, shortcode, visitTarget);
+
+      if (suggestsVideo) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function walkTargetMediaNodes(data, shortcode, visitTarget) {
+  let matched = false;
+
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+
+      return;
+    }
+
+    if (!value || typeof value !== "object") {
+      return;
+    }
+
+    const identity = instagramMediaNodeIdentity(value);
+
+    if (identity) {
+      if (identity === shortcode) {
+        visitTarget(value);
+        matched = true;
+      }
+
+      return;
+    }
+
+    for (const nested of Object.values(value)) {
+      visit(nested);
+    }
+  };
+
+  visit(data);
+
+  return matched;
+}
+
+function instagramMediaNodeIsVideo(media) {
+  if (!media || typeof media !== "object") {
+    return false;
+  }
+
+  return media.is_video === true ||
+    media.media_type === 2 ||
+    /video/i.test(String(media.__typename || "")) ||
+    Array.isArray(media.video_versions) ||
+    typeof media.video_url === "string" ||
+    typeof media.playable_url === "string" ||
+    typeof media.playable_url_quality_hd === "string" ||
+    typeof media.video_dash_manifest === "string" ||
+    (typeof media.video === "string" && media.video !== "") ||
+    ["clips", "reel", "reels"].includes(String(media.product_type || ""));
+}
+
+function instagramMediaNodeIdentity(value) {
+  if (!looksLikeInstagramMediaNode(value)) {
+    return "";
+  }
+
+  const code = typeof value.code === "string" ? value.code.trim() : "";
+  const shortcode = typeof value.shortcode === "string" ? value.shortcode.trim() : "";
+
+  return code || shortcode;
+}
+
+function looksLikeInstagramMediaNode(value) {
+  return MEDIA_NODE_KEYS.some((key) => key in value) ||
+    /media/i.test(String(value.__typename || ""));
+}
+
+function collectTargetMediaAssets(value, candidates) {
+  const media =
+    value.if_not_gated_logged_out && typeof value.if_not_gated_logged_out === "object"
+      ? value.if_not_gated_logged_out
+      : value;
+  const assets = [];
+
+  extractOldPostAssets({ gql_data: { shortcode_media: media } }, assets);
+  extractMobilePostAssets(media, assets);
+
+  for (const asset of dedupeInstagramAssets(assets)) {
+    addCandidate(
+      candidates,
+      asset.source_url,
+      asset.media_type,
+      asset.width,
+      asset.height,
+      asset.fallback_urls,
+    );
+  }
 }
 
 function extractKindAndShortcode(parts) {
@@ -1911,6 +2133,7 @@ async function resolveFromMobileApi(shortcode, settings, options = {}) {
     metrics,
     creator_handle: creatorHandle,
     post_info: parsePostInfoFromInstagramData(data, { metrics, creatorHandle }),
+    video_hint: instagramDataSuggestsVideo(data),
   };
 }
 
@@ -2578,6 +2801,7 @@ async function resolveFromEmbedContext(shortcode, settings, options = {}) {
       metrics,
       creator_handle: creatorHandle,
       post_info: parsePostInfoFromInstagramData(data, { metrics, creatorHandle }),
+      video_hint: instagramDataSuggestsVideo(data),
     };
   } catch (error) {
     if (error instanceof AppError) {
@@ -2604,6 +2828,7 @@ async function resolveFromWebGraphql(shortcode, settings, options = {}) {
     metrics,
     creator_handle: creatorHandle,
     post_info: parsePostInfoFromInstagramData(wrapped, { metrics, creatorHandle }),
+    video_hint: instagramDataSuggestsVideo(gqlData),
   };
 }
 
@@ -2618,7 +2843,7 @@ async function resolveFromRenderedPage(shortcode, settings) {
   const creatorHandle = parseCreatorFromHtml(html);
 
   return {
-    assets: parseAssetsFromHtml(html),
+    assets: parseAssetsFromHtml(html, { shortcode }),
     metrics,
     creator_handle: creatorHandle,
     post_info: parsePostInfoFromHtml(html, {
@@ -2728,6 +2953,7 @@ export function parseCreatorFromHtml(html) {
       "image_versions2",
       "carousel_media",
       "xdt_shortcode_media",
+      "xig_polaris_media",
     ])) {
       const creatorHandle = parseCreatorFromInstagramData(data);
 
@@ -2964,7 +3190,13 @@ function firstInstagramMediaData(data, depth = 0) {
     return null;
   }
 
-  const gqlMedia = dig(data, "gql_data", "shortcode_media") || dig(data, "gql_data", "xdt_shortcode_media");
+  const polarisMedia = dig(data, "gql_data", "xig_polaris_media");
+  const gqlMedia =
+    dig(data, "gql_data", "shortcode_media") ||
+    dig(data, "gql_data", "xdt_shortcode_media") ||
+    (polarisMedia?.if_not_gated_logged_out && typeof polarisMedia.if_not_gated_logged_out === "object"
+      ? polarisMedia.if_not_gated_logged_out
+      : polarisMedia);
 
   if (gqlMedia && typeof gqlMedia === "object") {
     return gqlMedia;
@@ -3196,22 +3428,14 @@ function extractMobilePostAssets(data, assets) {
 }
 
 function appendMobileItem(item, assets) {
-  const videoVersions = Array.isArray(item.video_versions) ? item.video_versions : [];
+  appendVideoItem(item, assets);
 
-  if (videoVersions.length > 0) {
-    const video = bestMediaVersion(videoVersions);
-
-    if (video?.url) {
-      const parsed = parsedAssetFromUrl(video.url, "video", video.width, video.height);
-
-      if (parsed) {
-        assets.push(parsed);
-        return;
-      }
-    }
-  }
-
-  const image = bestImageCandidate(item.image_versions2);
+  const image = bestImageCandidate(item.image_versions2) ||
+    (item.display_url || item.display_uri ? {
+      url: item.display_url || item.display_uri,
+      width: item.original_width,
+      height: item.original_height,
+    } : null);
 
   if (image?.url) {
     const parsed = parsedAssetFromUrl(image.url, "image", image.width, image.height);
@@ -3229,14 +3453,25 @@ function extractOldPostAssets(data, assets) {
     return;
   }
 
-  const shortcodeMedia = gqlData.shortcode_media || gqlData.xdt_shortcode_media;
+  const shortcodeMedia =
+    gqlData.shortcode_media ||
+    gqlData.xdt_shortcode_media ||
+    gqlData.xig_polaris_media;
 
   if (!shortcodeMedia || typeof shortcodeMedia !== "object") {
     return;
   }
 
-  const edges = Array.isArray(shortcodeMedia.edge_sidecar_to_children?.edges)
-    ? shortcodeMedia.edge_sidecar_to_children.edges
+  // Logged-out Polaris responses wrap the actual media in this field. The
+  // outer object only contains the shortcode and metadata, while the nested
+  // object carries image_versions2/video_versions.
+  const unwrappedMedia = shortcodeMedia.if_not_gated_logged_out &&
+    typeof shortcodeMedia.if_not_gated_logged_out === "object"
+    ? shortcodeMedia.if_not_gated_logged_out
+    : shortcodeMedia;
+
+  const edges = Array.isArray(unwrappedMedia.edge_sidecar_to_children?.edges)
+    ? unwrappedMedia.edge_sidecar_to_children.edges
     : null;
 
   if (edges) {
@@ -3251,22 +3486,18 @@ function extractOldPostAssets(data, assets) {
     return;
   }
 
-  appendOldNode(shortcodeMedia, assets);
+  appendOldNode(unwrappedMedia, assets);
 }
 
 function appendOldNode(node, assets) {
   const [width, height] = dimensionsFromDict(node);
 
-  if (node.is_video && node.video_url) {
-    const parsed = parsedAssetFromUrl(node.video_url, "video", width, height);
+  appendVideoItem(node, assets);
 
-    if (parsed) {
-      assets.push(parsed);
-      return;
-    }
-  }
-
-  const displayUrl = node.display_url || bestDisplayResourceUrl(node.display_resources);
+  const displayUrl =
+    node.display_url ||
+    node.display_uri ||
+    bestDisplayResourceUrl(node.display_resources);
 
   if (displayUrl) {
     const parsed = parsedAssetFromUrl(displayUrl, "image", width, height);
@@ -3275,6 +3506,55 @@ function appendOldNode(node, assets) {
       assets.push(parsed);
     }
   }
+}
+
+function appendVideoItem(item, assets) {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+
+  const [width, height] = dimensionsFromDict(item);
+  const versions = Array.isArray(item.video_versions) ? item.video_versions : [];
+  const bestVersion = bestMediaVersion(versions);
+  const videoValue =
+    bestVersion?.url ||
+    item.video_url ||
+    item.playable_url_quality_hd ||
+    item.playable_url ||
+    (typeof item.video === "string" ? item.video : item.video?.url) ||
+    videoUrlFromDashManifest(item.video_dash_manifest);
+
+  if (!videoValue) {
+    return false;
+  }
+
+  const parsed = parsedAssetFromUrl(
+    videoValue,
+    "video",
+    bestVersion?.width ?? width,
+    bestVersion?.height ?? height,
+  );
+
+  if (!parsed) {
+    return false;
+  }
+
+  assets.push(parsed);
+  return true;
+}
+
+function videoUrlFromDashManifest(manifest) {
+  if (typeof manifest !== "string" || !manifest) {
+    return "";
+  }
+
+  const normalized = htmlUnescape(manifest)
+    .replace(/\\u003c/gi, "<")
+    .replace(/\\u003e/gi, ">")
+    .replace(/\\\//g, "/");
+  const match = /<BaseURL[^>]*>([^<]+)<\/BaseURL>/i.exec(normalized);
+
+  return match ? htmlUnescape(match[1]).trim() : "";
 }
 
 function bestImageCandidate(imageVersions) {
@@ -3358,12 +3638,12 @@ function dedupeInstagramAssets(assets) {
   return order.map((key) => deduped.get(key)).filter(Boolean);
 }
 
-function upgradeInstagramAssetsFromText(assets, text) {
+function upgradeInstagramAssetsFromText(assets, text, shortcode = "") {
   if (!assets.length || !text) {
     return assets;
   }
 
-  const candidates = instagramUpgradeCandidatesFromText(text);
+  const candidates = instagramUpgradeCandidatesFromText(text, shortcode);
 
   if (candidates.length === 0) {
     return assets;
@@ -3409,10 +3689,6 @@ function supplementInstagramVideoAssets(assets, candidates, text) {
     return assets;
   }
 
-  if (assets.length === 1 && assets[0]?.media_type === "image") {
-    return [videos[0]];
-  }
-
   return dedupeInstagramAssets([
     ...assets,
     ...videos.slice(0, Math.max(1, assets.length)),
@@ -3420,8 +3696,20 @@ function supplementInstagramVideoAssets(assets, candidates, text) {
 }
 
 function instagramTextSuggestsVideo(text) {
-  return /"is_video"\s*:\s*true|GraphVideo|VideoObject|"media_type"\s*:\s*2|"product_type"\s*:\s*"(?:clips|reels?)"/i
+  return /"is_video"\s*:\s*true|GraphVideo|XIGPolaris(?:Video|Reel|Clip)Media|VideoObject|"media_type"\s*:\s*2|"product_type"\s*:\s*"(?:clips|reels?)"|"video_versions"\s*:\s*\[|"video_duration"\s*:|"video_url"\s*:/i
     .test(String(text || ""));
+}
+
+function instagramDataSuggestsVideo(data) {
+  if (!data || typeof data !== "object") {
+    return false;
+  }
+
+  try {
+    return instagramTextSuggestsVideo(JSON.stringify(data));
+  } catch {
+    return false;
+  }
 }
 
 async function upgradeInstagramAssetsFromRenderedPage(assets, shortcode, settings) {
@@ -3431,7 +3719,7 @@ async function upgradeInstagramAssetsFromRenderedPage(assets, shortcode, setting
 
   const html = await fetchRenderedInstagramHtml(shortcode, settings);
 
-  return html ? upgradeInstagramAssetsFromText(assets, html) : assets;
+  return html ? upgradeInstagramAssetsFromText(assets, html, shortcode) : assets;
 }
 
 function shouldUseRenderedInstagramFallback(assets) {
@@ -4079,8 +4367,14 @@ function chromeProxyArgs() {
   return proxyUrl ? [`--proxy-server=${proxyUrl}`] : [];
 }
 
-function instagramUpgradeCandidatesFromText(text) {
-  const candidates = parseAssetsFromHtml(text);
+function instagramUpgradeCandidatesFromText(text, shortcode = "") {
+  const candidates = parseAssetsFromHtml(text, { shortcode });
+
+  // JSON parsing succeeded for the scoped media, so raw URL scraping is not
+  // needed and would only pull in URLs from unrelated posts on the same page.
+  if (shortcode && candidates.length > 0) {
+    return candidates;
+  }
 
   for (const url of instagramRawMediaCandidates(text)) {
     const mediaType = mediaTypeFromUrl(url);
@@ -4696,6 +4990,26 @@ function extractRegexKeyedUrls(text, candidates) {
   }
 }
 
+// New logged-out Polaris pages can expose video_versions inside a script that
+// is not valid JSON on its own. Extract the URL list directly so we still find
+// the video when the surrounding embedded object cannot be parsed.
+function extractRegexVideoVersionUrls(text, candidates) {
+  const unescaped = htmlUnescape(String(text || ""))
+    .replace(/\\u002f/gi, "/")
+    .replace(/\\\//g, "/");
+  const versionsPattern = /"video_versions"\s*:\s*\[([\s\S]*?)\]/gi;
+  let versionsMatch;
+
+  while ((versionsMatch = versionsPattern.exec(unescaped))) {
+    const urlPattern = /"url"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+    let urlMatch;
+
+    while ((urlMatch = urlPattern.exec(versionsMatch[1]))) {
+      addCandidate(candidates, decodeJsonString(urlMatch[1]), "video");
+    }
+  }
+}
+
 function jsonTypeText(data) {
   const value = data["@type"] || data.__typename || data.type || "";
 
@@ -4740,7 +5054,7 @@ function mediaTypeFromUrl(url) {
   return null;
 }
 
-function addCandidate(candidates, rawUrl, mediaType, width = null, height = null) {
+function addCandidate(candidates, rawUrl, mediaType, width = null, height = null, extraFallbacks = []) {
   if (typeof rawUrl !== "string") {
     return;
   }
@@ -4760,6 +5074,7 @@ function addCandidate(candidates, rawUrl, mediaType, width = null, height = null
   const urls = instagramMediaUrlVariants(url, resolvedType);
   const key = dedupeKey(urls[0]);
   const existing = candidates.get(key);
+  const fallbackUrls = uniqueInstagramUrls([...urls.slice(1), ...extraFallbacks]);
 
   if (existing) {
     if (existing.width == null && width) {
@@ -4772,7 +5087,7 @@ function addCandidate(candidates, rawUrl, mediaType, width = null, height = null
 
     existing.fallback_urls = uniqueInstagramUrls([
       ...(existing.fallback_urls || []),
-      ...urls.slice(1),
+      ...fallbackUrls,
     ]);
 
     return;
@@ -4780,7 +5095,7 @@ function addCandidate(candidates, rawUrl, mediaType, width = null, height = null
 
   candidates.set(key, {
     source_url: urls[0],
-    fallback_urls: urls.slice(1),
+    fallback_urls: fallbackUrls,
     media_type: resolvedType,
     request_headers: instagramMediaRequestHeaders(),
     width: optionalInt(width),
@@ -4825,8 +5140,8 @@ function dedupeKey(url) {
 }
 
 function dimensionsFromDict(data) {
-  let width = data?.width;
-  let height = data?.height;
+  let width = data?.width || data?.original_width;
+  let height = data?.height || data?.original_height;
 
   if (data?.dimensions && typeof data.dimensions === "object") {
     width = width || data.dimensions.width;

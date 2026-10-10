@@ -17,6 +17,17 @@ const YTDLP_PATH_ENV_NAMES = ["YTDLP_PATH", "SOCIAL_YTDLP_PATH"];
 const YTDLP_COOKIE_FILE_ENV_NAMES = ["YTDLP_COOKIES_FILE", "SOCIAL_YTDLP_COOKIES_FILE"];
 const YTDLP_EXTRACTOR_ARGS_ENV_NAMES = ["YTDLP_EXTRACTOR_ARGS", "SOCIAL_YTDLP_EXTRACTOR_ARGS"];
 const YTDLP_JS_RUNTIME_ENV_NAMES = ["YTDLP_JS_RUNTIME", "SOCIAL_YTDLP_JS_RUNTIME"];
+// YouTube hands out short-lived, IP-bound media URLs. Downloads regularly die
+// part-way through (the connection is dropped and the resumed request is then
+// answered with HTTP 403), so a failed attempt is retried with a freshly
+// extracted URL instead of failing the whole resolve.
+const YTDLP_DOWNLOAD_ATTEMPTS = 3;
+const YTDLP_METADATA_ATTEMPTS = 2;
+const YTDLP_RETRY_DELAY_MS = 1000;
+const RETRYABLE_ERROR_CODES = new Set([
+  ErrorCode.UPSTREAM_BLOCKED,
+  ErrorCode.DOWNLOAD_FAILED,
+]);
 
 let cachedExecutable = null;
 let cachedExecutablePromise = null;
@@ -87,10 +98,133 @@ export async function downloadYoutubeWithYtDlp({
   const ffmpegPath = resolveFfmpegPath();
   await ensureFfmpegExecutable(ffmpegPath);
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await fs.unlink(outputPath).catch(() => {});
-  await fs.unlink(`${outputPath}.part`).catch(() => {});
 
-  const args = buildCommonArgs(timeoutMs, ffmpegPath);
+  const budgetMs = Math.max(1, Number(timeoutMs) || 600_000);
+  const deadlineAt = Date.now() + budgetMs;
+  let lastError = null;
+  let attempts = 0;
+
+  for (let attempt = 1; attempt <= YTDLP_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    // Every attempt starts from a clean slate: yt-dlp resumes from leftover
+    // `.part` fragments, and YouTube answers exactly those resumed range
+    // requests with HTTP 403. A fresh attempt re-extracts the video, which
+    // yields a new signed media URL.
+    await removeYtDlpPartialFiles(outputPath);
+    await fs.unlink(outputPath).catch(() => {});
+
+    const remainingMs = deadlineAt - Date.now();
+
+    if (remainingMs <= 0) {
+      break;
+    }
+
+    attempts = attempt;
+
+    let result;
+
+    try {
+      result = await runYtDlpDownload({
+        asset,
+        sourceUrl,
+        outputPath,
+        ffmpegPath,
+        argsTimeoutMs: budgetMs,
+        processTimeoutMs: Math.min(budgetMs, remainingMs),
+      });
+    } catch (error) {
+      const appError = withYtDlpAttempts(toYtDlpError(error), attempt);
+
+      if (!isRetryableYtDlpError(appError) || attempt >= YTDLP_DOWNLOAD_ATTEMPTS) {
+        await removeYtDlpPartialFiles(outputPath);
+        throw appError;
+      }
+
+      lastError = appError;
+      await sleep(YTDLP_RETRY_DELAY_MS * attempt);
+      continue;
+    }
+
+    const reportedPath = lastOutputPath(result.stdout);
+    const finalPath = await existingOutputPath(outputPath, reportedPath);
+
+    if (!finalPath) {
+      const appError = withYtDlpAttempts(
+        new AppError(ErrorCode.DOWNLOAD_FAILED, "yt-dlp 未生成下载文件。", 502, {
+          stderr: compactOutput(result.stderr),
+        }),
+        attempt,
+      );
+
+      if (attempt >= YTDLP_DOWNLOAD_ATTEMPTS) {
+        await removeYtDlpPartialFiles(outputPath);
+        throw appError;
+      }
+
+      lastError = appError;
+      await sleep(YTDLP_RETRY_DELAY_MS * attempt);
+      continue;
+    }
+
+    const stat = await fs.stat(finalPath);
+
+    if (stat.size <= 0) {
+      await removeYtDlpPartialFiles(outputPath);
+      throw withYtDlpAttempts(
+        new AppError(ErrorCode.DOWNLOAD_FAILED, "yt-dlp 生成了空媒体文件。", 502),
+        attempt,
+      );
+    }
+
+    if (stat.size > maxBytes) {
+      await removeYtDlpPartialFiles(outputPath);
+      throw withYtDlpAttempts(
+        new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413),
+        attempt,
+      );
+    }
+
+    if (finalPath !== outputPath) {
+      await fs.rename(finalPath, outputPath);
+    }
+
+    onProgress?.({
+      type: "stream_start",
+      part_id: "media",
+      content_length: stat.size,
+      downloaded_bytes: 0,
+    });
+    onProgress?.({
+      type: "stream_complete",
+      part_id: "media",
+      content_length: stat.size,
+      downloaded_bytes: stat.size,
+    });
+
+    return {
+      path: outputPath,
+      sourceUrl,
+      contentType: "video/mp4",
+      sizeBytes: stat.size,
+    };
+  }
+
+  throw lastError ?? new AppError(
+    ErrorCode.UPSTREAM_BLOCKED,
+    "yt-dlp 下载 YouTube 资源超时。",
+    504,
+    { attempts },
+  );
+}
+
+async function runYtDlpDownload({
+  asset,
+  sourceUrl,
+  outputPath,
+  ffmpegPath,
+  argsTimeoutMs,
+  processTimeoutMs,
+}) {
+  const args = buildCommonArgs(argsTimeoutMs, ffmpegPath);
   args.push(
     "--format",
     asset.ytdlp_format || DEFAULT_FORMAT,
@@ -103,61 +237,63 @@ export async function downloadYoutubeWithYtDlp({
     sourceUrl,
   );
 
-  let result;
+  return await execFile(await getYtDlpExecutable(), args, {
+    timeout: Math.max(1, Number(processTimeoutMs) || 600_000),
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+  });
+}
+
+// A failed attempt may leave `.part` fragments (and unmerged `.fNNN.ext`
+// files) behind. They have to disappear before the retry, otherwise yt-dlp
+// resumes them and YouTube rejects the resumed request.
+async function removeYtDlpPartialFiles(outputPath) {
+  const directory = path.dirname(outputPath);
+  const prefix = `${path.basename(outputPath)}.`;
+  let entries;
 
   try {
-    result = await execFile(await getYtDlpExecutable(), args, {
-      timeout: Math.max(1, Number(timeoutMs) || 600_000),
-      maxBuffer: 64 * 1024 * 1024,
-      windowsHide: true,
-    });
-  } catch (error) {
-    await fs.unlink(`${outputPath}.part`).catch(() => {});
-    throw toYtDlpError(error);
+    entries = await fs.readdir(directory);
+  } catch {
+    return;
   }
 
-  const reportedPath = lastOutputPath(result.stdout);
-  const finalPath = await existingOutputPath(outputPath, reportedPath);
+  await Promise.all(entries
+    .filter((name) =>
+      name.startsWith(prefix) &&
+      (name.endsWith(".part") || /\.f\d+\.[A-Za-z0-9]+$/.test(name)))
+    .map((name) => fs.unlink(path.join(directory, name)).catch(() => {})));
+}
 
-  if (!finalPath) {
-    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "yt-dlp 未生成下载文件。", 502, {
-      stderr: compactOutput(result.stderr),
-    });
+function isRetryableYtDlpError(error) {
+  if (!(error instanceof AppError)) {
+    return true;
   }
 
-  const stat = await fs.stat(finalPath);
-
-  if (stat.size <= 0) {
-    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "yt-dlp 生成了空媒体文件。", 502);
+  // A missing/unusable yt-dlp binary or an oversized asset never recovers by
+  // retrying the same transaction.
+  if (error.ytDlpUnavailable || error.status === 413) {
+    return false;
   }
 
-  if (stat.size > maxBytes) {
-    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源超过单文件大小限制。", 413);
+  return RETRYABLE_ERROR_CODES.has(error.code);
+}
+
+function withYtDlpAttempts(error, attempts) {
+  if (attempts <= 1 || !(error instanceof AppError)) {
+    return error;
   }
 
-  if (finalPath !== outputPath) {
-    await fs.rename(finalPath, outputPath);
-  }
-
-  onProgress?.({
-    type: "stream_start",
-    part_id: "media",
-    content_length: stat.size,
-    downloaded_bytes: 0,
-  });
-  onProgress?.({
-    type: "stream_complete",
-    part_id: "media",
-    content_length: stat.size,
-    downloaded_bytes: stat.size,
-  });
-
-  return {
-    path: outputPath,
-    sourceUrl,
-    contentType: "video/mp4",
-    sizeBytes: stat.size,
+  error.details = {
+    ...(error.details || {}),
+    ytdlp_attempts: attempts,
   };
+
+  return error;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
 export function isYtDlpUnavailable(error) {
@@ -172,33 +308,46 @@ async function runYtDlpJson(url, settings) {
   const timeoutMs = Math.max(120_000, Number(settings.httpTimeoutMs) || 0);
   const args = buildCommonArgs(timeoutMs);
   args.push("--dump-single-json", "--skip-download", "--no-playlist", url);
+  let lastError = null;
 
-  try {
-    const { stdout, stderr } = await execFile(await getYtDlpExecutable(), args, {
-      timeout: timeoutMs,
-      maxBuffer: 64 * 1024 * 1024,
-      windowsHide: true,
-    });
-    const text = String(stdout || "").trim();
-
-    if (!text) {
-      throw new AppError(ErrorCode.NO_MEDIA_FOUND, "yt-dlp 没有返回 YouTube 视频信息。", 404, {
-        stderr: compactOutput(stderr),
-      });
-    }
-
+  // Metadata extraction talks to the same rate-limited endpoints as the media
+  // download, so a transport hiccup is retried once before giving up.
+  for (let attempt = 1; attempt <= YTDLP_METADATA_ATTEMPTS; attempt += 1) {
     try {
-      return JSON.parse(text);
-    } catch {
-      return JSON.parse(text.split("\n").filter(Boolean).at(-1));
-    }
-  } catch (error) {
-    if (error instanceof AppError) {
-      throw error;
-    }
+      const { stdout, stderr } = await execFile(await getYtDlpExecutable(), args, {
+        timeout: timeoutMs,
+        maxBuffer: 64 * 1024 * 1024,
+        windowsHide: true,
+      });
+      const text = String(stdout || "").trim();
 
-    throw toYtDlpError(error);
+      if (!text) {
+        throw withYtDlpAttempts(
+          new AppError(ErrorCode.NO_MEDIA_FOUND, "yt-dlp 没有返回 YouTube 视频信息。", 404, {
+            stderr: compactOutput(stderr),
+          }),
+          attempt,
+        );
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        return JSON.parse(text.split("\n").filter(Boolean).at(-1));
+      }
+    } catch (error) {
+      const appError = withYtDlpAttempts(toYtDlpError(error), attempt);
+
+      if (!isRetryableYtDlpError(appError) || attempt >= YTDLP_METADATA_ATTEMPTS) {
+        throw appError;
+      }
+
+      lastError = appError;
+      await sleep(YTDLP_RETRY_DELAY_MS * attempt);
+    }
   }
+
+  throw lastError ?? new AppError(ErrorCode.UPSTREAM_BLOCKED, "yt-dlp 无法访问 YouTube 视频。", 502);
 }
 
 function buildCommonArgs(timeoutMs, ffmpegPath = resolveFfmpegPath()) {
@@ -422,6 +571,16 @@ function toYtDlpError(error) {
 
   if (lower.includes("unavailable") || lower.includes("not found") || lower.includes("no video")) {
     return new AppError(ErrorCode.NO_MEDIA_FOUND, "没有找到这个 YouTube 视频。", 404, { cause: message });
+  }
+
+  // The signature/session of a googlevideo URL expired or the exit IP changed
+  // while the media was being transferred. Retries already happened by the
+  // time this error reaches the client.
+  if (lower.includes("http error 403") || lower.includes("forbidden")) {
+    return new AppError(ErrorCode.UPSTREAM_BLOCKED, "YouTube 拒绝提供媒体数据（HTTP 403）。", 502, {
+      cause: message,
+      hint: "多由代理出口 IP 变化或被 YouTube 限流引起：可更换代理节点，或为 yt-dlp 配置 Cookie（YTDLP_COOKIES_FILE / SOCIAL_YOUTUBE_COOKIE）后重试。",
+    });
   }
 
   return new AppError(ErrorCode.UPSTREAM_BLOCKED, "yt-dlp 无法访问 YouTube 视频。", 502, { cause: message });

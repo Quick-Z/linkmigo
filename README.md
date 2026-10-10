@@ -267,6 +267,8 @@ YTDLP_PATH=/usr/local/bin/yt-dlp
 
 需要登录 Cookie 时，可以配置 `YTDLP_COOKIES_FILE=/path/to/cookies.txt`。这条链路完全由 JS/Node 编排，不需要在 LinkMigo 中运行 Python。
 
+YouTube 的媒体地址短期有效且与出口 IP 绑定。经代理下载时连接可能中途断开，而随后的断点续传请求会被 YouTube 以 `HTTP 403` 拒绝。遇到这类失败时，LinkMigo 会自动清理未完成的 `.part` 分片、重新解析视频并重新下载（最多 3 次），整个请求仍受 `SOCIAL_MEDIA_TIMEOUT_SECONDS` 限制；如果 3 次都失败，错误详情里会带上 `ytdlp_attempts` 便于排查。
+
 服务端会优先使用当前网络环境直接访问外网。如果「魔法」是全局路由或 TUN 模式，通常不需要额外配置；如果「魔法」客户端是系统代理模式，服务端会在没有手动代理环境变量时自动读取系统 HTTP、HTTPS 或 SOCKS5 代理。
 
 如果服务端访问 Instagram、Threads、TikTok、抖音、小红书、快手、AcFun、Pinterest、Reddit、V2EX、YouTube、Pornhub 等平台时提示“上游访问受限”，可以创建 `.env.local` 手动指定代理：

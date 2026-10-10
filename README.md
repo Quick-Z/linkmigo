@@ -260,6 +260,14 @@ YTDLP_PATH=/usr/local/bin/yt-dlp
 
 默认把 Node 作为 yt-dlp 的 JavaScript runtime，用于执行 YouTube 播放器签名脚本；如需切换到其他已安装 runtime，可设置 `YTDLP_JS_RUNTIME`。
 
+YouTube 把视频和音频作为两条独立流下发，必须由 ffmpeg 合并。Docker 镜像已内置 ffmpeg（来自 `ffmpeg-static`）并在构建时校验其可执行；非 Docker 部署请自行安装 ffmpeg，或指定已有路径：
+
+```bash
+FFMPEG_PATH=/usr/bin/ffmpeg
+```
+
+**缺少可用的 ffmpeg 时 yt-dlp 不会报错**：它会把两条流分别下载成 `<文件名>.fNNN.<扩展名>`，跳过合并，然后以退出码 0 结束，对外表现为“yt-dlp 未生成下载文件”且没有错误输出。LinkMigo 会在发现未合并的分流文件时直接提示 ffmpeg 缺失，并在缺少 ffmpeg 时回退到 YouTube 的预合并流（画质较低）以保证下载可用；要拿到最高画质仍需安装 ffmpeg。
+
 如果运行环境不能访问 GitHub，可关闭自动下载并提供系统内的二进制：
 
 ```bash

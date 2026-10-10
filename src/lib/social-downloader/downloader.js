@@ -1,6 +1,4 @@
 import { execFile as execFileCallback, spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -8,10 +6,8 @@ import { URL } from "node:url";
 
 import { AppError, ErrorCode } from "./errors";
 import { fetchWithTimeout, getProxyUrl } from "./utils";
-import { downloadYoutubeWithYtDlp } from "./ytdlp";
+import { downloadYoutubeWithYtDlp, resolveFfmpegPath } from "./ytdlp";
 
-const require = createRequire(import.meta.url);
-const packagedFfmpegPath = require("ffmpeg-static");
 const execFile = promisify(execFileCallback);
 
 const MEDIA_HEADERS = {
@@ -1145,21 +1141,6 @@ function videoOnlyAsset(asset) {
   } = asset;
 
   return videoAsset;
-}
-
-function resolveFfmpegPath() {
-  const binaryName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-  const candidates = [
-    process.env.FFMPEG_PATH,
-    packagedFfmpegPath,
-    path.join(process.cwd(), "node_modules", "ffmpeg-static", binaryName),
-  ];
-
-  return candidates.find((candidate) =>
-    typeof candidate === "string" &&
-    candidate.length > 0 &&
-    existsSync(candidate),
-  );
 }
 
 function mediaUrlsForAsset(asset) {

@@ -1,6 +1,6 @@
-import { execFile as execFileCallback } from "node:child_process";
+import { execFile as execFileCallback, execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +13,13 @@ const require = createRequire(import.meta.url);
 const packagedFfmpegPath = require("ffmpeg-static");
 
 const DEFAULT_FORMAT = "bv*[ext=mp4]+ba[ext=m4a]/bv*[ext=mp4]/bv*+ba/b";
+// YouTube serves video and audio as separate DASH streams, so the selector
+// above always requires ffmpeg to merge them. Without ffmpeg yt-dlp does not
+// fail: it downloads the streams separately, silently skips the merge and
+// still exits 0, which surfaces as "yt-dlp 未生成下载文件" with no stderr. When
+// no usable ffmpeg is found, fall back to a pre-merged (progressive) stream so
+// the download still succeeds, at the quality YouTube serves muxed.
+const PROGRESSIVE_FORMAT = "b[ext=mp4]/b";
 const YTDLP_PATH_ENV_NAMES = ["YTDLP_PATH", "SOCIAL_YTDLP_PATH"];
 const YTDLP_COOKIE_FILE_ENV_NAMES = ["YTDLP_COOKIES_FILE", "SOCIAL_YTDLP_COOKIES_FILE"];
 const YTDLP_EXTRACTOR_ARGS_ENV_NAMES = ["YTDLP_EXTRACTOR_ARGS", "SOCIAL_YTDLP_EXTRACTOR_ARGS"];
@@ -32,6 +39,8 @@ const RETRYABLE_ERROR_CODES = new Set([
 let cachedExecutable = null;
 let cachedExecutablePromise = null;
 let cachedBinaryDownloadPromise = null;
+let cachedFfmpegPath = null;
+let warnedAboutMissingFfmpeg = false;
 
 export async function resolveYoutubeWithYtDlp(normalized, settings) {
   const info = await runYtDlpJson(normalized.canonical_url, settings);
@@ -95,9 +104,26 @@ export async function downloadYoutubeWithYtDlp({
 }) {
   const sourceUrl = asset.download_url || asset.source_url;
   const outputPath = path.resolve(destination);
+  // resolveFfmpegPath() only ever returns a binary it has proven runnable, and
+  // repairing a lost executable bit happens during that probe.
   const ffmpegPath = resolveFfmpegPath();
-  await ensureFfmpegExecutable(ffmpegPath);
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
+
+  // Merging video and audio is only possible with a working ffmpeg. Asking for
+  // a merge without one does not make yt-dlp fail: it downloads the streams
+  // separately, skips the merge and exits 0, leaving the caller with no file.
+  // Choose a selector that matches what the host can actually produce.
+  if (!ffmpegPath && !warnedAboutMissingFfmpeg) {
+    warnedAboutMissingFfmpeg = true;
+    console.warn(
+      "[social-downloader] 未找到可用的 ffmpeg，YouTube 下载将回退到预合并流（画质受限）。"
+      + "请在运行环境安装 ffmpeg，或设置 FFMPEG_PATH 指向 ffmpeg 可执行文件。",
+    );
+  }
+
+  const formatSelector = ffmpegPath
+    ? asset.ytdlp_format || DEFAULT_FORMAT
+    : PROGRESSIVE_FORMAT;
 
   const budgetMs = Math.max(1, Number(timeoutMs) || 600_000);
   const deadlineAt = Date.now() + budgetMs;
@@ -124,10 +150,10 @@ export async function downloadYoutubeWithYtDlp({
 
     try {
       result = await runYtDlpDownload({
-        asset,
         sourceUrl,
         outputPath,
         ffmpegPath,
+        formatSelector,
         argsTimeoutMs: budgetMs,
         processTimeoutMs: Math.min(budgetMs, remainingMs),
       });
@@ -148,9 +174,34 @@ export async function downloadYoutubeWithYtDlp({
     const finalPath = await existingOutputPath(outputPath, reportedPath);
 
     if (!finalPath) {
+      // yt-dlp leaves "<stem>.fNNN.<ext>" behind when it downloaded the
+      // separate video/audio streams but could not merge them. Retrying cannot
+      // help: the missing piece is ffmpeg, not the network. Without this check
+      // the run looks like a plain "no output file" failure with empty stderr.
+      const streamParts = await ytDlpStreamPartFiles(outputPath);
+
+      if (streamParts.length > 0) {
+        await removeYtDlpPartialFiles(outputPath);
+        throw withYtDlpAttempts(
+          new AppError(
+            ErrorCode.UPSTREAM_BLOCKED,
+            "yt-dlp 已下载音视频分离流但未能合并，运行环境缺少可用的 ffmpeg。",
+            502,
+            {
+              ffmpeg: ffmpegPath || "unavailable",
+              leftover_files: streamParts.slice(0, 5),
+              hint: "请确认运行环境存在可用的 ffmpeg（Docker 镜像已内置 ffmpeg-static 并通过 FFMPEG_PATH 指向它），或设置 FFMPEG_PATH 指向 ffmpeg 可执行文件后重试。",
+            },
+          ),
+          attempt,
+        );
+      }
+
       const appError = withYtDlpAttempts(
         new AppError(ErrorCode.DOWNLOAD_FAILED, "yt-dlp 未生成下载文件。", 502, {
           stderr: compactOutput(result.stderr),
+          stdout: compactOutput(result.stdout),
+          ffmpeg: ffmpegPath || "unavailable",
         }),
         attempt,
       );
@@ -203,7 +254,7 @@ export async function downloadYoutubeWithYtDlp({
     return {
       path: outputPath,
       sourceUrl,
-      contentType: "video/mp4",
+      contentType: contentTypeForMediaFile(outputPath),
       sizeBytes: stat.size,
     };
   }
@@ -217,17 +268,17 @@ export async function downloadYoutubeWithYtDlp({
 }
 
 async function runYtDlpDownload({
-  asset,
   sourceUrl,
   outputPath,
   ffmpegPath,
+  formatSelector,
   argsTimeoutMs,
   processTimeoutMs,
 }) {
   const args = buildCommonArgs(argsTimeoutMs, ffmpegPath);
   args.push(
     "--format",
-    asset.ytdlp_format || DEFAULT_FORMAT,
+    formatSelector,
     "--merge-output-format",
     "mp4",
     "--output",
@@ -247,22 +298,53 @@ async function runYtDlpDownload({
 // A failed attempt may leave `.part` fragments (and unmerged `.fNNN.ext`
 // files) behind. They have to disappear before the retry, otherwise yt-dlp
 // resumes them and YouTube rejects the resumed request.
-async function removeYtDlpPartialFiles(outputPath) {
+async function ytDlpSidecarFiles(outputPath, predicate) {
   const directory = path.dirname(outputPath);
-  const prefix = `${path.basename(outputPath)}.`;
+  const base = path.basename(outputPath);
+  // Stream parts are written as "<stem>.fNNN.<ext>": yt-dlp keeps the output's
+  // base name without its extension, which is why a plain `${base}.` prefix
+  // never matched them and the leftovers stayed on disk forever.
+  const extension = path.extname(base);
+  const stem = extension ? base.slice(0, -extension.length) : base;
   let entries;
 
   try {
     entries = await fs.readdir(directory);
   } catch {
-    return;
+    return [];
   }
 
-  await Promise.all(entries
-    .filter((name) =>
-      name.startsWith(prefix) &&
-      (name.endsWith(".part") || /\.f\d+\.[A-Za-z0-9]+$/.test(name)))
-    .map((name) => fs.unlink(path.join(directory, name)).catch(() => {})));
+  return entries.filter((name) => predicate(name, base, stem));
+}
+
+function isYtDlpStreamPartFile(name, stem) {
+  // yt-dlp writes a stream as "<stem>.fNNN.<ext>" and keeps an in-progress
+  // download of it as "<stem>.fNNN.<ext>.part" (or ".part-FragN" for
+  // fragmented ones), so drop that suffix before matching.
+  const completed = name.replace(/\.part(?:-Frag\d+)?$/, "");
+
+  return completed.startsWith(`${stem}.`) && /\.f\d+\.[A-Za-z0-9]+$/.test(completed);
+}
+
+function isYtDlpTemporaryFile(name, base, stem) {
+  // "<output>.part", plus "<output>.part-FragN" for fragmented downloads.
+  if (name.startsWith(`${base}.part`)) {
+    return true;
+  }
+
+  return isYtDlpStreamPartFile(name, stem);
+}
+
+async function removeYtDlpPartialFiles(outputPath) {
+  const directory = path.dirname(outputPath);
+  const targets = await ytDlpSidecarFiles(outputPath, isYtDlpTemporaryFile);
+
+  await Promise.all(targets.map((name) => fs.unlink(path.join(directory, name)).catch(() => {})));
+}
+
+// Per-stream files that only exist because a merge never happened.
+async function ytDlpStreamPartFiles(outputPath) {
+  return await ytDlpSidecarFiles(outputPath, (name, base, stem) => isYtDlpStreamPartFile(name, stem));
 }
 
 function isRetryableYtDlpError(error) {
@@ -353,7 +435,10 @@ async function runYtDlpJson(url, settings) {
 function buildCommonArgs(timeoutMs, ffmpegPath = resolveFfmpegPath()) {
   const args = [
     "--no-playlist",
-    "--no-warnings",
+    // Deliberately not --no-warnings: the warning that explains a skipped merge
+    // ("...but ffmpeg is not installed. The formats won't be merged") is the
+    // only signal yt-dlp emits before exiting 0 without an output file.
+    // Suppressing it is what made this failure report an empty stderr.
     "--no-color",
     // yt-dlp's YouTube extractor now uses EJS for signature deciphering.
     // Node is already the host runtime, so it is available in both local and
@@ -398,31 +483,110 @@ function buildCommonArgs(timeoutMs, ffmpegPath = resolveFfmpegPath()) {
   return args;
 }
 
-async function ensureFfmpegExecutable(ffmpegPath) {
-  if (!ffmpegPath || process.platform === "win32") {
-    return;
+export function resolveFfmpegPath() {
+  if (cachedFfmpegPath !== null) {
+    return cachedFfmpegPath;
   }
 
-  // npm packages occasionally lose the executable bit when copied between
-  // filesystems (notably macOS bind mounts). yt-dlp then downloads the video
-  // and audio parts but cannot invoke ffmpeg to merge them, leaving only
-  // `.f*.mp4`/`.f*.m4a` files behind. Repair the mode before spawning yt-dlp;
-  // failures are harmless because yt-dlp may still find a system ffmpeg.
-  await fs.chmod(ffmpegPath, 0o755).catch(() => {});
-}
-
-function resolveFfmpegPath() {
   const binaryName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
   const candidates = [
     process.env.FFMPEG_PATH?.trim(),
     packagedFfmpegPath,
+    ...packagedFfmpegCandidates(binaryName),
     process.platform === "darwin" ? "/opt/homebrew/bin/ffmpeg" : "",
     "/usr/local/bin/ffmpeg",
     "/usr/bin/ffmpeg",
-    binaryName,
+    ...pathFfmpegCandidates(binaryName),
   ].filter(Boolean);
 
-  return candidates.find((candidate) => candidate === binaryName || existsSync(candidate)) || "";
+  cachedFfmpegPath = candidates
+    .map((candidate) => usableFfmpegPath(candidate, binaryName))
+    .find(Boolean) || "";
+
+  return cachedFfmpegPath;
+}
+
+// Next.js bundles ffmpeg-static into the server chunk and rewrites the module's
+// __dirname to a placeholder, so require("ffmpeg-static") reports a path that
+// does not exist in the standalone output (observed: /ROOT/node_modules/
+// ffmpeg-static/ffmpeg). Look where the package actually is as well; the
+// Dockerfile copies it next to the standalone bundle.
+function packagedFfmpegCandidates(binaryName) {
+  const roots = [...new Set([process.cwd(), "/app"].filter(Boolean))];
+
+  return roots.map((root) => path.join(root, "node_modules", "ffmpeg-static", binaryName));
+}
+
+function pathFfmpegCandidates(binaryName) {
+  return String(process.env.PATH || "")
+    .split(path.delimiter)
+    .map((directory) => directory.trim())
+    .filter(Boolean)
+    .map((directory) => path.join(directory, binaryName));
+}
+
+// A file simply existing is not enough: ffmpeg-static downloads its binary
+// during `npm install`, so a blocked or interrupted download leaves a
+// truncated (or foreign-architecture) file that `existsSync` happily reports.
+// yt-dlp then cannot execute it and silently stops merging, which is
+// indistinguishable from ffmpeg being absent. Prove it runs before trusting it.
+// Returns a runnable binary path, or "" when the candidate is unusable.
+function usableFfmpegPath(candidate, binaryName, depth = 0) {
+  if (!candidate || !existsSync(candidate)) {
+    return "";
+  }
+
+  let stats;
+
+  try {
+    stats = statSync(candidate);
+  } catch {
+    return "";
+  }
+
+  // yt-dlp accepts either the binary or its containing directory, so probe the
+  // binary inside. That keeps this function's contract (only return a path
+  // proven to run) without rejecting a directory-valued FFMPEG_PATH.
+  if (stats.isDirectory()) {
+    return depth >= 1
+      ? ""
+      : usableFfmpegPath(path.join(candidate, binaryName), binaryName, depth + 1);
+  }
+
+  if (runsFfmpeg(candidate)) {
+    return candidate;
+  }
+
+  // npm packages occasionally lose the executable bit when copied between
+  // filesystems (notably macOS bind mounts). Repair the mode once and retry
+  // rather than silently degrading to a lower-quality pre-merged stream.
+  try {
+    chmodSync(candidate, 0o755);
+  } catch {
+    return "";
+  }
+
+  return runsFfmpeg(candidate) ? candidate : "";
+}
+
+function runsFfmpeg(candidate) {
+  try {
+    execFileSync(candidate, ["-version"], {
+      timeout: 5_000,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The progressive fallback can legitimately resolve to a WebM container, so
+// report what was actually written rather than always claiming MP4.
+function contentTypeForMediaFile(filePath) {
+  return path.extname(filePath).toLowerCase() === ".webm" ? "video/webm" : "video/mp4";
 }
 
 async function getYtDlpExecutable() {
@@ -562,10 +726,18 @@ function toYtDlpError(error) {
     return new AppError(ErrorCode.UPSTREAM_BLOCKED, "yt-dlp 下载 YouTube 资源超时。", 504);
   }
 
-  const message = compactOutput(error?.stderr || error?.stdout || error?.message);
-  const lower = message.toLowerCase();
+  const rawOutput = String(error?.stderr || error?.stdout || error?.message || "");
+  const message = compactOutput(rawOutput);
+  const lower = ytDlpErrorText(rawOutput).toLowerCase();
 
-  if (lower.includes("private") || lower.includes("sign in") || lower.includes("login") || lower.includes("age")) {
+  if (
+    lower.includes("private")
+    || lower.includes("sign in")
+    || lower.includes("login")
+    // A bare "age" substring also matches "webpage", "page" and "message",
+    // which appear in almost every yt-dlp YouTube failure.
+    || /\bage\b/.test(lower)
+  ) {
     return new AppError(ErrorCode.LOGIN_REQUIRED, "这个 YouTube 内容需要登录或年龄验证。", 403, { cause: message });
   }
 
@@ -583,7 +755,37 @@ function toYtDlpError(error) {
     });
   }
 
+  // Deterministic format-selection failure. Retrying the same selector cannot
+  // help, and the usual cause is a missing ffmpeg on a video that YouTube does
+  // not offer as a pre-merged stream.
+  if (lower.includes("requested format is not available") || lower.includes("no matching formats")) {
+    return new AppError(
+      ErrorCode.NO_MEDIA_FOUND,
+      "没有找到可下载的视频格式（该视频没有预合并流，且当前环境没有可用的 ffmpeg）。",
+      404,
+      {
+        cause: message,
+        ffmpeg: resolveFfmpegPath() || "unavailable",
+        hint: "安装 ffmpeg 或设置 FFMPEG_PATH 后重试即可下载最高画质。",
+      },
+    );
+  }
+
   return new AppError(ErrorCode.UPSTREAM_BLOCKED, "yt-dlp 无法访问 YouTube 视频。", 502, { cause: message });
+}
+
+// Only yt-dlp's own ERROR lines may drive classification. Warnings are
+// informational and can mention "403", "unavailable" or similar; letting them
+// match would turn a retryable transient failure into a permanent one and skip
+// the whole retry loop.
+function ytDlpErrorText(output) {
+  const text = String(output || "");
+  const errorLines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^ERROR:/i.test(line));
+
+  return errorLines.length > 0 ? errorLines.join(" ") : text;
 }
 
 function bestVideoFormat(info) {

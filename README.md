@@ -19,7 +19,7 @@ LinkMigo「链密狗」是一款社媒公开资源解析下载工具。你可以
 | Instagram | 公开图片、视频 |
 | Threads | 公开图片、视频 |
 | TikTok | 公开视频 |
-| 抖音 | 公开视频 |
+| 抖音 | 公开视频、图文 |
 | 微信视频号 | 公开视频号图片、视频 |
 | 小红书 | 公开图文、视频 |
 | 快手 | 公开视频 |
@@ -169,6 +169,8 @@ http://<NAS IP>:3000
 | `SOCIAL_MEDIA_TIMEOUT_SECONDS` | `600` | 单个媒体下载超时时间，单位秒。 |
 | `SOCIAL_RESOLVE_CONCURRENCY` | `4` | 全局解析任务并发数。 |
 | `SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY` | `1` | 小红书解析并发数。 |
+| `SOCIAL_DOUYIN_RESOLVE_CONCURRENCY` | `1` | 抖音解析并发数。抖音解析每个请求都会拉起一个无头 Chromium，建议保持 `1`。 |
+| `SOCIAL_DOUYIN_BROWSER_TIMEOUT_SECONDS` | `60` | 抖音浏览器解析预算，单位秒。抖音分享页不再内嵌视频数据，解析依赖真实浏览器会话，因此需要比普通 HTTP 请求更长的超时。 |
 | `SOCIAL_ASSET_DOWNLOAD_CONCURRENCY` | `1` | 单个解析任务内媒体下载并发数。 |
 | `SOCIAL_PROFILE_ZIP_CONCURRENCY` | `1` | Instagram 主页批量打包时的帖子解析并发数。 |
 | `SOCIAL_MAX_ASSET_BYTES` | `10737418240` | 单个资源最大下载体积，单位字节。 |
@@ -208,7 +210,7 @@ npm run docker:buildx -- --image 你的DockerHub用户名/linkmigo --tags "0.1.0
 linux/amd64,linux/arm64
 ```
 
-默认 Docker 镜像内置 Chromium，用于 Instagram 主页等需要浏览器渲染的解析兜底。构建时可以指定 Debian 镜像源以提高 Chromium 依赖下载稳定性：
+默认 Docker 镜像内置 Chromium，用于抖音、Instagram 主页等需要浏览器渲染的解析兜底。抖音分享页现在只返回空壳 HTML，视频信息必须由真实浏览器会话（`__ac_signature` / `uifid` 等风控签名）才能取到，所以服务器上没有 Chromium/Google Chrome 时抖音会解析失败；可用 `CHROME_PATH` 指定浏览器可执行文件。构建时可以指定 Debian 镜像源以提高 Chromium 依赖下载稳定性：
 
 ```bash
 npm run docker:buildx -- --image 你的DockerHub用户名/linkmigo --tags "latest" --install-chromium --apt-mirror http://mirrors.ustc.edu.cn

@@ -17,14 +17,13 @@ import {
   pickText,
 } from "./post-info";
 import {
-  addUrlCandidate,
   firstUrlFromList,
   jsonFromAssignment,
   resolveRedirect,
   safeFilenamePart,
   titleFromBody,
-  uniqueUrls,
 } from "./shared";
+import { douyinAwemeIdFromUrl, resolveDouyinDetailWithBrowser } from "./douyin-browser";
 
 const DOUYIN_MOBILE_HEADERS = {
   ...PAGE_HEADERS,
@@ -35,21 +34,32 @@ const DOUYIN_MOBILE_HEADERS = {
   "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
 };
 
+// Media CDN requests made on behalf of the browser-rendered (`www.douyin.com`)
+// page; keep the UA consistent with the one the headless browser reports.
+const DOUYIN_DESKTOP_HEADERS = {
+  ...PAGE_HEADERS,
+  "user-agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
+
 export function normalizeDouyinUrl(parsed) {
   const parts = parsed.pathname.split("/").filter(Boolean);
   const host = parsed.hostname.toLowerCase();
   let postId = "";
+  let contentType = "video";
 
   for (let index = 0; index < parts.length; index += 1) {
-    if (["video", "note"].includes(parts[index]) && parts[index + 1]) {
+    if (["video", "note", "slides"].includes(parts[index]) && parts[index + 1]) {
       postId = parts[index + 1];
+      contentType = parts[index];
       break;
     }
   }
 
   if (postId && /^\d{8,32}$/.test(postId)) {
     return {
-      canonical_url: `https://www.iesdouyin.com/share/video/${postId}/`,
+      canonical_url: `https://www.iesdouyin.com/share/${contentType}/${postId}/`,
       shortcode: postId,
       kind: "video",
       platform: "douyin",
@@ -71,44 +81,15 @@ export function normalizeDouyinUrl(parsed) {
 }
 
 export async function resolveDouyinPost(normalized, settings) {
-  let postId = normalized.shortcode;
-
-  if (normalized.kind === "short") {
-    const redirected = await resolveRedirect(normalized.canonical_url, settings);
-
-    if (redirected) {
-      postId = normalizeDouyinUrl(new URL(redirected)).shortcode;
-    }
-  }
-
-  if (!/^\d{8,32}$/.test(postId)) {
-    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "抖音短链接没有解析到视频 ID。", 404);
-  }
-
-  const pageUrl = `https://www.iesdouyin.com/share/video/${postId}/?from=web_code_link`;
-  const text = await fetchText({
-    url: pageUrl,
-    headers: DOUYIN_MOBILE_HEADERS,
-    label: "Douyin",
-    timeoutMs: settings.httpTimeoutMs,
-  });
-  const routerData = jsonFromAssignment(text, "window._ROUTER_DATA");
-  const detail = firstDouyinItem(routerData);
-
-  if (!detail) {
-    throw new AppError(
-      ErrorCode.NO_MEDIA_FOUND,
-      "抖音分享页中没有发现可展示资源。",
-      404,
-    );
-  }
-
+  const resolved = await loadDouyinDetail(normalized, settings);
+  const detail = resolved.detail;
+  const postId = resolved.postId;
   const author = detail.author && typeof detail.author === "object" ? detail.author : {};
   const handle = author.unique_id || author.short_id || author.nickname || "unknown";
   const filenameBase = `douyin_${safeFilenamePart(handle)}_${postId}`;
-  const mediaHeaders = douyinMediaHeaders(pageUrl);
+  const mediaHeaders = douyinMediaHeaders(resolved.mediaReferer);
   const assets = douyinAssetsFromDetail(detail, filenameBase, mediaHeaders);
-  const metrics = metricsFromDouyin(detail);
+  const metrics = metricsFromDouyin(detail, resolved.source);
 
   return {
     assets: dedupeAssets(assets),
@@ -116,6 +97,125 @@ export async function resolveDouyinPost(normalized, settings) {
     creator_handle: handle,
     post_info: postInfoFromDouyin(detail, metrics, handle),
   };
+}
+
+// Douyin used to server-render the whole video payload into the share page's
+// `window._ROUTER_DATA`. That stopped working (the share page is now a shell),
+// so the headless-browser path is the one that actually returns the detail.
+// The cheap HTTP path is still tried first because it costs ~1s when Douyin
+// re-enables SSR, and it also covers the short-link redirect.
+async function loadDouyinDetail(normalized, settings) {
+  let postId = isDouyinPostId(normalized.shortcode) ? normalized.shortcode : "";
+  let inputUrl = normalized.canonical_url;
+  let contentType = douyinContentTypeFromUrl(inputUrl);
+
+  if (normalized.kind === "short") {
+    const redirected = await resolveRedirect(normalized.canonical_url, settings);
+    if (redirected) {
+      inputUrl = redirected;
+      postId = douyinAwemeIdFromUrl(redirected) || postId;
+      contentType = douyinContentTypeFromUrl(redirected) || contentType;
+    }
+  }
+
+  if (postId) {
+    const shareDetail = await fetchDouyinShareDetail(postId, contentType, settings);
+
+    if (shareDetail) {
+      return {
+        detail: shareDetail,
+        postId,
+        source: "douyin_public_best_effort",
+        mediaReferer: `https://www.iesdouyin.com/share/${contentType}/${postId}/`,
+      };
+    }
+  }
+
+  const rendered = await resolveDouyinDetailWithBrowser({
+    awemeId: postId,
+    contentType,
+    pageUrl: inputUrl,
+    timeoutMs: settings.douyinBrowserTimeoutMs,
+  });
+  const renderedId =
+    douyinAwemeIdFromUrl(rendered.pageUrl) ||
+    postId ||
+    String(rendered.detail?.aweme_id || "");
+  // Only trust media sniffed off the page when it really is the requested
+  // work: Douyin redirects deleted ids to the discover feed, where the page
+  // plays an unrelated video.
+  const capturedDetail = rendered.matchedRequestedAweme
+    ? douyinDetailFromCapturedMedia(rendered.mediaUrls, renderedId)
+    : null;
+  const detail = rendered.detail || capturedDetail;
+
+  if (!detail) {
+    throw new AppError(
+      ErrorCode.NO_MEDIA_FOUND,
+      rendered.matchedRequestedAweme
+        ? "抖音页面没有返回可下载的视频信息，可能视频已删除或需要验证。"
+        : "这个抖音作品不存在、已删除，或链接已失效。",
+      404,
+      {
+        page_url: rendered.pageUrl || "",
+        detail: rendered.diagnostics || "",
+      },
+    );
+  }
+
+  if (!isDouyinPostId(renderedId)) {
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "抖音短链接没有解析到视频 ID。", 404);
+  }
+
+  return {
+    detail,
+    postId: renderedId,
+    source: "douyin_browser",
+    mediaReferer: "https://www.douyin.com/",
+  };
+}
+
+async function fetchDouyinShareDetail(postId, contentType, settings) {
+  try {
+    const text = await fetchText({
+      url: `https://www.iesdouyin.com/share/${contentType}/${postId}/?from=web_code_link`,
+      headers: DOUYIN_MOBILE_HEADERS,
+      label: "Douyin",
+      // Douyin currently answers with a shell page, so keep this probe short
+      // instead of letting it eat the browser budget.
+      timeoutMs: Math.min(settings.httpTimeoutMs, 8_000),
+    });
+
+    return firstDouyinItem(jsonFromAssignment(text, "window._ROUTER_DATA"));
+  } catch {
+    // The share page is usually a shell now; fall through to the browser path.
+    return null;
+  }
+}
+
+function douyinContentTypeFromUrl(value) {
+  const match = /\/(video|note|slides)\/\d{8,32}/.exec(String(value || ""));
+
+  return match ? match[1] : "video";
+}
+
+function douyinDetailFromCapturedMedia(mediaUrls, postId) {
+  const url = (Array.isArray(mediaUrls) ? mediaUrls : []).find(
+    (candidate) => typeof candidate === "string" && /^https?:\/\//i.test(candidate),
+  );
+
+  if (!url) {
+    return null;
+  }
+
+  return {
+    aweme_id: postId || "",
+    video: { play_addr: { url_list: [url] } },
+  };
+}
+
+function isDouyinPostId(value) {
+  return /^\d{8,32}$/.test(String(value || ""));
 }
 
 function firstDouyinItem(routerData) {
@@ -134,6 +234,22 @@ function firstDouyinItem(routerData) {
   return null;
 }
 
+// Douyin serves 图文 images through a CDN template that ends in `.webp`
+// (e.g. `...~tplv-dy-aweme-images:q75.webp`), so don't label the download `.jpg`.
+function douyinImageExtension(url) {
+  let pathname = "";
+
+  try {
+    pathname = new URL(String(url)).pathname;
+  } catch {
+    pathname = String(url || "").split("?")[0];
+  }
+
+  const match = /\.(jpe?g|png|webp|heic|avif|gif)$/i.exec(pathname);
+
+  return match ? `.${match[1].toLowerCase()}` : ".jpg";
+}
+
 function douyinAssetsFromDetail(detail, filenameBase, mediaHeaders) {
   const assets = [];
   const imageItems = Array.isArray(detail.images)
@@ -150,22 +266,22 @@ function douyinAssetsFromDetail(detail, filenameBase, mediaHeaders) {
         assets.push({
           source_url: imageUrl,
           media_type: "image",
-          filename_hint: `${filenameBase}_photo_${index + 1}.jpg`,
+          filename_hint: `${filenameBase}_photo_${index + 1}${douyinImageExtension(imageUrl)}`,
           request_headers: mediaHeaders,
         });
       }
     });
   } else {
-    const videoUrls = douyinVideoUrls(detail);
-    const videoUrl = videoUrls[0];
+    const videoCandidates = douyinVideoCandidates(detail);
+    const best = videoCandidates[0];
 
-    if (videoUrl) {
+    if (best) {
       assets.push({
-        source_url: videoUrl,
-        fallback_urls: videoUrls.slice(1),
+        source_url: best.url,
+        fallback_urls: videoCandidates.slice(1).map((candidate) => candidate.url),
         media_type: "video",
-        width: optionalInt(dig(detail, "video", "width")),
-        height: optionalInt(dig(detail, "video", "height")),
+        width: best.width ?? optionalInt(dig(detail, "video", "width")),
+        height: best.height ?? optionalInt(dig(detail, "video", "height")),
         filename_hint: `${filenameBase}.mp4`,
         request_headers: mediaHeaders,
       });
@@ -186,26 +302,74 @@ function douyinAssetsFromDetail(detail, filenameBase, mediaHeaders) {
   return assets;
 }
 
-function douyinVideoUrls(detail) {
+// Douyin's detail payload carries a quality ladder in `video.bit_rate`, and
+// `play_addr.url_list[0]` is not always the top rung (it can be a 540p stream
+// while `video.width/height` still describes the 1080p master). Sort the ladder
+// by bitrate and fall back to the plain play/download addresses.
+function douyinVideoCandidates(detail) {
   const candidates = [];
+  const seen = new Set();
 
-  for (const path of [
-    ["video", "play_addr", "url_list"],
-    ["video", "play_addr_h264", "url_list"],
-    ["video", "download_addr", "url_list"],
-  ]) {
-    const urls = dig(detail, ...path);
-
-    if (Array.isArray(urls)) {
-      urls.forEach((url) => addUrlCandidate(candidates, url));
-    }
+  for (const rendition of douyinBitRateRenditions(detail)) {
+    addDouyinVideoCandidate(candidates, seen, rendition.play_addr, rendition.bit_rate);
   }
 
-  const singlePlayAddr = dig(detail, "video", "play_addr", "url_key");
+  for (const path of [
+    ["video", "play_addr"],
+    ["video", "play_addr_h264"],
+    ["video", "download_addr"],
+  ]) {
+    addDouyinVideoCandidate(candidates, seen, dig(detail, ...path));
+  }
 
-  addUrlCandidate(candidates, singlePlayAddr);
+  return candidates;
+}
 
-  return uniqueUrls(candidates);
+function douyinBitRateRenditions(detail) {
+  const renditions = dig(detail, "video", "bit_rate");
+
+  if (!Array.isArray(renditions)) {
+    return [];
+  }
+
+  return renditions
+    .filter((rendition) => rendition && typeof rendition === "object")
+    .slice()
+    .sort((a, b) => (optionalInt(b.bit_rate) ?? 0) - (optionalInt(a.bit_rate) ?? 0));
+}
+
+function addDouyinVideoCandidate(candidates, seen, address, bitRate = null) {
+  const urls = Array.isArray(address?.url_list) ? address.url_list : [];
+
+  for (const url of urls) {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+      continue;
+    }
+
+    const value = htmlUnescape(url);
+
+    // Image posts carry a placeholder `video.play_addr` that actually points at
+    // the background music, so never let an audio URL become the "video" asset.
+    if (isDouyinAudioUrl(value)) {
+      continue;
+    }
+
+    if (seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    candidates.push({
+      url: value,
+      width: optionalInt(address?.width),
+      height: optionalInt(address?.height),
+      bit_rate: optionalInt(bitRate),
+    });
+  }
+}
+
+function isDouyinAudioUrl(value) {
+  return /\.mp3(?:[?#]|$)/i.test(value) || /ies-music/i.test(value);
 }
 
 function bestDouyinImageUrl(imageData) {
@@ -250,7 +414,7 @@ function douyinTags(detail) {
   return textExtra.map((item) => item?.hashtag_name || item?.hashtagName || item?.name);
 }
 
-function metricsFromDouyin(detail) {
+function metricsFromDouyin(detail, source = "douyin_public_best_effort") {
   const stats = detail?.statistics && typeof detail.statistics === "object" ? detail.statistics : {};
 
   return {
@@ -259,18 +423,28 @@ function metricsFromDouyin(detail) {
     view_count: optionalInt(stats.play_count),
     save_count: optionalInt(stats.collect_count),
     share_count: optionalInt(stats.share_count),
-    source: "douyin_public_best_effort",
+    source,
   };
 }
 
-function douyinMediaHeaders(pageUrl) {
+function douyinMediaHeaders(referer) {
+  const origin = douyinOriginFromUrl(referer);
+
   return {
-    Referer: pageUrl,
-    Origin: "https://www.iesdouyin.com",
-    "user-agent": DOUYIN_MOBILE_HEADERS["user-agent"],
+    Referer: referer,
+    Origin: origin,
+    "user-agent": DOUYIN_DESKTOP_HEADERS["user-agent"],
     accept: "image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8",
-    "accept-language": DOUYIN_MOBILE_HEADERS["accept-language"],
+    "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
   };
+}
+
+function douyinOriginFromUrl(value) {
+  try {
+    return new URL(String(value)).origin;
+  } catch {
+    return "https://www.douyin.com";
+  }
 }
 
 export function isDouyinHost(host) {

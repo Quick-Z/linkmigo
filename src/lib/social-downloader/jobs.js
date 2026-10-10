@@ -311,6 +311,12 @@ function platformResolveConcurrency(platform) {
     return Math.max(1, settings.xiaohongshuResolveConcurrency || 1);
   }
 
+  // Douyin resolution boots a headless Chrome per request, so keep it bounded
+  // the same way the other browser-driven platform is.
+  if (platform === "douyin") {
+    return Math.max(1, settings.douyinResolveConcurrency || 1);
+  }
+
   return resolveConcurrency();
 }
 

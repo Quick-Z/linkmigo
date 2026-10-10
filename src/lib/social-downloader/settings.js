@@ -76,6 +76,12 @@ export function getSocialDownloaderSettings() {
       intEnv("IG_MAX_ASSET_BYTES", DEFAULT_MAX_ASSET_BYTES),
     ),
     publicBaseUrl: stringEnv("SOCIAL_PUBLIC_BASE_URL", stringEnv("LINKMIGO_PUBLIC_BASE_URL", "")),
+    // Douyin's video payload only comes back from a real browser session
+    // (see douyin-browser.js), which needs a longer budget than an HTTP fetch.
+    douyinBrowserTimeoutMs:
+      positiveIntEnv("SOCIAL_DOUYIN_BROWSER_TIMEOUT_SECONDS", 60) * 1000,
+    douyinResolveConcurrency:
+      positiveIntEnv("SOCIAL_DOUYIN_RESOLVE_CONCURRENCY", 1),
     instagramCookie: stringEnv(
       "SOCIAL_INSTAGRAM_COOKIE",
       stringEnv("IG_COOKIE", stringEnv("INSTAGRAM_COOKIE", "")),

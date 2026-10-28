@@ -150,7 +150,10 @@ export async function downloadMedia({ asset, destination, maxBytes, timeoutMs, o
     }
   }
 
-  throw lastError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载失败。", 502);
+  throw lastError ?? new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载失败。", 502, {
+    source_url: asset.source_url,
+    reason: urls.length === 0 ? "没有可用的媒体地址" : "全部候选地址都下载失败",
+  });
 }
 
 async function writeTextAsset({ asset, destination, maxBytes, onProgress }) {
@@ -826,7 +829,11 @@ async function downloadSingleMedia({ asset, destination, maxBytes, timeoutMs, on
       throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载超时。", 504);
     }
 
-    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载失败。", 502);
+    throw new AppError(ErrorCode.DOWNLOAD_FAILED, "媒体资源下载失败。", 502, {
+      source_url: asset.source_url,
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      cause: error?.cause ? String(error.cause) : null,
+    });
   }
 
   if ([401, 403, 429].includes(response.status)) {

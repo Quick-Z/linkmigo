@@ -845,8 +845,18 @@ export async function resolveXiaohongshuPost(normalized, settings) {
   }
 
   if (!note) {
-    if (looksLikeXiaohongshuVerification(text) && htmlAssets.length === 0) {
-      throw xiaohongshuRestrictedError({ reason: "verification_page" });
+    // Anonymous note pages now redirect to a `/404/sec_...` verification page
+    // whose only image is a static placeholder. Scraped "assets" from that page
+    // are meaningless, so report the restriction instead of handing the UI a
+    // fake resource that fails to download a moment later. The redirect target
+    // carries the reason, while the rendered body itself is a bare SPA shell.
+    const restrictedUrl = xiaohongshuRestrictedFinalUrl(pageResponse);
+
+    if (looksLikeXiaohongshuVerification(text) || restrictedUrl) {
+      throw xiaohongshuRestrictedError({
+        reason: "verification_page",
+        final_url: restrictedUrl || undefined,
+      });
     }
 
     const fallbackAssets = [
@@ -2923,7 +2933,7 @@ function xiaohongshuMetaAssets(text, shortcode, pageUrl, settings = {}) {
   const video = metaContents(text, ["og:video", "og:video:url", "og:video:secure_url"])[0];
   const image = metaContents(text, ["og:image", "og:image:url", "og:image:secure_url"])[0];
 
-  if (video) {
+  if (video && isXiaohongshuVideoUrl(video)) {
     assets.push({
       source_url: video,
       media_type: "video",
@@ -2932,7 +2942,9 @@ function xiaohongshuMetaAssets(text, shortcode, pageUrl, settings = {}) {
     });
   }
 
-  if (image) {
+  // `og:image` on a blocked or verification page points at a static placeholder
+  // on picasso-static.xiaohongshu.com, which is not note media.
+  if (image && isXiaohongshuCdnImageUrl(image)) {
     assets.push({
       source_url: image,
       media_type: "image",
@@ -2944,8 +2956,27 @@ function xiaohongshuMetaAssets(text, shortcode, pageUrl, settings = {}) {
   return assets;
 }
 
+function isXiaohongshuCdnImageUrl(value) {
+  return /^https?:\/\//i.test(String(value || "")) &&
+    /xhscdn\.com/i.test(value) &&
+    !/\/fe-platform\//i.test(value);
+}
+
 function looksLikeXiaohongshuVerification(text) {
   return looksLikeXiaohongshuRestrictedText(text);
+}
+
+// Anonymous note requests are answered with a 302 to `/404/sec_...` (or to
+// `/login`) and a 200 SPA shell, so the body alone cannot tell us the note was
+// withheld. The final URL still can.
+function xiaohongshuRestrictedFinalUrl(pageResponse) {
+  const finalUrl = String(pageResponse?.response?.url || "");
+
+  if (!finalUrl) {
+    return "";
+  }
+
+  return /\/404\/sec_|error_code=300031|\/login(?:[/?#]|$)/i.test(finalUrl) ? finalUrl : "";
 }
 
 function looksLikeXiaohongshuRestrictedText(text) {

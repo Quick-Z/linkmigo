@@ -82,6 +82,10 @@ export function getSocialDownloaderSettings() {
       positiveIntEnv("SOCIAL_DOUYIN_BROWSER_TIMEOUT_SECONDS", 60) * 1000,
     douyinResolveConcurrency:
       positiveIntEnv("SOCIAL_DOUYIN_RESOLVE_CONCURRENCY", 1),
+    // TikTok only hands the item payload to its own JavaScript now (see
+    // tiktok-browser.js), so the browser fallback needs its own budget.
+    tiktokBrowserTimeoutMs:
+      positiveIntEnv("SOCIAL_TIKTOK_BROWSER_TIMEOUT_SECONDS", 60) * 1000,
     instagramCookie: stringEnv(
       "SOCIAL_INSTAGRAM_COOKIE",
       stringEnv("IG_COOKIE", stringEnv("INSTAGRAM_COOKIE", "")),

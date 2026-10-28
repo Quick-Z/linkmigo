@@ -1,6 +1,7 @@
 import { URL } from "node:url";
 
-import { AppError, ErrorCode } from "./errors";
+import { AppError, ErrorCode, getErrorDetail } from "./errors";
+import { resolveTiktokDetailWithBrowser } from "./tiktok-browser";
 import {
   cleanUrl,
   dedupeAssets,
@@ -88,19 +89,54 @@ export async function resolveTiktokPost(normalized, settings) {
   }
 
   const pageUrl = `https://www.tiktok.com/@i/video/${postId}`;
-  const pageResponse = await fetchTextResponse({
-    url: pageUrl,
-    headers: PAGE_HEADERS,
-    label: "TikTok",
-    timeoutMs: settings.httpTimeoutMs,
-  });
-  const text = pageResponse.text;
-  const mediaHeaders = tiktokMediaHeaders(pageUrl, cookieHeaderFromSetCookie(pageResponse.headers));
-  const data = jsonFromScriptId(text, "__UNIVERSAL_DATA_FOR_REHYDRATION__");
-  const detail = dig(data, "__DEFAULT_SCOPE__", "webapp.video-detail", "itemInfo", "itemStruct");
+  let detail = null;
+  let mediaHeaders = tiktokMediaHeaders(pageUrl, "");
+  let httpError = null;
+
+  try {
+    const pageResponse = await fetchTextResponse({
+      url: pageUrl,
+      headers: PAGE_HEADERS,
+      label: "TikTok",
+      timeoutMs: settings.httpTimeoutMs,
+    });
+
+    mediaHeaders = tiktokMediaHeaders(pageUrl, cookieHeaderFromSetCookie(pageResponse.headers));
+    const data = jsonFromScriptId(pageResponse.text, "__UNIVERSAL_DATA_FOR_REHYDRATION__");
+
+    detail = dig(data, "__DEFAULT_SCOPE__", "webapp.video-detail", "itemInfo", "itemStruct");
+  } catch (error) {
+    httpError = error;
+  }
+
+  // TikTok now serves anonymous clients only the React shell, so the plain HTML
+  // fetch above usually finds nothing. The payload is still delivered to the
+  // page's own JavaScript, which means a headless browser can read it.
+  let browserDiagnostics = "";
 
   if (!detail || typeof detail !== "object") {
-    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "TikTok 页面中没有发现可展示资源。", 404);
+    const rendered = await resolveTiktokDetailWithBrowser({
+      postId,
+      pageUrl,
+      timeoutMs: settings.tiktokBrowserTimeoutMs,
+    }).catch((error) => ({ detail: null, diagnostics: getErrorDetail(error) }));
+
+    if (rendered?.detail) {
+      detail = rendered.detail;
+      mediaHeaders = tiktokMediaHeaders(pageUrl, "");
+    } else {
+      browserDiagnostics = rendered?.diagnostics || "";
+    }
+  }
+
+  if (!detail || typeof detail !== "object") {
+    if (httpError) {
+      throw httpError;
+    }
+
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "TikTok 页面中没有发现可展示资源。", 404, {
+      browser: browserDiagnostics || undefined,
+    });
   }
 
   if (detail.isContentClassified) {

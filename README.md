@@ -171,6 +171,7 @@ http://<NAS IP>:3000
 | `SOCIAL_XIAOHONGSHU_RESOLVE_CONCURRENCY` | `1` | 小红书解析并发数。 |
 | `SOCIAL_DOUYIN_RESOLVE_CONCURRENCY` | `1` | 抖音解析并发数。抖音解析每个请求都会拉起一个无头 Chromium，建议保持 `1`。 |
 | `SOCIAL_DOUYIN_BROWSER_TIMEOUT_SECONDS` | `60` | 抖音浏览器解析预算，单位秒。抖音分享页不再内嵌视频数据，解析依赖真实浏览器会话，因此需要比普通 HTTP 请求更长的超时。 |
+| `SOCIAL_TIKTOK_BROWSER_TIMEOUT_SECONDS` | `60` | TikTok 浏览器解析预算，单位秒。TikTok 现在只把视频数据交给页面自己的 JavaScript，纯 HTTP 请求只能拿到空壳页面，因此匿名解析会拉起无头 Chromium 兜底；浏览器不可用时会退回纯 HTTP 解析。 |
 | `SOCIAL_ASSET_DOWNLOAD_CONCURRENCY` | `1` | 单个解析任务内媒体下载并发数。 |
 | `SOCIAL_PROFILE_ZIP_CONCURRENCY` | `1` | Instagram 主页批量打包时的帖子解析并发数。 |
 | `SOCIAL_MAX_ASSET_BYTES` | `10737418240` | 单个资源最大下载体积，单位字节。 |

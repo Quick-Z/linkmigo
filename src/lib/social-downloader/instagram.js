@@ -838,8 +838,6 @@ async function ensureInstagramNetwork(settings) {
 export async function fetchPublicPage(canonicalUrl, settings, options = {}) {
   let response;
 
-  throw new AppError(ErrorCode.UPSTREAM_BLOCKED, "debug force page fetch failure", 502);
-
   try {
     response = await fetchWithTimeout(
       canonicalUrl,

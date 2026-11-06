@@ -5104,6 +5104,14 @@ function resolveProgressDetail(progress, copy, language) {
     return copy.progressFinalizing;
   }
 
+  // Bytes are moving but the total is unknown — better than claiming the job
+  // is still "caching N resources" while a multi-gigabyte transfer runs.
+  if (downloadedBytes > 0) {
+    return language === "en"
+      ? `Downloaded ${formatBytes(downloadedBytes)}...`
+      : `已下载 ${formatBytes(downloadedBytes)}...`;
+  }
+
   if (progress?.asset_count) {
     return language === "en"
       ? `Caching ${progress.asset_count} resources...`

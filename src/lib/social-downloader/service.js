@@ -834,7 +834,10 @@ function emitDownloadProgress({
     .reduce((sum, part) => sum + (part.downloadedBytes || 0), 0);
   const knownTotalBytes = [...progressParts.values()]
     .reduce((sum, part) => sum + (part.contentLength || 0), 0);
-  const totalBytes = estimatedTotalBytes || knownTotalBytes || null;
+  // A total reported by the running transfer beats the upfront estimate: the
+  // estimate can be low when the platform exposes a sizeless placeholder
+  // format, and trusting it made a 1.45 GB download sit at "99%" from 37 MB.
+  const totalBytes = Math.max(estimatedTotalBytes || 0, knownTotalBytes || 0) || null;
 
   onProgress({
     phase,
@@ -1334,7 +1337,7 @@ function startCacheCleanupScheduler(cache, settings) {
     try {
       const stats = await cache.cleanup();
 
-      if (stats.removedRecords > 0 || stats.failed > 0) {
+      if (stats.removedRecords > 0 || stats.removedOrphans > 0 || stats.failed > 0) {
         await writeUserActionLog({
           action: "cache_cleanup_completed",
           level: stats.failed > 0 ? "error" : "info",
@@ -1346,8 +1349,10 @@ function startCacheCleanupScheduler(cache, settings) {
             cleanup_interval_seconds: settings.cacheCleanupIntervalSeconds,
             checked: stats.checked,
             removed_records: stats.removedRecords,
+            removed_orphans: stats.removedOrphans,
             removed_files: stats.removedFiles,
             removed_directories: stats.removedDirectories,
+            reclaimed_bytes: stats.reclaimedBytes,
             failed: stats.failed,
             errors: stats.errors,
           },

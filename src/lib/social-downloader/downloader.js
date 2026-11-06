@@ -192,9 +192,14 @@ async function writeTextAsset({ asset, destination, maxBytes, onProgress }) {
 
 export async function estimateMediaDownloadSize({ asset, maxBytes, timeoutMs }) {
   if (asset.download_with === "yt-dlp") {
+    // yt-dlp owns the googlevideo URLs, so there is no HEAD request to make.
+    // The extractor already reported the size of the streams it will fetch,
+    // which is just as good and lets the UI show a percentage immediately.
+    const expectedBytes = safeInt(asset.expected_bytes);
+
     return {
-      totalBytes: null,
-      knownParts: 0,
+      totalBytes: expectedBytes,
+      knownParts: expectedBytes ? 1 : 0,
       partCount: 1,
     };
   }

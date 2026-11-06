@@ -3,6 +3,16 @@ import path from "node:path";
 
 import { AppError, ErrorCode } from "./errors";
 
+// An interrupted download is resumable, so an orphan record directory is only
+// reclaimed once it has been quiet long enough that no request can still be
+// writing to it. The longest legitimate transfer is 3 attempts × 10 min plus
+// the ffmpeg merge.
+const ORPHAN_RECORD_TTL_MS = 6 * 60 * 60 * 1000;
+// The cache root also hosts the bootstrapped yt-dlp binary. It looks exactly
+// like a stale record directory (no metadata.json, no sub-directories), so it
+// has to be excluded by name before the orphan sweep runs.
+const RESERVED_CACHE_DIR_NAMES = new Set(["yt-dlp"]);
+
 export class CacheStore {
   constructor(root, ttlSeconds, maxBytes) {
     this.root = root;
@@ -151,6 +161,76 @@ export class CacheStore {
       }
     }
 
+    const orphans = await this.cleanupOrphanRecordDirs();
+
+    stats.removedOrphans = orphans.records;
+    stats.removedFiles += orphans.files;
+    stats.removedDirectories += orphans.directories;
+    stats.reclaimedBytes = orphans.bytes;
+
+    return stats;
+  }
+
+  // A download that never finished leaves its record directory behind without a
+  // metadata.json — the record is only written once every asset is cached. The
+  // sweep above only walks metadata files, so those directories (and their
+  // multi-gigabyte `.part` fragments) used to stay on disk forever. Age-gate
+  // them so a transfer that is still running is never touched.
+  async cleanupOrphanRecordDirs(now = Date.now()) {
+    await this.ensureRoot();
+
+    const stats = { records: 0, files: 0, directories: 0, bytes: 0 };
+
+    for (const entry of await fs.readdir(this.root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || RESERVED_CACHE_DIR_NAMES.has(entry.name)) {
+        continue;
+      }
+
+      const first = path.join(this.root, entry.name);
+
+      if (await exists(path.join(first, "metadata.json"))) {
+        continue;
+      }
+
+      const children = await fs.readdir(first, { withFileTypes: true }).catch(() => []);
+      // Two layouts coexist: "<root>/<platform>/<record>" and the legacy
+      // "<root>/<record>". Only the latter carries an "assets" folder at this
+      // level, which is what tells them apart.
+      const recordDirs = (await hasAssetsDirectory(first))
+        ? [first]
+        : children
+          .filter((child) => child.isDirectory())
+          .map((child) => path.join(first, child.name));
+
+      for (const recordDir of recordDirs) {
+        if (await exists(path.join(recordDir, "metadata.json"))) {
+          continue;
+        }
+
+        // downloadAndCacheAssets() creates "<record>/assets" before the first
+        // byte lands, so a directory without one was never a media download.
+        if (!(await hasAssetsDirectory(recordDir))) {
+          continue;
+        }
+
+        if (!(await isStaleDirectory(recordDir, now))) {
+          continue;
+        }
+
+        try {
+          stats.bytes += await directoryBytes(recordDir);
+
+          const removed = await this.removeRecordDir(recordDir);
+
+          stats.records += 1;
+          stats.files += removed.files;
+          stats.directories += removed.directories;
+        } catch {
+          // An orphan that cannot be removed is retried on the next sweep.
+        }
+      }
+    }
+
     return stats;
   }
 
@@ -286,6 +366,75 @@ async function exists(filePath) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function hasAssetsDirectory(directory) {
+  try {
+    return (await fs.stat(path.join(directory, "assets"))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// A directory is "quiet" when nothing inside it has been written for the whole
+// orphan TTL. yt-dlp keeps appending to its `.part` file, so a live transfer
+// always looks fresh here.
+async function isStaleDirectory(directory, now) {
+  const newest = await newestEntryTime(directory);
+
+  return newest > 0 && now - newest > ORPHAN_RECORD_TTL_MS;
+}
+
+async function newestEntryTime(directory) {
+  let stats;
+
+  try {
+    stats = await fs.stat(directory);
+  } catch {
+    return 0;
+  }
+
+  let newest = stats.mtimeMs || 0;
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+
+  for (const entry of entries) {
+    const childPath = path.join(directory, entry.name);
+    const childTime = entry.isDirectory()
+      ? await newestEntryTime(childPath)
+      : await entryStat(childPath).then((child) => child.mtimeMs);
+
+    newest = Math.max(newest, childTime);
+  }
+
+  return newest;
+}
+
+async function directoryBytes(directory) {
+  let total = 0;
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+
+  for (const entry of entries) {
+    const childPath = path.join(directory, entry.name);
+
+    if (entry.isDirectory()) {
+      total += await directoryBytes(childPath);
+      continue;
+    }
+
+    total += (await entryStat(childPath)).size;
+  }
+
+  return total;
+}
+
+async function entryStat(filePath) {
+  try {
+    const stats = await fs.stat(filePath);
+
+    return { mtimeMs: stats.mtimeMs || 0, size: stats.size || 0 };
+  } catch {
+    return { mtimeMs: 0, size: 0 };
   }
 }
 

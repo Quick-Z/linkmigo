@@ -1,4 +1,4 @@
-import { execFile as execFileCallback, execFileSync } from "node:child_process";
+import { execFile as execFileCallback, execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { chmodSync, existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -31,6 +31,12 @@ const YTDLP_JS_RUNTIME_ENV_NAMES = ["YTDLP_JS_RUNTIME", "SOCIAL_YTDLP_JS_RUNTIME
 const YTDLP_DOWNLOAD_ATTEMPTS = 3;
 const YTDLP_METADATA_ATTEMPTS = 2;
 const YTDLP_RETRY_DELAY_MS = 1000;
+// yt-dlp's own progress output is the only way to know how far a transfer has
+// gone; without it the UI can only show an indeterminate spinner. Each update
+// is emitted as one tagged line so it can be told apart from yt-dlp's log.
+const YTDLP_PROGRESS_MARKER = "__LM_PROGRESS__";
+const YTDLP_PROGRESS_MIN_INTERVAL_MS = 400;
+const OUTPUT_TAIL_CHARS = 200_000;
 const RETRYABLE_ERROR_CODES = new Set([
   ErrorCode.UPSTREAM_BLOCKED,
   ErrorCode.DOWNLOAD_FAILED,
@@ -58,6 +64,10 @@ export async function resolveYoutubeWithYtDlp(normalized, settings) {
   const format = bestVideoFormat(details);
   const qualityLabel = safePart(format?.height ? `${format.height}p` : "best");
   const filenameBase = `youtube_${safePart(videoId)}_${qualityLabel}`;
+  // The selected streams' sizes are known straight from the extraction, so the
+  // download can report a percentage from the very first byte instead of
+  // waiting for yt-dlp to reveal a total half-way through.
+  const expectedBytes = expectedDownloadBytes(details);
   const metrics = {
     like_count: optionalNumber(details.like_count),
     comment_count: optionalNumber(details.comment_count),
@@ -79,6 +89,7 @@ export async function resolveYoutubeWithYtDlp(normalized, settings) {
       media_type: "video",
       width: optionalNumber(format?.width),
       height: optionalNumber(format?.height),
+      expected_bytes: expectedBytes,
       filename_hint: `${filenameBase}.mp4`,
     }],
     metrics,
@@ -127,16 +138,24 @@ export async function downloadYoutubeWithYtDlp({
 
   const budgetMs = Math.max(1, Number(timeoutMs) || 600_000);
   const deadlineAt = Date.now() + budgetMs;
+  const expectedBytes = optionalNumber(asset.expected_bytes);
   let lastError = null;
   let attempts = 0;
+  // Partial data survives a failed attempt so a multi-gigabyte 4K transfer
+  // resumes instead of restarting from zero. It is discarded only when the
+  // bytes on disk are themselves the problem (see shouldDiscardPartial).
+  let discardPartial = false;
+
+  // A finished file left over from an earlier run would make yt-dlp skip the
+  // transfer entirely ("has already been downloaded") and hand back a stale
+  // asset, so drop that one path up front. `.part` fragments are kept.
+  await fs.unlink(outputPath).catch(() => {});
 
   for (let attempt = 1; attempt <= YTDLP_DOWNLOAD_ATTEMPTS; attempt += 1) {
-    // Every attempt starts from a clean slate: yt-dlp resumes from leftover
-    // `.part` fragments, and YouTube answers exactly those resumed range
-    // requests with HTTP 403. A fresh attempt re-extracts the video, which
-    // yields a new signed media URL.
-    await removeYtDlpPartialFiles(outputPath);
-    await fs.unlink(outputPath).catch(() => {});
+    if (discardPartial) {
+      await removeYtDlpPartialFiles(outputPath);
+      discardPartial = false;
+    }
 
     const remainingMs = deadlineAt - Date.now();
 
@@ -156,16 +175,18 @@ export async function downloadYoutubeWithYtDlp({
         formatSelector,
         argsTimeoutMs: budgetMs,
         processTimeoutMs: Math.min(budgetMs, remainingMs),
+        onProgress,
+        expectedBytes,
       });
     } catch (error) {
       const appError = withYtDlpAttempts(toYtDlpError(error), attempt);
 
       if (!isRetryableYtDlpError(appError) || attempt >= YTDLP_DOWNLOAD_ATTEMPTS) {
-        await removeYtDlpPartialFiles(outputPath);
         throw appError;
       }
 
       lastError = appError;
+      discardPartial = shouldDiscardPartial(error);
       await sleep(YTDLP_RETRY_DELAY_MS * attempt);
       continue;
     }
@@ -274,6 +295,8 @@ async function runYtDlpDownload({
   formatSelector,
   argsTimeoutMs,
   processTimeoutMs,
+  onProgress,
+  expectedBytes,
 }) {
   const args = buildCommonArgs(argsTimeoutMs, ffmpegPath);
   args.push(
@@ -285,14 +308,199 @@ async function runYtDlpDownload({
     outputPath,
     "--print",
     "after_move:filepath",
+    // "--print" implies "--quiet", which silences the progress output. Without
+    // "--progress" there is nothing to parse and the UI can only spin.
+    "--progress",
+    // Progress is normally rewritten in place with "\r"; a pipe needs one
+    // update per line before it can be read.
+    "--newline",
+    "--progress-template",
+    `download:${YTDLP_PROGRESS_MARKER}|%(progress.downloaded_bytes)s|`
+      + "%(progress.total_bytes)s|%(progress.total_bytes_estimate)s",
     sourceUrl,
   );
 
-  return await execFile(await getYtDlpExecutable(), args, {
-    timeout: Math.max(1, Number(processTimeoutMs) || 600_000),
-    maxBuffer: 64 * 1024 * 1024,
-    windowsHide: true,
+  return await spawnYtDlp(args, {
+    timeoutMs: processTimeoutMs,
+    onStdoutLine: createYtDlpProgressReporter({ onProgress, expectedBytes }),
   });
+}
+
+// Replaces execFile so stdout can be consumed while yt-dlp is still running.
+// execFile only resolves once the process exits, which is why a 1.5 GB
+// transfer looked identical to a hang. Output is kept as a bounded tail: the
+// only things read from it afterwards are the trailing filepath line and the
+// teardown error.
+async function spawnYtDlp(args, { timeoutMs, onStdoutLine }) {
+  const executable = await getYtDlpExecutable();
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    let stdoutRemainder = "";
+    let timedOut = false;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      // yt-dlp normally honours SIGTERM; make sure a wedged process cannot
+      // keep the request (and the job) alive forever.
+      setTimeout(() => child.kill("SIGKILL"), 15_000).unref?.();
+    }, Math.max(1, Number(timeoutMs) || 600_000));
+
+    const settle = (error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timer);
+
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve({ stdout, stderr });
+    };
+
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout = appendTail(stdout, text);
+      stdoutRemainder = drainLines(stdoutRemainder, text, onStdoutLine);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr = appendTail(stderr, chunk.toString());
+    });
+
+    child.on("error", (error) => {
+      error.stderr = stderr;
+      error.stdout = stdout;
+      settle(error);
+    });
+
+    child.on("close", (code, signal) => {
+      if (timedOut) {
+        const error = new Error("yt-dlp 下载超时。");
+        error.killed = true;
+        error.signal = signal;
+        error.stderr = stderr;
+        error.stdout = stdout;
+        settle(error);
+        return;
+      }
+
+      if (code !== 0) {
+        const error = new Error(`yt-dlp exited with code ${code}`);
+        error.exitCode = code;
+        error.signal = signal;
+        error.stderr = stderr;
+        error.stdout = stdout;
+        settle(error);
+        return;
+      }
+
+      settle(null);
+    });
+  });
+}
+
+function appendTail(buffer, chunk) {
+  const next = buffer + chunk;
+
+  return next.length > OUTPUT_TAIL_CHARS ? next.slice(-OUTPUT_TAIL_CHARS) : next;
+}
+
+function drainLines(buffer, chunk, onLine) {
+  let rest = buffer + chunk;
+  let index = rest.indexOf("\n");
+
+  while (index >= 0) {
+    const line = rest.slice(0, index).replace(/\r$/, "");
+
+    rest = rest.slice(index + 1);
+
+    if (line && onLine) {
+      onLine(line);
+    }
+
+    index = rest.indexOf("\n");
+  }
+
+  return rest.length > OUTPUT_TAIL_CHARS ? rest.slice(-OUTPUT_TAIL_CHARS) : rest;
+}
+
+// Video and audio arrive as two separate streams, so yt-dlp reports progress
+// per stream and resets to zero for the second one. Folding each finished
+// stream into a baseline keeps one monotonic overall percentage.
+function createYtDlpProgressReporter({ onProgress, expectedBytes }) {
+  if (!onProgress) {
+    return () => {};
+  }
+
+  let baselineBytes = 0;
+  let streamTotalBytes = 0;
+  let streamDownloadedBytes = 0;
+  let started = false;
+  let lastEmitAt = 0;
+
+  return (line) => {
+    if (!line.startsWith(`${YTDLP_PROGRESS_MARKER}|`)) {
+      return;
+    }
+
+    const [, downloadedRaw, totalRaw, estimateRaw] = line.split("|");
+    const downloaded = optionalNumber(downloadedRaw);
+
+    if (downloaded == null) {
+      return;
+    }
+
+    if (started && downloaded < streamDownloadedBytes) {
+      baselineBytes += streamTotalBytes || streamDownloadedBytes;
+      streamTotalBytes = 0;
+    }
+
+    started = true;
+    streamDownloadedBytes = downloaded;
+    streamTotalBytes = optionalNumber(totalRaw) || optionalNumber(estimateRaw) || streamTotalBytes || 0;
+
+    const now = Date.now();
+
+    if (now - lastEmitAt < YTDLP_PROGRESS_MIN_INTERVAL_MS) {
+      return;
+    }
+
+    lastEmitAt = now;
+
+    const downloadedBytes = baselineBytes + streamDownloadedBytes;
+    // The static estimate only fills in until the transfer reports its own
+    // total, and never below what the streams themselves add up to.
+    const totalBytes = Math.max(
+      baselineBytes + streamTotalBytes,
+      expectedBytes || 0,
+    ) || null;
+
+    onProgress({
+      type: "stream_progress",
+      part_id: "media",
+      content_length: totalBytes,
+      downloaded_bytes: downloadedBytes,
+    });
+  };
+}
+
+// A resumed transfer sends a Range request against a freshly signed URL. When
+// YouTube answers that with 403 the cached bytes can never be used, so the only
+// way forward is a clean start. Everything else (timeout, dropped connection,
+// rate limiting) is worth resuming.
+function shouldDiscardPartial(error) {
+  const text = ytDlpErrorText(String(error?.stderr || error?.stdout || error?.message || "")).toLowerCase();
+
+  return text.includes("http error 403") || text.includes("forbidden");
 }
 
 // A failed attempt may leave `.part` fragments (and unmerged `.fNNN.ext`
@@ -792,10 +1000,75 @@ function bestVideoFormat(info) {
   if (Array.isArray(info.formats)) {
     return info.formats
       .filter((format) => format && format.vcodec && format.vcodec !== "none")
-      .sort((left, right) => (Number(right.height) || 0) - (Number(left.height) || 0))[0] || null;
+      // Highest resolution wins; mp4 breaks ties so the reported size matches
+      // what DEFAULT_FORMAT ("bv*[ext=mp4]") actually downloads, and a format
+      // that declares its size beats one that does not (YouTube exposes
+      // sizeless placeholders such as format 625 next to the real 4K stream).
+      .sort((left, right) => {
+        const heightDelta = (Number(right.height) || 0) - (Number(left.height) || 0);
+
+        if (heightDelta !== 0) {
+          return heightDelta;
+        }
+
+        const mp4Delta = (right.ext === "mp4" ? 1 : 0) - (left.ext === "mp4" ? 1 : 0);
+
+        if (mp4Delta !== 0) {
+          return mp4Delta;
+        }
+
+        return (formatApproxBytes(right) ? 1 : 0) - (formatApproxBytes(left) ? 1 : 0);
+      })[0] || null;
   }
 
   return null;
+}
+
+function formatApproxBytes(format) {
+  return optionalNumber(format?.filesize) || optionalNumber(format?.filesize_approx) || 0;
+}
+
+// DEFAULT_FORMAT downloads the best video plus the best m4a audio, so the
+// expected total has to cover both streams. yt-dlp already reports the size of
+// its own default selection at the top level, which is the most accurate
+// source; the per-format sum is only a fallback.
+function expectedDownloadBytes(details) {
+  const reportedTotal = optionalNumber(details?.filesize) || optionalNumber(details?.filesize_approx);
+
+  if (reportedTotal) {
+    return reportedTotal;
+  }
+
+  const video = bestVideoFormat(details);
+
+  if (!video) {
+    return null;
+  }
+
+  if (video.acodec && video.acodec !== "none") {
+    return formatApproxBytes(video) || null;
+  }
+
+  const formats = Array.isArray(details.formats) ? details.formats : [];
+  const audio = formats
+    .filter((format) =>
+      format &&
+      format.vcodec === "none" &&
+      format.acodec &&
+      format.acodec !== "none" &&
+      !format.is_live,
+    )
+    .sort((left, right) => {
+      const m4aDelta = (right.ext === "m4a" ? 1 : 0) - (left.ext === "m4a" ? 1 : 0);
+
+      if (m4aDelta !== 0) {
+        return m4aDelta;
+      }
+
+      return (Number(right.abr) || 0) - (Number(left.abr) || 0);
+    })[0];
+
+  return formatApproxBytes(video) + formatApproxBytes(audio) || null;
 }
 
 function existingOutputPath(outputPath, reportedPath) {

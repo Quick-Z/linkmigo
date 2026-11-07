@@ -102,6 +102,10 @@
   --c-shadow-window: 0 1px 1px rgba(0, 0, 0, 0.05), 0 34px 80px -28px rgba(0, 0, 0, 0.34),
     0 0 0 0.5px rgba(0, 0, 0, 0.1), inset 0 0.5px 0 rgba(255, 255, 255, 0.9);
 
+  /* Floating material — thicker than a card so text stays readable above content */
+  --c-menu-bg: rgba(250, 250, 252, 0.88);
+  --c-menu-grad: linear-gradient(180deg, rgba(255, 255, 255, 0.56) 0%, rgba(244, 247, 252, 0.16) 100%);
+
   --c-ease: cubic-bezier(0.32, 0.72, 0, 1);
   --c-dur: 200ms;
 
@@ -160,6 +164,9 @@
   --c-shadow-2: 0 8px 22px -10px rgba(0, 0, 0, 0.7), 0 1px 2px rgba(0, 0, 0, 0.4);
   --c-shadow-window: 0 1px 1px rgba(0, 0, 0, 0.5), 0 36px 84px -30px rgba(0, 0, 0, 0.9),
     0 0 0 0.5px rgba(255, 255, 255, 0.09), inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
+
+  --c-menu-bg: rgba(48, 52, 64, 0.9);
+  --c-menu-grad: linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0) 100%);
 }
 
 /* 2. Shell ----------------------------------------------------------------- */
@@ -775,6 +782,170 @@
 .lm-page[data-ui-theme="cohere"] .lm-themed-action:hover:not(:disabled) {
   transform: none !important;
   box-shadow: var(--c-shadow-1) !important;
+}
+
+/* 4.9 下载方式菜单：桌面下拉 / 移动端底部弹窗 --------------------------- */
+
+.lm-page[data-ui-theme="cohere"] .c-menu-sheet {
+  position: absolute;
+  z-index: 91;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--c-radius-lg);
+  background-color: var(--c-menu-bg);
+  background-image: var(--c-menu-grad);
+  box-shadow: var(--c-shadow-2), 0 0 0 0.5px var(--c-hairline);
+  -webkit-backdrop-filter: var(--c-blur);
+  backdrop-filter: var(--c-blur);
+  color: var(--c-label-1);
+}
+
+@media (max-width: 599px) {
+  .lm-page[data-ui-theme="cohere"] .c-menu-sheet {
+    border-radius: var(--c-radius-window) var(--c-radius-window) 0 0;
+    border-bottom: 0;
+    padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+    box-shadow: var(--c-shadow-window);
+  }
+
+  .lm-page[data-ui-theme="cohere"] .c-menu-head {
+    padding: 4px 8px 10px;
+  }
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-grabber {
+  width: 36px;
+  height: 4px;
+  margin: 0 auto 6px;
+  border-radius: 999px;
+  background-color: var(--c-fill-4);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-head {
+  display: grid;
+  gap: 2px;
+  padding: 2px 8px 8px;
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-label-1);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-subtitle {
+  font-size: 11.5px;
+  font-weight: 450;
+  color: var(--c-label-2);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  outline: none;
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--c-hairline-soft);
+  border-radius: var(--c-radius-sm);
+  background-color: var(--c-fill-1);
+  cursor: pointer;
+  outline: none;
+  transition: background-color 160ms var(--c-ease), border-color 160ms var(--c-ease), box-shadow 160ms var(--c-ease);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item[data-hovered],
+.lm-page[data-ui-theme="cohere"] .c-menu-item[data-focused] {
+  background-color: var(--c-fill-2);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item[data-pressed] {
+  background-color: var(--c-fill-3);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item[data-focus-visible] {
+  box-shadow: 0 0 0 3px var(--c-focus-ring);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--c-hairline-soft);
+  border-radius: var(--c-radius-sm);
+  background-color: var(--c-fill-2);
+  color: var(--c-label-1);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item-label {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--c-label-1);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item-hint {
+  font-size: 11.5px;
+  font-weight: 450;
+  line-height: 1.35;
+  color: var(--c-label-2);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-item-chevron {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--c-label-3);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-cancel {
+  width: 100%;
+  height: 40px;
+  margin-top: 4px;
+  border: 0;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: var(--c-label-2);
+  font-weight: 500;
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-cancel[data-hovered],
+.lm-page[data-ui-theme="cohere"] .c-menu-cancel:hover {
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: var(--c-label-1);
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-cancel[data-pressed] {
+  background-color: transparent;
+  transform: none;
+}
+
+.lm-page[data-ui-theme="cohere"] .c-menu-cancel[data-focus-visible] {
+  box-shadow: 0 0 0 3px var(--c-focus-ring);
 }
 
 /* 5. Bridges — legacy inline styles from shared components ---------------- */

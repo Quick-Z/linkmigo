@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssetPreviewGrid } from "./asset-preview-grid";
 import { CohereSidebar } from "../_theme/cohere/cohere-sidebar";
+import { CohereActionMenu, CohereButton } from "../_theme/cohere/controls";
 // Cohere tokens live in their own module: the default theme never imports them.
 import { cohereThemeTokens } from "../_theme/cohere/tokens";
 import { logClientAction } from "../_lib/user-action-log";
@@ -63,6 +64,18 @@ const copyByLanguage = {
     cancel: "取消",
     downloadSelectedPosts: "下载选中帖子",
     downloadSelected: "下载选中项",
+    downloadModeTitle: "选择下载方式",
+    downloadModeCount: (count) => `已选中 ${count} 项`,
+    downloadAsZip: "打包成 ZIP 下载",
+    downloadAsZipHint: "合并为一个压缩包，一次保存",
+    downloadIndividually: "逐张单独下载",
+    downloadIndividuallyHint: "逐个保存文件，浏览器可能询问是否允许多个下载",
+    saveToLibrary: "保存到相册",
+    saveToLibraryHint: "在系统分享面板中点「存储图像」即可入册",
+    shareSave: "分享保存",
+    shareSaveHint: "在系统分享面板中选择相册或文件保存",
+    preparingFiles: "正在准备文件…",
+    individualDownloadProgress: (done, total) => `正在下载 ${done}/${total}`,
     expiredAt: "过期时间",
     favorites: "收藏",
     followers: "粉丝",
@@ -202,6 +215,18 @@ const copyByLanguage = {
     cancel: "Cancel",
     downloadSelectedPosts: "Download Selected Posts",
     downloadSelected: "Download Selected",
+    downloadModeTitle: "Choose how to download",
+    downloadModeCount: (count) => `${count} selected`,
+    downloadAsZip: "Download as ZIP",
+    downloadAsZipHint: "One archive, saved in a single step",
+    downloadIndividually: "Download files one by one",
+    downloadIndividuallyHint: "Each file is saved separately; your browser may ask to allow multiple downloads",
+    saveToLibrary: "Save to Photos",
+    saveToLibraryHint: "Tap \"Save Image\" in the share sheet to add them to Photos",
+    shareSave: "Share to save",
+    shareSaveHint: "Pick Photos or Files in the share sheet to save them",
+    preparingFiles: "Preparing files…",
+    individualDownloadProgress: (done, total) => `Downloading ${done}/${total}`,
     expiredAt: "Expired at",
     favorites: "Favorites",
     followers: "Followers",
@@ -1019,6 +1044,11 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   const [xiaohongshuAuth, setXiaohongshuAuth] = useState({ open: false, status: "anonymous", qr_data_url: null, error: null });
   const [isPostInfoOpen, setIsPostInfoOpen] = useState(false);
   const [downloadContentsRequest, setDownloadContentsRequest] = useState(null);
+  const [batchDownloadMenu, setBatchDownloadMenu] = useState(null);
+  const [individualDownloadProgress, setIndividualDownloadProgress] = useState(null);
+  const [isPreparingShare, setIsPreparingShare] = useState(false);
+  const [shareSupport] = useState(() => detectLibraryShareSupport());
+  const [isIosDevice] = useState(() => detectIosDevice());
   const [profilePostDetail, setProfilePostDetail] = useState({
     isOpen: false,
     isLoading: false,
@@ -1032,6 +1062,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   const profileDownloadPollRef = useRef(null);
   const profilePostDetailRunRef = useRef(0);
   const xiaohongshuAuthPollRef = useRef(null);
+  const individualDownloadTimerRef = useRef(null);
 
   const normalizedUrl = extractUrlCandidate(url);
   const inputLooksLikeUrl = looksLikeUrlInput(url);
@@ -1108,6 +1139,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   useEffect(() => () => {
     clearProfileDownloadPolling();
     if (xiaohongshuAuthPollRef.current) window.clearTimeout(xiaohongshuAuthPollRef.current);
+    if (individualDownloadTimerRef.current) window.clearTimeout(individualDownloadTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -1123,6 +1155,15 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
   }, [xiaohongshuAuth.status]);
 
   useEffect(() => {
+    // A new result invalidates the previous asset URLs, so drop any queued
+    // one-by-one downloads instead of letting them fire against stale ids.
+    if (individualDownloadTimerRef.current) {
+      window.clearTimeout(individualDownloadTimerRef.current);
+      individualDownloadTimerRef.current = null;
+    }
+    setIndividualDownloadProgress(null);
+    setBatchDownloadMenu(null);
+
     if (!result) {
       setSelectedAssetIds([]);
       setSelectedPostIds([]);
@@ -1874,12 +1915,38 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     triggerBrowserDownload(apiUrl(`/api/v1/instagram/requests/${targetResult.request_id}/download.zip`));
   }
 
-  function downloadSelected() {
+  function openBatchDownloadMenu(event) {
+    if (!result || selectedAssets.length === 0) {
+      return;
+    }
+
+    // Keep the element (not a rect snapshot): mobile browsers fire resize when
+    // the URL bar settles or the user zooms, and the menu must re-anchor to the
+    // live button position instead of a stale rect.
+    setBatchDownloadMenu({
+      anchorEl: event.currentTarget,
+      count: selectedAssets.length,
+    });
+
+    logClientAction("batch_download_menu_opened", {
+      request_id: result.request_id,
+      platform: result.platform,
+      shortcode: result.shortcode,
+      selected_count: selectedAssets.length,
+    });
+  }
+
+  function closeBatchDownloadMenu() {
+    setBatchDownloadMenu(null);
+  }
+
+  function downloadSelectedAsZip() {
     if (!result || selectedAssets.length === 0) {
       return;
     }
 
     logClientAction("bulk_asset_download_clicked", {
+      download_mode: "zip",
       request_id: result.request_id,
       platform: result.platform,
       shortcode: result.shortcode,
@@ -1901,6 +1968,127 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
     const zipUrl = `/api/v1/instagram/requests/${result.request_id}/download.zip?asset_ids=${encodeURIComponent(assetIds)}`;
 
     triggerBrowserDownload(apiUrl(zipUrl));
+  }
+
+  function downloadSelectedIndividually() {
+    if (!result || selectedAssets.length === 0) {
+      return;
+    }
+
+    logClientAction("bulk_asset_download_clicked", {
+      download_mode: "individual",
+      request_id: result.request_id,
+      platform: result.platform,
+      shortcode: result.shortcode,
+      selected_asset_ids: selectedAssets.map((asset) => asset.id),
+      selected_count: selectedAssets.length,
+    });
+
+    downloadAssetsOneByOne(selectedAssets);
+  }
+
+  // iOS Safari cannot write to the photo library from a plain download (files
+  // always land in the Files app). The only sanctioned path is the system share
+  // sheet: hand it the image/video blobs and the user taps "Save Image" once to
+  // put the whole batch into Photos.
+  async function saveSelectedToLibrary() {
+    if (!result || selectedAssets.length === 0 || isPreparingShare) {
+      return;
+    }
+
+    const shareable = selectedAssets.filter((asset) => asset.media_type === "image" || asset.media_type === "video");
+    const targets = shareable.length > 0 ? shareable : selectedAssets;
+
+    logClientAction("bulk_asset_download_clicked", {
+      download_mode: "share_to_photos",
+      request_id: result.request_id,
+      platform: result.platform,
+      shortcode: result.shortcode,
+      selected_asset_ids: targets.map((asset) => asset.id),
+      selected_count: targets.length,
+    });
+
+    setIsPreparingShare(true);
+
+    try {
+      const files = await Promise.all(targets.map(async (asset) => {
+        const response = await fetch(apiUrl(asset.download_url), { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        // Some origins serve the non-standard "image/jpg"; iOS rejects it.
+        const type = blob.type === "image/jpg" ? "image/jpeg" : blob.type;
+
+        return new File([blob], asset.filename || "download", type ? { type } : undefined);
+      }));
+
+      await navigator.share({ files });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        // User dismissed the share sheet — nothing to do.
+      } else {
+        logClientAction("share_to_photos_failed", {
+          message: String(error?.message || error),
+          name: error?.name || "unknown",
+          selected_count: targets.length,
+        });
+
+        // Sequential downloads are unreliable on mobile (one download per
+        // gesture), so the ZIP is the only fallback that still delivers
+        // everything on every platform.
+        downloadSelectedAsZip();
+      }
+    } finally {
+      setIsPreparingShare(false);
+    }
+  }
+
+  // Browsers throttle several downloads fired from one gesture, so the queue is
+  // spaced out: each file gets its own navigation event and the user only has to
+  // allow "download multiple files" once.
+  function downloadAssetsOneByOne(assets) {
+    const queue = Array.isArray(assets) ? assets.filter(Boolean) : [];
+
+    if (queue.length === 0) {
+      return;
+    }
+
+    if (individualDownloadTimerRef.current) {
+      window.clearTimeout(individualDownloadTimerRef.current);
+      individualDownloadTimerRef.current = null;
+    }
+
+    let index = 0;
+
+    function tick() {
+      individualDownloadTimerRef.current = null;
+
+      const asset = queue[index];
+      index += 1;
+
+      if (!asset) {
+        setIndividualDownloadProgress(null);
+        return;
+      }
+
+      triggerBrowserDownload(apiUrl(asset.download_url));
+      setIndividualDownloadProgress({ done: index, total: queue.length });
+
+      if (index < queue.length) {
+        individualDownloadTimerRef.current = window.setTimeout(tick, 900);
+        return;
+      }
+
+      individualDownloadTimerRef.current = window.setTimeout(() => {
+        individualDownloadTimerRef.current = null;
+        setIndividualDownloadProgress(null);
+      }, 2000);
+    }
+
+    tick();
   }
 
   function downloadSelectedPosts() {
@@ -2442,13 +2630,22 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                       {copy.invert}
                     </button>
                     <button
-                      className={`${actionButtonBaseClass} h-9 px-4 text-[13px]`}
-                      disabled={selectedAssets.length === 0}
-                      onClick={downloadSelected}
-                      style={buildPrimaryButtonStyle(resultTheme, selectedAssets.length === 0)}
+                      aria-expanded={Boolean(batchDownloadMenu)}
+                      aria-haspopup="menu"
+                      className={`${actionButtonBaseClass} h-9 gap-1.5 px-4 text-[13px]`}
+                      disabled={selectedAssets.length === 0 || Boolean(individualDownloadProgress) || isPreparingShare}
+                      onClick={openBatchDownloadMenu}
+                      style={buildPrimaryButtonStyle(resultTheme, selectedAssets.length === 0 || Boolean(individualDownloadProgress) || isPreparingShare)}
                       type="button"
                     >
-                      {copy.downloadSelected}
+                      <span className="truncate">
+                        {individualDownloadProgress
+                          ? copy.individualDownloadProgress(individualDownloadProgress.done, individualDownloadProgress.total)
+                          : isPreparingShare
+                            ? copy.preparingFiles
+                            : copy.downloadSelected}
+                      </span>
+                      {individualDownloadProgress || isPreparingShare ? null : <ChevronDownIcon />}
                     </button>
                   </div>
                 </div>
@@ -2537,6 +2734,31 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
           language={language}
           onClose={closeProfilePostDetail}
           onRetry={() => openProfilePostDetail(profilePostDetail.post)}
+          theme={resultTheme}
+        />
+      ) : null}
+      {batchDownloadMenu ? (
+        <BatchDownloadMenu
+          anchorEl={batchDownloadMenu.anchorEl}
+          canShareToLibrary={shareSupport}
+          copy={copy}
+          count={batchDownloadMenu.count}
+          isCohereTheme={isCohereTheme}
+          isIosDevice={isIosDevice}
+          isPreparingShare={isPreparingShare}
+          onClose={closeBatchDownloadMenu}
+          onSelectIndividual={() => {
+            closeBatchDownloadMenu();
+            downloadSelectedIndividually();
+          }}
+          onSelectZip={() => {
+            closeBatchDownloadMenu();
+            downloadSelectedAsZip();
+          }}
+          onSaveToLibrary={() => {
+            closeBatchDownloadMenu();
+            saveSelectedToLibrary();
+          }}
           theme={resultTheme}
         />
       ) : null}
@@ -3347,6 +3569,37 @@ function ClearIcon() {
   );
 }
 
+function ArchiveIcon() {
+  return (
+    <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24">
+      <rect height="4" rx="1.4" stroke="currentColor" strokeWidth="2" width="18" x="3" y="4" />
+      <path d="M5 8v10.2A1.8 1.8 0 0 0 6.8 20h10.4a1.8 1.8 0 0 0 1.8-1.8V8" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      <path d="M10 12.5h4" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function ImagesIcon() {
+  return (
+    <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24">
+      <path d="M8.5 7V5.8A1.8 1.8 0 0 1 10.3 4h8.9A1.8 1.8 0 0 1 21 5.8v8.9a1.8 1.8 0 0 1-1.8 1.8H18" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      <rect height="12" rx="1.8" stroke="currentColor" strokeWidth="2" width="15" x="3" y="8" />
+      <path d="m6.5 16.8 2.8-2.8a1.1 1.1 0 0 1 1.6 0l2.3 2.3 1.1-1.1a1.1 1.1 0 0 1 1.6 0l1.6 1.6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <circle cx="7.8" cy="11.6" fill="currentColor" r="1.1" />
+    </svg>
+  );
+}
+
+function PhotosIcon() {
+  return (
+    <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24">
+      <rect height="16" rx="2.4" stroke="currentColor" strokeWidth="2" width="20" x="2" y="4" />
+      <path d="m4.5 17 4.3-4.3a1.4 1.4 0 0 1 2 0l3.2 3.2 2-2a1.4 1.4 0 0 1 2 0l2.5 2.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <circle cx="16.4" cy="8.6" fill="currentColor" r="1.4" />
+    </svg>
+  );
+}
+
 function SelectionCheckIcon() {
   return (
     <svg aria-hidden="true" className="size-3.5" fill="none" viewBox="0 0 16 16">
@@ -3443,6 +3696,308 @@ function AudioIcon() {
       <circle cx="15" cy="16" r="3" stroke="currentColor" strokeWidth="2" />
     </svg>
   );
+}
+
+function BatchDownloadMenu({ anchorEl, canShareToLibrary, copy, count, isCohereTheme, isIosDevice, isPreparingShare, onClose, onSelectIndividual, onSelectZip, onSaveToLibrary, theme }) {
+  const isSheet = useSheetViewport();
+  const panelRef = useRef(null);
+  const [, setViewportTick] = useState(0);
+  const position = computeBatchDownloadMenuPosition(anchorEl, isSheet);
+  // The share-sheet path is the only reliable "into Photos" route: phones
+  // (bottom sheet) and iPad, which pretends to be a desktop Mac under a wide
+  // viewport.
+  const showLibraryOption = canShareToLibrary && (isSheet || isIosDevice);
+  // Mobile browsers complete at most ONE automatic download per gesture — iOS
+  // drops the rest behind per-file prompts, Android Chrome discards them
+  // silently. Sequential downloads are desktop-only; phones use the share
+  // sheet or the ZIP instead.
+  const showIndividualOption = !isSheet && !isIosDevice;
+  const items = [
+    { hint: copy.downloadAsZipHint, iconId: "zip", id: "zip", label: copy.downloadAsZip, onSelect: onSelectZip },
+    ...(showIndividualOption
+      ? [{ hint: copy.downloadIndividuallyHint, iconId: "images", id: "individual", label: copy.downloadIndividually, onSelect: onSelectIndividual }]
+      : []),
+    ...(showLibraryOption
+      ? [{
+          disabled: isPreparingShare,
+          hint: isIosDevice ? copy.saveToLibraryHint : copy.shareSaveHint,
+          iconId: "photos",
+          id: "library",
+          label: isIosDevice ? copy.saveToLibrary : copy.shareSave,
+          onSelect: onSaveToLibrary,
+        }]
+      : []),
+  ];
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    // Resize must not close the menu: mobile browsers fire resize when the URL
+    // bar settles or the user zooms, which used to flash the menu closed right
+    // after opening. Recompute the anchored position instead.
+    function handleResize() {
+      if (anchorEl && !anchorEl.isConnected) {
+        onClose();
+        return;
+      }
+
+      setViewportTick((tick) => tick + 1);
+    }
+
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [anchorEl, onClose]);
+
+  useEffect(() => {
+    if (isSheet) {
+      // On phones, focusing a menu item can nudge the visual viewport (URL bar
+      // relayout) and buys nothing without a keyboard — skip it.
+      return undefined;
+    }
+
+    // RAC mounts the menu items one paint after the panel, so focus has to be
+    // deferred or the panel itself ends up with no focused child.
+    const timer = window.setTimeout(() => {
+      const target = panelRef.current?.querySelector("[role='menuitem'], button");
+
+      target?.focus({ preventScroll: true });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [isSheet]);
+
+  return (
+    <div className="fixed inset-0 z-[90]" role="presentation">
+      <div
+        aria-hidden="true"
+        className={isSheet
+          ? "absolute inset-0 bg-[rgba(8,17,31,0.44)] backdrop-blur-[3px]"
+          : "absolute inset-0"}
+        onClick={onClose}
+      />
+      <div
+        aria-label={isCohereTheme ? undefined : copy.downloadModeTitle}
+        aria-modal={isCohereTheme ? undefined : (isSheet ? "true" : undefined)}
+        className={isCohereTheme
+          ? "c-menu-sheet"
+          : `absolute z-[91] flex flex-col gap-1 border backdrop-blur-[26px] ${isSheet
+            ? "inset-x-0 bottom-0 rounded-t-[1.5rem] px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-2.5"
+            : "rounded-[1.15rem] p-2.5"}`}
+        ref={panelRef}
+        role={isCohereTheme ? "presentation" : "dialog"}
+        style={isCohereTheme ? position : { ...position, ...buildBatchDownloadMenuStyle(theme) }}
+      >
+        {isSheet ? (
+          <span
+            aria-hidden="true"
+            className={isCohereTheme ? "c-menu-grabber" : "mx-auto mb-0.5 h-1 w-10 rounded-full"}
+            style={isCohereTheme ? undefined : { backgroundColor: theme.border }}
+          />
+        ) : null}
+
+        <div className={isCohereTheme ? "c-menu-head" : "px-2 pb-2.5 pt-3"}>
+          <div className={isCohereTheme ? "c-menu-title" : "text-[15px] font-black"} style={isCohereTheme ? undefined : { color: theme.bodyText }}>
+            {copy.downloadModeTitle}
+          </div>
+          <div className={isCohereTheme ? "c-menu-subtitle" : "mt-0.5 text-xs font-medium"} style={isCohereTheme ? undefined : { color: theme.mutedText }}>
+            {copy.downloadModeCount(count)}
+          </div>
+        </div>
+
+        {isCohereTheme ? (
+          <CohereActionMenu
+            items={items}
+            label={copy.downloadModeTitle}
+            onAction={(id) => {
+              items.find((item) => item.id === id)?.onSelect();
+            }}
+          />
+        ) : (
+          <div className="grid gap-2.5">
+            {items.map((item) => (
+              <button
+                className="lm-themed-action flex w-full cursor-pointer items-center gap-3 rounded-[1.05rem] border px-3.5 py-3.5 text-left transition duration-300 disabled:cursor-not-allowed disabled:opacity-55"
+                disabled={Boolean(item.disabled)}
+                key={item.id}
+                onClick={item.onSelect}
+                style={buildBatchDownloadMenuItemStyle(theme)}
+                type="button"
+              >
+                <span
+                  aria-hidden="true"
+                  className="grid size-11 shrink-0 place-items-center rounded-[0.85rem] border"
+                  style={{
+                    backgroundColor: hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.16 : 0.1),
+                    backgroundImage: theme.glassGradientSoft,
+                    borderColor: theme.panelBorder ?? theme.border,
+                    color: theme.accentText,
+                  }}
+                >
+                  {item.id === "zip" ? <ArchiveIcon /> : item.id === "library" ? <PhotosIcon /> : <ImagesIcon />}
+                </span>
+                <span className="grid min-w-0 flex-1 gap-1">
+                  <span className="text-sm font-bold" style={{ color: theme.accentText }}>{item.label}</span>
+                  <span className="text-xs font-medium leading-snug" style={{ color: theme.mutedText }}>{item.hint}</span>
+                </span>
+                <span aria-hidden="true" className="shrink-0" style={{ color: theme.mutedText }}>
+                  <ChevronRightIcon />
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {isSheet ? (
+          isCohereTheme ? (
+            <CohereButton className="c-menu-cancel" onPress={onClose} tone="quiet">{copy.cancel}</CohereButton>
+          ) : (
+            <button
+              className="mt-1.5 flex h-11 w-full cursor-pointer items-center justify-center rounded-full text-sm font-semibold transition active:opacity-60"
+              onClick={onClose}
+              style={{ color: theme.mutedText }}
+              type="button"
+            >
+              {copy.cancel}
+            </button>
+          )
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function detectLibraryShareSupport() {
+  if (
+    typeof navigator === "undefined"
+    || typeof navigator.share !== "function"
+    || typeof navigator.canShare !== "function"
+    || typeof File !== "function"
+  ) {
+    return false;
+  }
+
+  try {
+    const probe = new File([new Blob()], "probe.jpg", { type: "image/jpeg" });
+
+    return Boolean(navigator.canShare({ files: [probe] }));
+  } catch {
+    return false;
+  }
+}
+
+function detectIosDevice() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  const userAgent = navigator.userAgent || "";
+
+  // iPadOS 13+ reports a desktop Mac UA under a wide viewport; the touch-point
+  // check is the only reliable tell.
+  return /iPad|iPhone|iPod/.test(userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function useSheetViewport() {
+  const [isSheet, setIsSheet] = useState(() => (
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 599px)").matches
+      : false
+  ));
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return undefined;
+    }
+
+    const query = window.matchMedia("(max-width: 599px)");
+    const update = () => setIsSheet(query.matches);
+
+    update();
+
+    // Older mobile WebViews only ship the deprecated addListener API.
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", update);
+
+      return () => query.removeEventListener("change", update);
+    }
+
+    query.addListener(update);
+
+    return () => query.removeListener(update);
+  }, []);
+
+  return isSheet;
+}
+
+function computeBatchDownloadMenuPosition(anchorEl, isSheet) {
+  if (isSheet) {
+    return { bottom: 0, left: 0, right: 0, top: "auto", width: "auto" };
+  }
+
+  if (!anchorEl || typeof anchorEl.getBoundingClientRect !== "function") {
+    return { bottom: "auto", left: "auto", right: 16, top: 80, width: 336 };
+  }
+
+  const rect = anchorEl.getBoundingClientRect();
+  const margin = 12;
+  const gap = 8;
+  const estimatedHeight = 252;
+  const viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 900 : window.innerHeight;
+  const width = Math.min(336, viewportWidth - margin * 2);
+  const right = Math.min(
+    Math.max(margin, viewportWidth - rect.right),
+    Math.max(margin, viewportWidth - width - margin),
+  );
+  const placeAbove = rect.bottom + gap + estimatedHeight > viewportHeight;
+
+  if (placeAbove) {
+    return { bottom: viewportHeight - rect.top + gap, left: "auto", right, top: "auto", width };
+  }
+
+  return { bottom: "auto", left: "auto", right, top: rect.bottom + gap, width };
+}
+
+function buildBatchDownloadMenuStyle(theme) {
+  return {
+    backgroundColor: theme.cardBackground,
+    backgroundImage: theme.cardGradient,
+    borderColor: theme.cardBorder ?? theme.panelBorder,
+    boxShadow: theme.panelShadow ?? "0 26px 60px rgba(15, 23, 42, 0.22)",
+    color: theme.bodyText,
+    transition: themeTransition,
+  };
+}
+
+function buildBatchDownloadMenuItemStyle(theme) {
+  return {
+    color: theme.accentText,
+    backgroundColor: hexToRgba(theme.accent, theme.colorMode === "dark" ? 0.12 : 0.06),
+    backgroundImage: theme.glassGradientSoft,
+    borderColor: theme.border,
+    boxShadow: "none",
+    transition: themeTransition,
+    ...buildActionInteractionVars(theme),
+  };
 }
 
 function DownloadContentsModal({ copy, onClose, onDownload, result, theme }) {

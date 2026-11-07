@@ -170,7 +170,6 @@ const copyByLanguage = {
     selectedPostsCount: (count) => `已选 ${count} 个帖子`,
     selectedCount: (count) => `已选 ${count} 个`,
     selectPost: "选中帖子",
-    subtitle: "搜索、收藏并整理社媒灵感，一处完成。",
     urlLabel: "社媒链接",
     urlPlaceholder: "支持 Instagram、Threads、小红书、小宇宙、V2EX、Reddit、Pinterest、YouTube、TikTok、抖音、快手、视频号、B 站、A 站链接...",
     unselectPost: "取消选中帖子",
@@ -310,7 +309,6 @@ const copyByLanguage = {
     selectedPostsCount: (count) => `${count} Posts Selected`,
     selectedCount: (count) => `${count} Selected`,
     selectPost: "Select post",
-    subtitle: "Search, collect, and organize social inspiration in one clean workspace.",
     urlLabel: "Social URL",
     urlPlaceholder: "Paste Instagram, Xiaohongshu, Xiaoyuzhou, V2EX, Reddit, Pinterest, YouTube, TikTok, Douyin, Kuaishou, WeChat Channels, Bilibili, or AcFun URL...",
     unselectPost: "Unselect post",
@@ -2120,21 +2118,13 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                 >
                   {appName}
                 </h1>
-                <p
-                  className={`${isCohereTheme ? "max-w-[18rem]" : "mx-auto max-w-2xl"} overflow-hidden transition-all duration-500 ${
-                    isCohereTheme ? "mt-3 max-h-20 text-sm opacity-100 sm:text-base" : hasOutput ? "mt-1 max-h-0 text-sm opacity-0" : "mt-4 max-h-14 text-base opacity-100 sm:text-lg"
-                  }`}
-                  style={{ color: inputDrivenTheme.mutedText }}
-                >
-                  {copy.subtitle}
-                </p>
               </div>
 
               <form
                 noValidate
                 className={`${isCohereTheme
                   ? "mt-7 rounded-[1.25rem] p-3.5 sm:p-4"
-                  : `mx-auto max-w-6xl ${hasOutput ? "mt-4 rounded-[1.5rem] p-3 sm:p-4" : "mt-6 rounded-[2rem] p-4 sm:p-5"}`
+                  : `mx-auto max-w-6xl ${hasOutput ? "mt-4 rounded-[1.5rem] p-3 sm:p-4" : "mt-8 rounded-[2rem] p-4 sm:mt-10 sm:p-5"}`
                 } w-full transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${glassPanelClass} ${inputDrivenTheme.panelClass}`}
                 onSubmit={onSubmit}
                 style={formStyle}

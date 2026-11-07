@@ -4,9 +4,12 @@
  * Cohere sidebar — the only place the search controls live in this theme.
  *
  * Layout contract (design-md/cohere/UI-PARADIGM.md §3):
- *   eyebrow row → title → subtitle → field → primary action → platform chips
+ *   title → field → primary action → platform chips
  *   … flex spacer …
  *   footer: language + appearance segmented controls
+ *
+ * No eyebrow row and no marketing subtitle: the sidebar opens straight on the
+ * product name. Keep it that way — the paradigm forbids re-adding filler labels.
  *
  * The input is a 1-row textarea that grows to fit long URLs (max ~4 lines), so a
  * pasted permalink stays readable instead of being clipped at the first fold.
@@ -93,18 +96,7 @@ export function CohereSidebar({
   return (
     <aside className="c-sidebar">
       <div className="c-sidebar-body">
-        <div className="c-eyebrow-row">
-          <span className="c-eyebrow">{isZh ? "工作区" : "Workspace"}</span>
-          <span className="c-status">
-            <span aria-hidden="true" className="c-status-dot" />
-            {isZh ? "就绪" : "Ready"}
-          </span>
-        </div>
-
-        <div className="grid gap-2.5">
-          <h1 className="c-title">{appName}</h1>
-          <p className="c-subtitle">{copy.subtitle}</p>
-        </div>
+        <h1 className="c-title">{appName}</h1>
 
         <form className="c-form" noValidate onSubmit={onSubmit}>
           <label className="sr-only" htmlFor="social-url">

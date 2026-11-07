@@ -330,38 +330,6 @@
 
 /* 3. Surfaces -------------------------------------------------------------- */
 
-.lm-page[data-ui-theme="cohere"] .c-eyebrow-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.lm-page[data-ui-theme="cohere"] .c-eyebrow {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--c-label-3);
-}
-
-.lm-page[data-ui-theme="cohere"] .c-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--c-label-3);
-}
-
-.lm-page[data-ui-theme="cohere"] .c-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background-color: var(--c-positive);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-positive) 16%, transparent);
-}
-
 .lm-page[data-ui-theme="cohere"] .c-title {
   margin: 0;
   font-family: var(--c-font-ui);
@@ -370,14 +338,6 @@
   letter-spacing: -0.032em;
   line-height: 1.08;
   color: var(--c-label-1);
-}
-
-.lm-page[data-ui-theme="cohere"] .c-subtitle {
-  margin: 0;
-  max-width: 30ch;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--c-label-2);
 }
 
 .lm-page[data-ui-theme="cohere"] .c-pane-head {

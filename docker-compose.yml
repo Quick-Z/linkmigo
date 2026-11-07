@@ -3,9 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # 0.2.17 是多架构标签（amd64 + arm64），会自动匹配 NAS 的芯片架构，
-    # 不需要再手动指定 platform。若想固定架构，可改用 0.2.17-amd64 / 0.2.17-arm64。
-    image: k21vin/linkmigo:0.2.18
+    # 0.2.19 是多架构标签（amd64 + arm64），会自动匹配 NAS 的芯片架构，
+    # 不需要再手动指定 platform。若想固定架构，可改用 0.2.19-amd64 / 0.2.19-arm64。
+    image: k21vin/linkmigo:0.2.19
     container_name: linkmigo
     hostname: linkmigo
     restart: unless-stopped

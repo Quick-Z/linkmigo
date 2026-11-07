@@ -49,4 +49,10 @@ next-env.d.ts
 /logs
 /logs/*.log
 !/logs/.gitkeep
-/design-md
+# 设计参考素材（整目录为营销站抓取，只有 cohere 应用范式纳入版本管理）
+/design-md/*
+!/design-md/cohere/
+
+# 本地 Agent 工作区状态
+/.workbuddy/
+/.workbuddy-ai/

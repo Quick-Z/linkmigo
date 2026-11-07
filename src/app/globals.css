@@ -33,24 +33,11 @@ body {
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
-/* Cohere's type split is opt-in and scoped to the page so the existing
-   default theme remains byte-for-byte compatible when no theme is selected. */
+/* Cohere's type system moved into src/app/social-downloader/_theme/cohere/cohere.css
+   (single system-UI voice, HIG scale). Keep these variables only as fallbacks
+   for legacy markup that still references them. */
 .lm-page[data-ui-theme="cohere"] {
-  font-family: var(--font-cohere-body);
   letter-spacing: 0;
-}
-
-.lm-page[data-ui-theme="cohere"] h1,
-.lm-page[data-ui-theme="cohere"] h2,
-.lm-page[data-ui-theme="cohere"] h3 {
-  font-family: var(--font-cohere-display);
-  font-weight: 400;
-}
-
-.lm-page[data-ui-theme="cohere"] input,
-.lm-page[data-ui-theme="cohere"] button,
-.lm-page[data-ui-theme="cohere"] a {
-  font-family: var(--font-cohere-body);
 }
 
 .lm-page[data-ui-theme="cohere"] .font-mono {

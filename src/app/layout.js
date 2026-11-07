@@ -1,4 +1,7 @@
 import "./globals.css";
+// Cohere theme skin. Every rule inside is scoped to [data-ui-theme="cohere"],
+// so the default theme is unaffected. See design-md/cohere/UI-PARADIGM.md.
+import "./social-downloader/_theme/cohere/cohere.css";
 
 import { getAppName } from "@/lib/app-config";
 

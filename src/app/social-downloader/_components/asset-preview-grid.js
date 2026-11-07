@@ -114,7 +114,7 @@ export function AssetPreviewGrid({
         return (
           <article
             aria-pressed={isSelected}
-            className="group grid min-w-0 cursor-pointer content-start gap-2 rounded-[1.15rem] border p-2.5 outline-none backdrop-blur-xl transition duration-300 focus:outline-none focus-visible:outline-none"
+            className={`group grid min-w-0 cursor-pointer content-start gap-2 border p-2.5 outline-none transition duration-300 focus:outline-none focus-visible:outline-none ${theme.uiTheme === "cohere" ? "c-card" : "rounded-[1.15rem] backdrop-blur-xl"}`}
             key={asset.id}
             onClick={() => onToggleAsset(asset.id)}
             onKeyDown={(event) => {
@@ -158,7 +158,9 @@ export function AssetPreviewGrid({
             </div>
 
             <div
-              className={`relative aspect-[4/3.15] overflow-hidden rounded-[0.9rem] border outline-none focus:outline-none focus-visible:outline-none ${
+              className={`relative aspect-[4/3.15] overflow-hidden border outline-none focus:outline-none focus-visible:outline-none ${
+                theme.uiTheme === "cohere" ? "c-card-media" : "rounded-[0.9rem]"
+              } ${
                 asset.media_type === "audio" || asset.media_type === "text" ? "cursor-pointer" : "cursor-zoom-in"
               }`}
               onClick={(event) => {
@@ -261,7 +263,9 @@ export function AssetPreviewGrid({
 
             <a
               aria-label={`${copy.download} ${asset.filename}`}
-              className="lm-themed-action inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-full border px-3 text-xs font-semibold transition"
+              className={theme.uiTheme === "cohere"
+                ? "c-card-action"
+                : "lm-themed-action inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-full border px-3 text-xs font-semibold transition"}
               href={apiUrl(asset.download_url)}
               onClick={(event) => {
                 event.stopPropagation();
@@ -273,7 +277,7 @@ export function AssetPreviewGrid({
                   download_url: asset.download_url,
                 });
               }}
-              style={buildActionButtonStyle(theme)}
+              style={theme.uiTheme === "cohere" ? undefined : buildActionButtonStyle(theme)}
             >
               {copy.download}
             </a>

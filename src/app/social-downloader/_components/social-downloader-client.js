@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssetPreviewGrid } from "./asset-preview-grid";
+import { CohereSidebar } from "../_theme/cohere/cohere-sidebar";
+// Cohere tokens live in their own module: the default theme never imports them.
+import { cohereThemeTokens } from "../_theme/cohere/tokens";
 import { logClientAction } from "../_lib/user-action-log";
 import {
   apiUrl,
@@ -411,133 +414,6 @@ const colorModeTokens = {
   },
 };
 
-// Cohere is intentionally isolated from the existing platform themes. The
-// default theme continues to use the original per-platform colour language;
-// opting into Cohere swaps the complete surface/token set instead.
-const cohereThemeTokens = {
-  light: {
-    pageBackground: "#ffffff",
-    pageText: "#212121",
-    titleText: "#17171c",
-    bodyText: "#212121",
-    mutedText: "#616161",
-    subtleText: "#75758a",
-    placeholderText: "#93939f",
-    panelBorder: "#d9d9dd",
-    panelClass: "border-[#d9d9dd] bg-white/90 shadow-[0_24px_60px_rgba(33,33,33,0.08)]",
-    pageBackdrop: "radial-gradient(circle at 9% 12%, rgba(255,119,89,0.26), transparent 31%), radial-gradient(circle at 74% 24%, rgba(24,99,220,0.18), transparent 38%), radial-gradient(circle at 50% 100%, rgba(0,60,51,0.12), transparent 42%), linear-gradient(135deg, #ffffff 0%, #eeece7 100%)",
-    glowA: "rgba(255,119,89,0.22)",
-    glowB: "rgba(24,99,220,0.16)",
-    glowC: "rgba(0,60,51,0.12)",
-    glassGradient: "linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(238,236,231,0.9) 100%)",
-    glassGradientSoft: "linear-gradient(135deg, rgba(255,255,255,0.96) 0%, rgba(245,245,242,0.9) 100%)",
-    resultGradient: "linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(241,245,255,0.94) 52%, rgba(237,252,233,0.9) 100%)",
-    chipText: "#212121",
-    chipBackground: "rgba(255,255,255,0.86)",
-    chipBorder: "#d9d9dd",
-    chipShadow: "inset 0 1px 0 rgba(255,255,255,0.92)",
-    inputText: "#212121",
-    invalidBackground: "#fff5f2",
-    invalidText: "#b30000",
-    cardBackground: "#ffffff",
-    cardGradient: "linear-gradient(135deg, #ffffff 0%, #f7f7f5 100%)",
-    cardBorder: "#f2f2f2",
-    cardShadow: "0 14px 30px rgba(33,33,33,0.06)",
-    disabledBackground: "#eeece7",
-    disabledBorder: "#d9d9dd",
-    disabledText: "#93939f",
-    iconBackground: "#f1f5ff",
-    mediaOverlay: "rgba(0,60,51,0.08)",
-    modalHeaderBackground: "rgba(255,255,255,0.9)",
-    modalPanelBackground: "rgba(255,255,255,0.94)",
-    selectionBackground: "rgba(255,119,89,0.1)",
-    modalButtonBackground: "#ffffff",
-    modalButtonText: "#212121",
-    previewBackdropOverlay: "radial-gradient(circle at center, rgba(255,119,89,0.16), rgba(238,236,231,0.7) 72%)",
-    previewBackdropVeil: "linear-gradient(135deg, rgba(255,119,89,0.14) 0%, rgba(255,255,255,0.34) 48%, rgba(0,60,51,0.16) 100%)",
-    toolbarBackground: "rgba(255,255,255,0.9)",
-    toolbarText: "#212121",
-    accent: "#17171c",
-    accentStrong: "#003c33",
-    accentText: "#212121",
-    accentMuted: "#75758a",
-    buttonText: "#ffffff",
-    border: "#d9d9dd",
-    borderStrong: "#17171c",
-    ring: "rgba(76,110,230,0.28)",
-    panelShadow: "0 24px 60px rgba(33,33,33,0.08)",
-    buttonShadow: "0 14px 28px rgba(0,60,51,0.18)",
-    selectedShadow: "0 18px 36px rgba(0,60,51,0.14)",
-    glassEnd: "rgba(238,236,231,0.9)",
-    cardEnd: "#f7f7f5",
-    buttonGradient: "linear-gradient(135deg, #17171c 0%, #003c33 100%)",
-    progressGradient: "linear-gradient(90deg, #ff7759 0%, #1863dc 52%, #003c33 100%)",
-    skeletonGradient: "linear-gradient(90deg, rgba(255,119,89,0.16) 0%, rgba(255,255,255,0.96) 48%, rgba(24,99,220,0.14) 100%)",
-    previewGradient: "linear-gradient(135deg, #ffad9b 0%, #f1f5ff 52%, #edfce9 100%)",
-    mediaTint: "rgba(255,255,255,0.76)",
-  },
-  dark: {
-    pageBackground: "#071829",
-    pageText: "#ffffff",
-    titleText: "#ffffff",
-    bodyText: "#f5f5f4",
-    mutedText: "#b7b7bd",
-    subtleText: "#a4a4b0",
-    placeholderText: "#93939f",
-    panelBorder: "rgba(255,255,255,0.18)",
-    panelClass: "border-white/15 bg-[#17171c]/90 shadow-[0_28px_70px_rgba(0,0,0,0.34)]",
-    pageBackdrop: "radial-gradient(circle at 7% 12%, rgba(255,119,89,0.36), transparent 30%), radial-gradient(circle at 76% 18%, rgba(76,110,230,0.32), transparent 38%), radial-gradient(circle at 64% 86%, rgba(0,60,51,0.4), transparent 44%), linear-gradient(135deg, #071829 0%, #17171c 56%, #000000 100%)",
-    glowA: "rgba(255,119,89,0.28)",
-    glowB: "rgba(76,110,230,0.22)",
-    glowC: "rgba(0,60,51,0.26)",
-    glassGradient: "linear-gradient(135deg, rgba(35,35,42,0.95) 0%, rgba(7,24,41,0.92) 100%)",
-    glassGradientSoft: "linear-gradient(135deg, rgba(38,38,46,0.95) 0%, rgba(0,60,51,0.68) 100%)",
-    resultGradient: "linear-gradient(135deg, rgba(23,23,28,0.96) 0%, rgba(7,24,41,0.94) 52%, rgba(0,60,51,0.82) 100%)",
-    chipText: "#f5f5f4",
-    chipBackground: "rgba(23,23,28,0.82)",
-    chipBorder: "rgba(255,255,255,0.18)",
-    chipShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
-    inputText: "#ffffff",
-    invalidBackground: "rgba(86,20,18,0.8)",
-    invalidText: "#ffad9b",
-    cardBackground: "rgba(23,23,28,0.92)",
-    cardGradient: "linear-gradient(135deg, rgba(38,38,46,0.96) 0%, rgba(7,24,41,0.9) 100%)",
-    cardBorder: "rgba(255,255,255,0.14)",
-    cardShadow: "0 18px 42px rgba(0,0,0,0.28)",
-    disabledBackground: "rgba(23,23,28,0.72)",
-    disabledBorder: "rgba(255,255,255,0.16)",
-    disabledText: "#93939f",
-    iconBackground: "rgba(255,119,89,0.14)",
-    mediaOverlay: "rgba(0,0,0,0.2)",
-    modalHeaderBackground: "rgba(23,23,28,0.9)",
-    modalPanelBackground: "rgba(7,24,41,0.92)",
-    selectionBackground: "rgba(255,119,89,0.15)",
-    modalButtonBackground: "rgba(255,255,255,0.08)",
-    modalButtonText: "#ffffff",
-    previewBackdropOverlay: "radial-gradient(circle at center, rgba(255,119,89,0.2), rgba(0,0,0,0.72) 72%)",
-    previewBackdropVeil: "linear-gradient(135deg, rgba(255,119,89,0.22) 0%, rgba(7,24,41,0.26) 48%, rgba(0,0,0,0.72) 100%)",
-    toolbarBackground: "rgba(7,24,41,0.88)",
-    toolbarText: "#ffffff",
-    accent: "#ff7759",
-    accentStrong: "#ffad9b",
-    accentText: "#ffffff",
-    accentMuted: "#ffad9b",
-    buttonText: "#17171c",
-    border: "rgba(255,119,89,0.34)",
-    borderStrong: "rgba(255,173,155,0.5)",
-    ring: "rgba(255,119,89,0.28)",
-    panelShadow: "0 28px 70px rgba(0,0,0,0.38), 0 12px 30px rgba(0,60,51,0.2)",
-    buttonShadow: "0 16px 34px rgba(255,119,89,0.22)",
-    selectedShadow: "0 20px 42px rgba(255,119,89,0.2)",
-    glassEnd: "rgba(7,24,41,0.92)",
-    cardEnd: "rgba(7,24,41,0.9)",
-    buttonGradient: "linear-gradient(135deg, #ffffff 0%, #eeece7 100%)",
-    progressGradient: "linear-gradient(90deg, #ff7759 0%, #ffad9b 48%, #4c6ee6 100%)",
-    skeletonGradient: "linear-gradient(90deg, rgba(255,119,89,0.2) 0%, rgba(23,23,28,0.96) 48%, rgba(76,110,230,0.2) 100%)",
-    previewGradient: "linear-gradient(135deg, #ff7759 0%, #071829 52%, #003c33 100%)",
-    mediaTint: "rgba(7,24,41,0.74)",
-  },
-};
 
 const darkPlatformThemeOverrides = {
   instagram: {
@@ -2163,7 +2039,9 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
 
   return (
     <main
-      className="lm-page relative h-[100svh] overflow-hidden transition-colors duration-700"
+      className={isCohereTheme
+        ? "lm-page c-root relative h-[100svh] overflow-hidden"
+        : "lm-page relative h-[100svh] overflow-hidden transition-colors duration-700"}
       data-color-mode={colorMode}
       data-ui-theme={themeName}
       style={{ backgroundColor: inputDrivenTheme.pageBackground, color: inputDrivenTheme.pageText }}
@@ -2175,25 +2053,62 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
         <div className="absolute bottom-[-14%] left-[18%] h-[20rem] w-[20rem] rounded-full blur-[80px] transition-colors duration-700" style={{ backgroundColor: inputDrivenTheme.glowC }} />
       </div>
 
-      <section className={`relative mx-auto flex h-full w-full max-w-[1480px] flex-col overflow-hidden px-3 py-4 sm:px-7 sm:py-6 lg:px-10 ${isCohereTheme ? "lg:mx-0 lg:max-w-none lg:grid lg:grid-cols-[minmax(19rem,23rem)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-x-6 lg:px-0 lg:py-3 lg:pr-12" : ""}`}>
-        <PreferenceControls
-          colorMode={colorMode}
-          copy={copy}
-          isCohereTheme={isCohereTheme}
-          language={language}
-          onColorModeChange={setColorMode}
-          onLanguageChange={setLanguage}
-          theme={inputDrivenTheme}
-        />
+      <section className={isCohereTheme ? "c-window" : "relative mx-auto flex h-full w-full max-w-[1480px] flex-col overflow-hidden px-3 py-4 sm:px-7 sm:py-6 lg:px-10"}>
+        {isCohereTheme ? <div aria-hidden="true" className="c-aurora" /> : null}
 
+        {!isCohereTheme ? (
+          <PreferenceControls
+            colorMode={colorMode}
+            copy={copy}
+            isCohereTheme={isCohereTheme}
+            language={language}
+            onColorModeChange={setColorMode}
+            onLanguageChange={setLanguage}
+            theme={inputDrivenTheme}
+          />
+        ) : null}
+
+        {isCohereTheme ? (
+          <CohereSidebar
+            appName={appName}
+            canSubmit={canSubmit}
+            colorMode={colorMode}
+            copy={copy}
+            hasResult={Boolean(result)}
+            isInputFocused={isInputFocused}
+            isInvalid={Boolean(normalizedUrl && !canSubmit)}
+            isKeywordMode={isKeywordMode}
+            isLoading={isLoading}
+            language={language}
+            loginLabel={xiaohongshuAuth.status === "authenticated" ? "小红书已登录" : "小红书扫码登录"}
+            onClearUrl={clearUrl}
+            onColorModeChange={setColorMode}
+            onInputBlur={() => setIsInputFocused(false)}
+            onInputFocus={() => setIsInputFocused(true)}
+            onLanguageChange={setLanguage}
+            onOpenPlatformLogin={openXiaohongshuLogin}
+            onReset={reset}
+            onSubmit={onSubmit}
+            onTogglePlatform={(platformId) => setSearchPlatforms((current) => (current.includes(platformId) ? current.filter((item) => item !== platformId) : [...current, platformId]))}
+            onUrlChange={onUrlChange}
+            placeholder={isKeywordMode ? (language === "zh" ? "输入关键词，选择平台后搜索..." : "Enter a keyword, then choose platforms to search...") : copy.urlPlaceholder}
+            platformChips={keywordSearchPlatforms.map((platform) => ({
+              color: platform.color,
+              enabled: platform.enabled,
+              id: platform.id,
+              label: getPlatformLabel(platform.id, copy),
+              selected: searchPlatforms.includes(platform.id),
+            }))}
+            showLogin={!isKeywordMode && inputPlatform === "xiaohongshu"}
+            url={url}
+          />
+        ) : (
         <div
-          className={`mx-auto w-full max-w-6xl pb-3 pt-0 transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${isCohereTheme ? "lg:col-start-1 lg:row-start-1 lg:row-span-1 lg:mx-0 lg:flex lg:min-h-0 lg:max-w-none lg:flex-col lg:pb-0 lg:pt-0" : ""}`}
-          style={{ transform: isCohereTheme || hasOutput ? "translate3d(0,0,0)" : "translate3d(0, clamp(2.75rem, 11svh, 7.5rem), 0)" }}
+          className="mx-auto w-full max-w-6xl pb-3 pt-0 transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
+          style={{ transform: hasOutput ? "translate3d(0,0,0)" : "translate3d(0, clamp(2.75rem, 11svh, 7.5rem), 0)" }}
         >
-          <div className={`relative ${isCohereTheme ? "flex min-h-0 flex-1 flex-col rounded-[1.5rem] border p-4 sm:p-5 lg:rounded-[1.75rem]" : hasOutput ? "pt-12 sm:pt-14" : "pt-20 sm:pt-24 lg:pt-28"}`} style={isCohereTheme ? buildCohereSidebarStyle(inputDrivenTheme) : undefined}>
-            {!isCohereTheme ? (
-              <MediaStack compact={hasOutput} mutedDarkPlayIcon={colorMode === "dark" && !normalizedUrl} theme={inputDrivenTheme} />
-            ) : null}
+          <div className={`relative ${hasOutput ? "pt-12 sm:pt-14" : "pt-20 sm:pt-24 lg:pt-28"}`}>
+            <MediaStack compact={hasOutput} mutedDarkPlayIcon={colorMode === "dark" && !normalizedUrl} theme={inputDrivenTheme} />
 
             <div className="relative z-10">
               <div className={isCohereTheme ? "text-left" : "text-center"}>
@@ -2403,25 +2318,28 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
             ) : null}
           </div>
         </div>
+        )}
 
         <div
-          className={`mx-auto flex min-h-0 w-full max-w-6xl flex-1 transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-            hasOutput ? "mt-4 translate-y-0 opacity-100" : isCohereTheme ? "mt-0 translate-y-0 opacity-100" : "pointer-events-none mt-0 translate-y-6 opacity-0"
-          } ${isCohereTheme ? "lg:col-start-2 lg:row-start-1 lg:mx-0 lg:max-w-none lg:pt-14" : ""}`}
+          className={isCohereTheme
+            ? "c-pane"
+            : `mx-auto flex min-h-0 w-full max-w-6xl flex-1 transition-all duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${hasOutput ? "mt-4 translate-y-0 opacity-100" : "pointer-events-none mt-0 translate-y-6 opacity-0"}`}
         >
-          {!hasOutput && isCohereTheme ? <CohereEmptyState copy={copy} theme={inputDrivenTheme} /> : null}
+          {!hasOutput && isCohereTheme ? <CohereEmptyState copy={copy} language={language} theme={inputDrivenTheme} /> : null}
           {error ? (
             <div
-              className={`${glassPanelClass} ${inputDrivenTheme.panelClass} flex w-full gap-3 rounded-[1.75rem] p-5 backdrop-blur-2xl`}
+              className={isCohereTheme
+                ? "c-error"
+                : `${glassPanelClass} ${inputDrivenTheme.panelClass} flex w-full gap-3 rounded-[1.75rem] p-5 backdrop-blur-2xl`}
               role="alert"
-              style={buildErrorShellStyle(inputDrivenTheme)}
+              style={isCohereTheme ? undefined : buildErrorShellStyle(inputDrivenTheme)}
             >
               <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border border-current text-xs font-bold">
                 !
               </span>
-              <div className="grid gap-1">
+              <div className="grid content-start gap-1">
                 <strong className="text-sm" style={{ color: inputDrivenTheme.accentText }}>{errorLabel(error, language)}</strong>
-                <span className="text-sm" style={{ color: inputDrivenTheme.mutedText }}>{error.message}</span>
+                <span className="text-[15px] leading-relaxed" style={{ color: inputDrivenTheme.titleText, opacity: 0.78 }}>{error.message}</span>
                 {isKeywordMode && searchLoginPlatforms.length > 0 ? (
                   <div className="mt-3 grid gap-2">
                     <strong className="text-sm" style={{ color: inputDrivenTheme.accentText }}>{copy.searchLoginTitle}</strong>
@@ -2475,8 +2393,14 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                 theme={resultTheme}
               />
             ) : (
-              <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(resultTheme)} aria-label={copy.resultAria}>
-                <div className="grid shrink-0 gap-2 border-b px-3 pb-2 pt-3 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-center" style={{ borderColor: resultTheme.panelBorder }}>
+              <section
+                className={resultTheme.uiTheme === "cohere"
+                  ? "flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+                  : "flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]"}
+                style={resultTheme.uiTheme === "cohere" ? undefined : buildResultShellStyle(resultTheme)}
+                aria-label={copy.resultAria}
+              >
+                <div className={`grid shrink-0 gap-2 border-b px-3 pb-2 pt-3 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-center ${resultTheme.uiTheme === "cohere" ? "c-toolbar" : ""}`} style={{ borderColor: resultTheme.panelBorder }}>
                   <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-2 pt-1">
                     <GlassChip theme={resultTheme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
                     <a
@@ -2501,7 +2425,7 @@ export function SocialDownloaderClient({ appName = "LinkMigo", themeName = "defa
                   ) : null}
                 </div>
 
-                <div className="grid shrink-0 gap-2 border-b px-3 py-2 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-start" style={{ borderColor: resultTheme.panelBorder }}>
+                <div className={`grid shrink-0 gap-2 border-b px-3 py-2 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-start ${resultTheme.uiTheme === "cohere" ? "c-toolbar" : ""}`} style={{ borderColor: resultTheme.panelBorder }}>
                   <div className="lm-inline-scroll flex min-w-0 flex-wrap items-center gap-2 overflow-visible min-[600px]:flex-nowrap min-[600px]:overflow-x-auto">
                     <button
                       className="lm-themed-action lm-cohere-contrast-hover lm-cohere-flat-action mr-1 inline-flex h-10 max-w-full shrink-0 cursor-pointer items-center gap-2 rounded-full border px-3 text-left text-sm font-semibold transition sm:text-base"
@@ -2732,7 +2656,13 @@ function ProfileResultSection({
   const totalPosts = Math.max(Number(page.total_count) || 0, result.posts.length);
 
   return (
-    <section className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]" style={buildResultShellStyle(theme)} aria-label={copy.resultAria}>
+    <section
+      className={theme.uiTheme === "cohere"
+        ? "flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+        : "flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[2rem] border backdrop-blur-[28px]"}
+      style={theme.uiTheme === "cohere" ? undefined : buildResultShellStyle(theme)}
+      aria-label={copy.resultAria}
+    >
       <div className="grid shrink-0 gap-2 border-b px-3 pb-2 pt-3 sm:px-5 min-[600px]:grid-cols-[minmax(0,1fr)_auto] min-[600px]:items-center" style={{ borderColor: theme.panelBorder }}>
         <div className="lm-inline-scroll -mt-1 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-2 pt-1">
           <GlassChip theme={theme}>{getPlatformLabel(result.platform, copy)}</GlassChip>
@@ -2869,7 +2799,7 @@ function ProfilePostGrid({ copy, hasMore, isLoadingMore, isPartialSnapshot, lang
         return (
           <article
             aria-pressed={isSelected}
-            className={`lm-profile-post-card group grid min-w-0 content-start gap-3 rounded-[1.2rem] border p-3 outline-none backdrop-blur-xl transition duration-300 focus:outline-none focus-visible:outline-none ${profilePostDownloadCardClass(normalizedDownloadStatus)}`}
+            className={`lm-profile-post-card group grid min-w-0 content-start gap-3 border p-3 outline-none transition duration-300 focus:outline-none focus-visible:outline-none ${theme.uiTheme === "cohere" ? "c-card" : "rounded-[1.2rem] backdrop-blur-xl"} ${profilePostDownloadCardClass(normalizedDownloadStatus)}`}
             key={post.id}
             style={buildProfilePostCardStyle(theme, isSelected, normalizedDownloadStatus)}
           >
@@ -3138,31 +3068,33 @@ function PreferenceControls({
   );
 }
 
-function CohereEmptyState({ copy, theme }) {
-  const isEnglish = copy.search === "Search";
+function CohereEmptyState({ copy, language }) {
+  const isZh = language === "zh";
 
   return (
-    <section
-      aria-label={copy.resultAria}
-      className="flex min-h-0 w-full flex-1 flex-col justify-start overflow-hidden rounded-[1.75rem] border p-6 sm:p-8 lg:p-10"
-      style={buildResultShellStyle(theme)}
-    >
-      <div className="flex items-start justify-between gap-4">
-        <span className="font-mono text-xs uppercase tracking-[0.14em]" style={{ color: theme.accentStrong }}>
-          Workspace / Ready
-        </span>
-        <span className="size-2.5 rounded-full" style={{ backgroundColor: theme.accent }} />
+    <div aria-label={copy.resultAria} className="flex min-h-0 w-full flex-1 flex-col" role="region">
+      <div className="c-pane-head">
+        <div className="c-pane-head-title">{copy.resultAria}</div>
+        <span className="c-pane-head-meta">{isZh ? "等待输入" : "Waiting for input"}</span>
       </div>
 
-      <div className="mt-[clamp(4rem,8vh,5.5rem)] max-w-2xl">
-        <p className="mt-5 max-w-lg text-base leading-7" style={{ color: theme.mutedText }}>
-          {isEnglish
-            ? "Paste a public social link or search a keyword. Results, media, and post details will gather in this workspace."
-            : "粘贴公开社媒链接，或输入关键词开始搜索。搜索结果、媒体资源和帖子信息会集中显示在这里。"}
+      <div className="c-empty">
+        <div aria-hidden="true" className="c-empty-glyph">
+          <svg fill="none" height="20" viewBox="0 0 20 20" width="20">
+            <rect height="6.5" rx="2" stroke="currentColor" strokeWidth="1.3" width="6.5" x="2.75" y="2.75" />
+            <rect height="6.5" rx="2" stroke="currentColor" strokeWidth="1.3" width="6.5" x="10.75" y="2.75" />
+            <rect height="6.5" rx="2" stroke="currentColor" strokeWidth="1.3" width="6.5" x="2.75" y="10.75" />
+            <rect height="6.5" rx="2" stroke="currentColor" strokeWidth="1.3" width="6.5" x="10.75" y="10.75" />
+          </svg>
+        </div>
+        <h2 className="c-empty-title">{isZh ? "还没有解析结果" : "Nothing resolved yet"}</h2>
+        <p className="c-empty-body">
+          {isZh
+            ? "粘贴公开社媒链接，或输入关键词。解析结果、媒体资源和帖子信息会集中显示在这里。"
+            : "Paste a public social link or search a keyword. Results, media, and post details will gather here."}
         </p>
       </div>
-
-    </section>
+    </div>
   );
 }
 
@@ -3340,8 +3272,10 @@ function ResolvingState({ copy, language, progress, theme }) {
     <section
       aria-label={copy.parseTitle}
       aria-live="polite"
-      className={`${glassPanelClass} ${theme.panelClass} grid min-h-0 w-full flex-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-5 overflow-hidden rounded-[2rem] p-5 sm:p-6`}
-      style={buildResultShellStyle(theme)}
+      className={theme.uiTheme === "cohere"
+        ? "grid min-h-0 w-full flex-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-5 overflow-hidden p-5 sm:p-8"
+        : `${glassPanelClass} ${theme.panelClass} grid min-h-0 w-full flex-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-5 overflow-hidden rounded-[2rem] p-5 sm:p-6`}
+      style={theme.uiTheme === "cohere" ? undefined : buildResultShellStyle(theme)}
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-4">
@@ -3387,7 +3321,7 @@ function ResolvingState({ copy, language, progress, theme }) {
         <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
           {[0, 1, 2, 3].map((index) => (
             <div
-              className="grid gap-3 rounded-[1.35rem] border border-white/65 bg-white/68 p-3 backdrop-blur-xl"
+              className={`grid gap-3 border p-3 ${theme.uiTheme === "cohere" ? "c-card c-card--solid" : "rounded-[1.35rem] border-white/65 bg-white/68 backdrop-blur-xl"}`}
               key={index}
               style={buildSkeletonCardStyle(theme)}
             >
@@ -3405,7 +3339,9 @@ function ResolvingState({ copy, language, progress, theme }) {
 function GlassChip({ alignRight = false, children, theme }) {
   return (
     <span
-      className={`inline-flex h-10 shrink-0 items-center whitespace-nowrap rounded-full border px-3 text-sm font-semibold text-[#5f7088] ${alignRight ? "justify-end" : ""}`}
+      className={theme.uiTheme === "cohere"
+        ? `c-stat inline-flex shrink-0 items-center whitespace-nowrap border ${alignRight ? "justify-end" : ""}`
+        : `inline-flex h-10 shrink-0 items-center whitespace-nowrap rounded-full border px-3 text-sm font-semibold text-[#5f7088] ${alignRight ? "justify-end" : ""}`}
       style={buildChipStyle(theme)}
     >
       {children}
@@ -5035,7 +4971,9 @@ function formatCommentTime(value, language = "zh") {
 function StatPill({ label, language, theme, value }) {
   return (
     <div
-      className="inline-flex min-h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-2 text-sm"
+      className={theme.uiTheme === "cohere"
+        ? "c-stat inline-flex shrink-0 items-center gap-2 whitespace-nowrap border"
+        : "inline-flex min-h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-2 text-sm"}
       style={buildChipStyle(theme)}
     >
       <span className="shrink-0 text-xs font-semibold" style={{ color: theme.subtleText }}>{label}</span>
@@ -5150,16 +5088,6 @@ function buildSearchShellStyle(theme, isFocused, isInvalid) {
       ? `${active.panelShadow}, 0 0 0 4px ${active.ring}`
       : active.panelShadow,
     transition: themeTransition,
-  };
-}
-
-function buildCohereSidebarStyle(theme) {
-  return {
-    backgroundColor: theme.colorMode === "dark" ? "rgba(7,24,41,0.74)" : "rgba(255,255,255,0.58)",
-    borderColor: theme.panelBorder,
-    boxShadow: theme.colorMode === "dark"
-      ? "0 28px 70px rgba(0,0,0,0.24)"
-      : "0 24px 60px rgba(33,33,33,0.06)",
   };
 }
 
@@ -5673,8 +5601,8 @@ function buildSegmentStyle(theme, isActive) {
 
 function buildActionInteractionVars(theme) {
   const cohereHoverGradient = theme.colorMode === "dark"
-    ? "linear-gradient(135deg, #eeece7 0%, #ffffff 100%)"
-    : "linear-gradient(135deg, #003c33 0%, #17171c 100%)";
+    ? "linear-gradient(180deg,#ffffff 0%,#e8e8ea 100%)"
+    : "linear-gradient(180deg,#2c2c2e 0%,#111113 100%)";
 
   return {
     "--lm-action-hover-bg": hexToRgba(theme.accent, 0.18),
@@ -5759,6 +5687,11 @@ function assetMediaLabel(asset, copy = copyByLanguage.zh) {
 }
 
 function getPostChrome(platform, theme) {
+  // Cohere modals stay inside the monochrome paradigm: no per-platform accent.
+  if (theme.uiTheme === "cohere") {
+    return coherePostChrome(theme);
+  }
+
   const isDark = theme.colorMode === "dark";
   const accent = theme.accent ?? "#7b8aa1";
   const accentStrong = theme.accentStrong ?? accent;
@@ -6133,6 +6066,94 @@ function getPostChrome(platform, theme) {
     ...(isDark
       ? buildDarkPlatformPostChrome(platform, theme, platformChrome[platform] ?? {})
       : (platformChrome[platform] ?? {})),
+  };
+}
+
+/**
+ * Monochrome chrome for every Cohere dialog. Derived only from Cohere tokens so
+ * opening a post never re-introduces a platform accent colour.
+ */
+function coherePostChrome(theme) {
+  const isDark = theme.colorMode === "dark";
+
+  if (isDark) {
+    return {
+      colorMode: "dark",
+      shellBackground: "#1c1c1e",
+      shellBorder: "rgba(255,255,255,0.12)",
+      shellShadow: "0 36px 84px -30px rgba(0,0,0,0.9), 0 0 0 0.5px rgba(255,255,255,0.09)",
+      contentBackground: "#1c1c1e",
+      modalPanelBackground: "#1c1c1e",
+      mediaBackground: "#141416",
+      mediaFrameBackground: "#0f0f11",
+      mediaBadgeBackground: "rgba(28,28,30,0.82)",
+      mediaBorder: "rgba(255,255,255,0.10)",
+      mediaShadow: "0 20px 44px -20px rgba(0,0,0,0.8)",
+      mediaText: "#f5f5f7",
+      mediaLabel: "post preview",
+      contentLabel: "post",
+      surfaceLabel: "Public post",
+      text: "#f5f5f7",
+      muted: "#a1a1a6",
+      divider: "rgba(255,255,255,0.10)",
+      accent: "#f5f5f7",
+      avatarRing: "linear-gradient(180deg,#ffffff,#d8d8dc)",
+      avatarFill: "#1c1c1e",
+      avatarText: "#1d1d1f",
+      pillBackground: "rgba(120,120,128,0.28)",
+      pillText: "#f5f5f7",
+      tagBackground: "rgba(120,120,128,0.24)",
+      tagBorder: "rgba(255,255,255,0.10)",
+      tagText: "#d1d1d6",
+      metricBackground: "rgba(120,120,128,0.20)",
+      metricBorder: "rgba(255,255,255,0.08)",
+      metricIconBackground: "rgba(120,120,128,0.28)",
+      closeBackground: "rgba(120,120,128,0.32)",
+      closeText: "#f5f5f7",
+      closeShadow: "none",
+      audioBackground: "#141416",
+      previewBackdropOverlay: "radial-gradient(circle at center, rgba(0,0,0,0.5), rgba(0,0,0,0.82) 72%)",
+      previewBackdropVeil: "linear-gradient(135deg, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.42) 48%, rgba(0,0,0,0.7) 100%)",
+    };
+  }
+
+  return {
+    colorMode: "light",
+    shellBackground: "#ffffff",
+    shellBorder: "rgba(0,0,0,0.10)",
+    shellShadow: "0 34px 80px -28px rgba(0,0,0,0.34), 0 0 0 0.5px rgba(0,0,0,0.10)",
+    contentBackground: "#ffffff",
+    modalPanelBackground: "#ffffff",
+    mediaBackground: "#f2f2f4",
+    mediaFrameBackground: "#f7f7f8",
+    mediaBadgeBackground: "rgba(255,255,255,0.84)",
+    mediaBorder: "rgba(0,0,0,0.08)",
+    mediaShadow: "0 18px 40px -16px rgba(0,0,0,0.22)",
+    mediaText: "#1d1d1f",
+    mediaLabel: "post preview",
+    contentLabel: "post",
+    surfaceLabel: "Public post",
+    text: "#1d1d1f",
+    muted: "#6e6e73",
+    divider: "rgba(0,0,0,0.08)",
+    accent: "#1d1d1f",
+    avatarRing: "linear-gradient(180deg,#3a3a3c,#1d1d1f)",
+    avatarFill: "#ffffff",
+    avatarText: "#ffffff",
+    pillBackground: "rgba(120,120,128,0.12)",
+    pillText: "#1d1d1f",
+    tagBackground: "rgba(120,120,128,0.10)",
+    tagBorder: "rgba(0,0,0,0.08)",
+    tagText: "#3a3a3c",
+    metricBackground: "rgba(120,120,128,0.08)",
+    metricBorder: "rgba(0,0,0,0.06)",
+    metricIconBackground: "rgba(120,120,128,0.12)",
+    closeBackground: "rgba(120,120,128,0.12)",
+    closeText: "#1d1d1f",
+    closeShadow: "none",
+    audioBackground: "#f7f7f8",
+    previewBackdropOverlay: "radial-gradient(circle at center, rgba(0,0,0,0.32), rgba(0,0,0,0.64) 72%)",
+    previewBackdropVeil: "linear-gradient(135deg, rgba(0,0,0,0.18) 0%, rgba(0,0,0,0.3) 48%, rgba(0,0,0,0.6) 100%)",
   };
 }
 

@@ -1,8 +1,5 @@
 import crypto from "node:crypto";
-import { execFile as execFileCallback } from "node:child_process";
-import fs from "node:fs/promises";
 import { URL } from "node:url";
-import { promisify } from "node:util";
 
 import { AppError, ErrorCode } from "./errors";
 import {
@@ -24,8 +21,7 @@ const WECHAT_HOSTS = new Set(["weixin.qq.com", "www.weixin.qq.com", "channels.we
 const WECHAT_API_URL = "https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info";
 const WECHAT_EXTRACT_API_URL = "https://api.feeprint.com/extract/post";
 const WECHAT_CHANNELS_API_URL = "https://changfengbox.top/api/download/channels/parse";
-const WECHAT_MEOWLOAD_CLI_PATH = "/Applications/MeowLoad.app/Contents/MacOS/meowload-cli";
-const execFile = promisify(execFileCallback);
+const WECHAT_DEFOU_API_URL = "https://wx.defou.ai/api/fetch_video_profile";
 const WECHAT_PAGE_HEADERS = {
   ...PAGE_HEADERS,
   "user-agent":
@@ -56,6 +52,197 @@ export function normalizeWechatUrl(parsed) {
 
 export async function resolveWechatPost(normalized, settings) {
   const pageUrl = normalized.canonical_url;
+  let officialError = null;
+  let feed = {};
+  let author = {};
+
+  // The public preview API only ever returns the cover, and it can also be
+  // rate-limited on its own. A failure there must not short-circuit the
+  // providers below, several of which resolve the video without it.
+  try {
+    ({ feed, author } = await requestOfficialWechatFeed(normalized, settings));
+  } catch (error) {
+    officialError = error;
+  }
+
+  const resolved = await resolveWechatVideoWithProviders({
+    assets: wechatAssetsFromFeed(feed, normalized.shortcode, pageUrl, author.nickname),
+    normalized,
+    pageUrl,
+    settings,
+  });
+
+  const assets = resolved.assets;
+  const fallbackErrors = resolved.errors;
+
+  if (Object.keys(feed).length === 0 && resolved.feed) {
+    feed = resolved.feed;
+    author = resolved.author;
+  }
+
+  if (assets.length === 0) {
+    if (officialError) {
+      throw officialError;
+    }
+
+    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "微信视频号页面中没有发现可下载媒体。", 404);
+  }
+
+  if (!assets.some((asset) => asset.media_type === "video")) {
+    const details = fallbackErrors.filter(Boolean).join("；");
+    throw new AppError(
+      ErrorCode.NO_MEDIA_FOUND,
+      `微信视频号只拿到了封面，所有视频解析通道均未成功${details ? `：${details}` : ""}。`,
+      404,
+    );
+  }
+
+  const metrics = {
+    like_count: formattedInt(feed.likeCountFmt ?? feed.like_count ?? feed.likeCount),
+    comment_count: formattedInt(feed.commentCountFmt ?? feed.comment_count ?? feed.commentCount),
+    view_count: formattedInt(feed.playCountFmt ?? feed.viewCountFmt ?? feed.play_count ?? feed.view_count ?? feed.playCount ?? feed.viewCount),
+    save_count: formattedInt(feed.favCountFmt ?? feed.fav_count ?? feed.favCount),
+    share_count: formattedInt(feed.forwardCountFmt ?? feed.forward_count ?? feed.forwardCount),
+    source: "wechat_channels_public",
+  };
+  const handle = pickSingleLineText(author.nickname, author.username, "");
+  const body = pickText(feed.description, feed.desc, feed.title);
+
+  return {
+    assets: dedupeAssets(assets),
+    metrics,
+    creator_handle: handle,
+    post_info: createPostInfo(
+      {
+        title: pickSingleLineText(feed.title, titleFromBody(body), handle),
+        author: handle,
+        author_handle: handle,
+        body,
+        tags: normalizeTags([], body),
+        metrics,
+        source: metrics.source,
+      },
+      { metrics, creatorHandle: handle, source: metrics.source },
+    ),
+    original_url: pageUrl,
+  };
+}
+
+// Tried in order. Each provider is isolated: a crash or a timeout in one must
+// never stop the next from running, and only when every provider fails does the
+// caller surface an error to the UI.
+const WECHAT_VIDEO_PROVIDERS = [
+  { label: "defou 解析", run: (context) => resolveWechatWithDefouProvider(context.normalized, context.settings) },
+  { label: "长风盒子中转", run: (context) => resolveWechatWithChannelsService(context.pageUrl, context.settings) },
+  { label: "feeprint 提取", run: (context) => resolveWechatWithServerExtractor(context.pageUrl, context.settings) },
+];
+
+async function resolveWechatVideoWithProviders(context) {
+  let assets = context.assets;
+  let feed = {};
+  let author = {};
+  const errors = [];
+  const hasVideo = () => assets.some((asset) => asset.media_type === "video");
+
+  for (const provider of WECHAT_VIDEO_PROVIDERS) {
+    if (hasVideo()) {
+      break;
+    }
+
+    let result;
+
+    try {
+      result = await provider.run(context);
+    } catch (error) {
+      errors.push(`${provider.label}：${describeProviderError(error)}`);
+      continue;
+    }
+
+    if (result?.error) {
+      errors.push(`${provider.label}：${result.error}`);
+    }
+
+    const found = Array.isArray(result?.assets) ? result.assets : [];
+
+    if (found.length === 0) {
+      continue;
+    }
+
+    const video = found.find((asset) => asset.media_type === "video");
+
+    // A provider can answer with a well-formed payload whose media URL is
+    // already dead (expired signature, blocked region, hotlink protection).
+    // Probe it first so the next provider still gets a turn instead of failing
+    // later during the download step.
+    if (video && !(await isWechatVideoUrlReachable(video, context.settings))) {
+      errors.push(`${provider.label}：返回的视频地址无法访问`);
+      continue;
+    }
+
+    assets = [...found, ...assets];
+
+    if (Object.keys(feed).length === 0 && result.feed && Object.keys(result.feed).length > 0) {
+      feed = result.feed;
+      author = result.author && typeof result.author === "object" ? result.author : {};
+    }
+  }
+
+  return { assets, feed, author, errors };
+}
+
+async function isWechatVideoUrlReachable(asset, settings) {
+  const url = asset?.source_url;
+
+  if (!url) {
+    return false;
+  }
+
+  const headers = { ...(asset.request_headers || {}) };
+  const timeout = Math.min(settings.httpTimeoutMs, 6_000);
+
+  try {
+    let response = await fetchWithTimeout(
+      url,
+      { method: "HEAD", headers, cache: "no-store" },
+      timeout,
+    );
+
+    // Some CDN edges reject HEAD while serving GET normally.
+    if (response.status === 403 || response.status === 405) {
+      response = await fetchWithTimeout(
+        url,
+        { method: "GET", headers: { ...headers, range: "bytes=0-0" }, cache: "no-store" },
+        timeout,
+      );
+    }
+
+    if (response.body?.cancel) {
+      await response.body.cancel().catch(() => {});
+    }
+
+    return response.ok || response.status === 206;
+  } catch {
+    return false;
+  }
+}
+
+function describeProviderError(error) {
+  if (error instanceof AppError) {
+    return error.message || error.code || "解析失败";
+  }
+
+  if (error?.name === "AbortError") {
+    return "请求超时";
+  }
+
+  if (error instanceof Error) {
+    return error.message || error.name;
+  }
+
+  return String(error || "未知错误");
+}
+
+async function requestOfficialWechatFeed(normalized, settings) {
   const refererUrl = `https://channels.weixin.qq.com/finder-preview/pages/sph?id=${encodeURIComponent(normalized.shortcode)}`;
   let response;
 
@@ -110,114 +297,69 @@ export async function resolveWechatPost(normalized, settings) {
   }
 
   const data = payload?.data && typeof payload.data === "object" ? payload.data : {};
-  const feed = data.feedInfo && typeof data.feedInfo === "object" ? data.feedInfo : {};
-  const author = data.authorInfo && typeof data.authorInfo === "object" ? data.authorInfo : {};
-  let assets = wechatAssetsFromFeed(feed, normalized.shortcode, pageUrl, author.nickname);
-  const fallbackErrors = [];
-
-  if (!assets.some((asset) => asset.media_type === "video")) {
-    const extracted = await resolveWechatWithLocalMeowLoad(pageUrl, settings);
-    fallbackErrors.push(extracted.error);
-    if (extracted.assets.length > 0) {
-      assets = [...extracted.assets, ...assets];
-    }
-  }
-
-  if (!assets.some((asset) => asset.media_type === "video")) {
-    const extracted = await resolveWechatWithChannelsService(pageUrl, settings);
-    fallbackErrors.push(extracted.error);
-    if (extracted.assets.length > 0) {
-      assets = [...extracted.assets, ...assets];
-    }
-  }
-
-  if (!assets.some((asset) => asset.media_type === "video")) {
-    const extracted = await resolveWechatWithServerExtractor(pageUrl, settings);
-    fallbackErrors.push(extracted.error);
-    if (extracted.assets.length > 0) {
-      assets = [...extracted.assets, ...assets];
-    }
-  }
-
-  if (assets.length === 0) {
-    throw new AppError(ErrorCode.NO_MEDIA_FOUND, "微信视频号页面中没有发现可下载媒体。", 404);
-  }
-
-  if (!assets.some((asset) => asset.media_type === "video")) {
-    const details = fallbackErrors.filter(Boolean).join("；");
-    throw new AppError(
-      ErrorCode.NO_MEDIA_FOUND,
-      `微信视频号公开接口只返回了封面，其他视频解析方式也未成功${details ? `：${details}` : ""}。`,
-      404,
-    );
-  }
-
-  const metrics = {
-    like_count: formattedInt(feed.likeCountFmt ?? feed.like_count ?? feed.likeCount),
-    comment_count: formattedInt(feed.commentCountFmt ?? feed.comment_count ?? feed.commentCount),
-    view_count: formattedInt(feed.playCountFmt ?? feed.viewCountFmt ?? feed.play_count ?? feed.view_count ?? feed.playCount ?? feed.viewCount),
-    save_count: formattedInt(feed.favCountFmt ?? feed.fav_count ?? feed.favCount),
-    share_count: formattedInt(feed.forwardCountFmt ?? feed.forward_count ?? feed.forwardCount),
-    source: "wechat_channels_public",
-  };
-  const handle = pickSingleLineText(author.nickname, author.username, "");
-  const body = pickText(feed.description, feed.desc, feed.title);
 
   return {
-    assets: dedupeAssets(assets),
-    metrics,
-    creator_handle: handle,
-    post_info: createPostInfo(
-      {
-        title: pickSingleLineText(feed.title, titleFromBody(body), handle),
-        author: handle,
-        author_handle: handle,
-        body,
-        tags: normalizeTags([], body),
-        metrics,
-        source: metrics.source,
-      },
-      { metrics, creatorHandle: handle, source: metrics.source },
-    ),
-    original_url: pageUrl,
+    feed: data.feedInfo && typeof data.feedInfo === "object" ? data.feedInfo : {},
+    author: data.authorInfo && typeof data.authorInfo === "object" ? data.authorInfo : {},
   };
 }
 
-async function resolveWechatWithLocalMeowLoad(pageUrl, settings) {
-  if (process.env.WECHAT_MEOWLOAD_CLI_ENABLED === "0" || process.platform !== "darwin") {
-    return { assets: [], error: null };
+// Third-party resolver that returns the signed finder.video.qq.com URL instead
+// of a re-hosted copy, so the media comes straight from Tencent's CDN.
+async function resolveWechatWithDefouProvider(normalized, settings) {
+  if (process.env.WECHAT_DEFOU_ENABLED === "0") {
+    return { assets: [], feed: {}, author: {}, error: null };
   }
 
-  const executable = process.env.WECHAT_MEOWLOAD_CLI_PATH?.trim() || WECHAT_MEOWLOAD_CLI_PATH;
+  const endpoint = process.env.WECHAT_DEFOU_API_URL?.trim() || WECHAT_DEFOU_API_URL;
+  const pageUrl = normalized.canonical_url;
+  let response;
 
   try {
-    await fs.access(executable);
-  } catch {
-    return { assets: [], error: "本机未安装哼哼猫" };
-  }
-
-  try {
-    const { stdout } = await execFile(executable, ["info", pageUrl], {
-      encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: Math.min(Math.max(settings.httpTimeoutMs * 3, 30_000), 120_000),
-      windowsHide: true,
-    });
-    const payload = JSON.parse(stdout.trim());
-    const assets = wechatAssetsFromExtractorPayload(payload, pageUrl);
-    return {
-      assets,
-      error: assets.some((asset) => asset.media_type === "video")
-        ? null
-        : "哼哼猫没有返回视频文件",
-    };
+    response = await fetchWithTimeout(
+      endpoint,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ url: pageUrl }),
+        cache: "no-store",
+      },
+      Math.min(settings.httpTimeoutMs, 15_000),
+    );
   } catch (error) {
-    const message = pickSingleLineText(error?.stderr, error?.message);
-    const reason = /Failed to connect to the MeowLoad desktop app/i.test(message)
-      ? "哼哼猫桌面应用未运行"
-      : "哼哼猫本机解析失败";
-    return { assets: [], error: reason };
+    return {
+      assets: [],
+      feed: {},
+      author: {},
+      error: error?.name === "AbortError" ? "视频号解析服务请求超时" : "无法访问视频号解析服务",
+    };
   }
+
+  if (!response.ok) {
+    return { assets: [], feed: {}, author: {}, error: `视频号解析服务返回 ${response.status}` };
+  }
+
+  let payload;
+
+  try {
+    payload = await response.json();
+  } catch {
+    return { assets: [], feed: {}, author: {}, error: "视频号解析服务返回了无效响应" };
+  }
+
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : {};
+  const feed = data.feedInfo && typeof data.feedInfo === "object" ? data.feedInfo : {};
+  const author = data.authorInfo && typeof data.authorInfo === "object" ? data.authorInfo : {};
+  const assets = wechatAssetsFromFeed(feed, normalized.shortcode, pageUrl, author.nickname);
+
+  return {
+    assets,
+    feed,
+    author,
+    error: assets.some((asset) => asset.media_type === "video")
+      ? null
+      : "视频号解析服务没有返回视频地址",
+  };
 }
 
 async function resolveWechatWithChannelsService(pageUrl, settings) {
@@ -375,9 +517,11 @@ function wechatAssetsFromFeed(feed, shortcode, pageUrl, nickname) {
     accept: "image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8",
   };
   const assets = [];
+  // H.264 first: H.265 files are smaller but far less portable once the user
+  // moves them into an editor or an older player.
   const videoUrls = uniqueUrls([
-    feed?.h265VideoInfo?.videoUrl,
     feed?.h264VideoInfo?.videoUrl,
+    feed?.h265VideoInfo?.videoUrl,
     feed?.videoUrl,
     feed?.video_url,
     feed?.videoInfo?.videoUrl,

@@ -68,6 +68,13 @@ services:
       # V2EX Personal Access Token，可选。
       SOCIAL_V2EX_TOKEN: ""
 
+      # 微信视频号：默认先走 defou 的匿名解析接口（返回腾讯直链，速度最快），
+      # 失败后自动降级到长风盒子中转，再降级到 feeprint（需 Key）。
+      # 想跳过 defou 时设为 "0"。
+      WECHAT_DEFOU_ENABLED: "1"
+      # 如需换成自建或其它兼容实例，覆盖这个地址。
+      WECHAT_DEFOU_API_URL: "https://wx.defou.ai/api/fetch_video_profile"
+
     volumes:
       # 解析、预览、下载及 ZIP 资源导出目录。
       - /volume1/docker/linkmigo/downloads:/data/social-downloader
